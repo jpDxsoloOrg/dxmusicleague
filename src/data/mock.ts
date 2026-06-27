@@ -279,19 +279,24 @@ interface CanonSubmission {
   dur: number;
   submitterId: string;
   points: number;
+  /** Distinct voters who placed points on this song — the tie-break key. */
+  voters: number;
   seedComments: Array<{ voterId: string; text: string }>;
 }
 
+// sub-2 and sub-3 are deliberately tied on points to exercise the tie-break
+// rule: equal points → more distinct voters wins, so "Good 4 U" (6 voters)
+// edges out "Blinding Lights" (5 voters). See getRoundResults below.
 const CANON_SUBMISSIONS: CanonSubmission[] = [
-  { id: "sub-1", pid: "m6", title: "Levitating", artists: ["Dua Lipa"], album: "Future Nostalgia", dur: 203000, submitterId: "u-sarah", points: 85,
+  { id: "sub-1", pid: "m6", title: "Levitating", artists: ["Dua Lipa"], album: "Future Nostalgia", dur: 203000, submitterId: "u-sarah", points: 85, voters: 7,
     seedComments: [{ voterId: "u-james", text: "Instant dancefloor filler." }, { voterId: "u-mia", text: "Perfect road-trip energy." }] },
-  { id: "sub-2", pid: "m5", title: "Blinding Lights", artists: ["The Weeknd"], album: "After Hours", dur: 200000, submitterId: "u-james", points: 72,
+  { id: "sub-2", pid: "m5", title: "Blinding Lights", artists: ["The Weeknd"], album: "After Hours", dur: 200000, submitterId: "u-james", points: 72, voters: 5,
     seedComments: [{ voterId: "u-luna", text: "That synth line never gets old." }] },
-  { id: "sub-3", pid: "m7", title: "Good 4 U", artists: ["Olivia Rodrigo"], album: "SOUR", dur: 178000, submitterId: "u-mia", points: 64,
+  { id: "sub-3", pid: "m7", title: "Good 4 U", artists: ["Olivia Rodrigo"], album: "SOUR", dur: 178000, submitterId: "u-mia", points: 72, voters: 6,
     seedComments: [] },
-  { id: "sub-4", pid: "m10", title: "Heat Waves", artists: ["Glass Animals"], album: "Dreamland", dur: 238000, submitterId: "u-luna", points: 58,
+  { id: "sub-4", pid: "m10", title: "Heat Waves", artists: ["Glass Animals"], album: "Dreamland", dur: 238000, submitterId: "u-luna", points: 58, voters: 4,
     seedComments: [{ voterId: "u-sarah", text: "Sneaky good pick." }] },
-  { id: "sub-5", pid: "m1", title: "Midnight City", artists: ["M83"], album: "Hurry Up, We're Dreaming", dur: 243000, submitterId: "u-me", points: 50,
+  { id: "sub-5", pid: "m1", title: "Midnight City", artists: ["M83"], album: "Hurry Up, We're Dreaming", dur: 243000, submitterId: "u-me", points: 50, voters: 4,
     seedComments: [{ voterId: "u-james", text: "A certified classic." }] },
 ];
 
@@ -316,10 +321,14 @@ export function getVotableSubmissions(_leagueId: string): VotableSubmission[] {
 
 // Results: ranked by points, submitters revealed, with all voter comments
 // (seeded ones plus whatever the current user left while voting).
+// Tie-break: equal points → more distinct voters wins, then title A→Z.
 export function getRoundResults(leagueId: string): RoundResult[] {
   const mine = myVoteComments[leagueId] ?? {};
   return [...CANON_SUBMISSIONS]
-    .sort((a, b) => b.points - a.points)
+    .sort((a, b) =>
+      b.points - a.points ||
+      b.voters - a.voters ||
+      a.title.localeCompare(b.title))
     .map((s, i) => {
       const comments: VoterComment[] = s.seedComments
         .map((c) => ({ voter: users[c.voterId], text: c.text }))

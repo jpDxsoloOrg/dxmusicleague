@@ -15,9 +15,13 @@ export interface User {
 export interface LeagueSettings {
   /** Points each voter distributes across submissions per round. */
   votePoolSize: number;
+  /** Most points a voter may place on any single submission, forcing them to
+   *  spread the pool across multiple songs. Must be ≤ votePoolSize. */
+  maxPointsPerSong: number;
   /** May a player put points on their own submission? */
   allowSelfVote: boolean;
-  /** Submissions allowed per player per round (1 for now). */
+  /** Submissions allowed per player per round. Locked to 1 today; kept as a
+   *  field so multiple-per-player can be enabled later without a migration. */
   submissionsPerPlayer: number;
 }
 
@@ -64,6 +68,7 @@ export interface Vote {
 
 export const DEFAULT_LEAGUE_SETTINGS: LeagueSettings = {
   votePoolSize: 10,
+  maxPointsPerSong: 5,
   allowSelfVote: false,
   submissionsPerPlayer: 1,
 };

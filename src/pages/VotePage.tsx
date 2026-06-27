@@ -27,6 +27,7 @@ export function VotePage() {
 
   const { league, currentRound } = detail;
   const pool = league.settings.votePoolSize;
+  const perSongMax = league.settings.maxPointsPerSong;
   const spent = Object.values(allocations).reduce((a, b) => a + b, 0);
   const remaining = pool - spent;
   const canSubmit = remaining === 0;
@@ -35,7 +36,8 @@ export function VotePage() {
     const clamped = Math.max(0, next);
     setAllocations((prev) => {
       const others = spent - (prev[id] ?? 0);
-      const capped = Math.min(clamped, pool - others); // never exceed the pool
+      // never exceed the remaining pool, nor the per-song cap
+      const capped = Math.min(clamped, pool - others, perSongMax);
       return { ...prev, [id]: capped };
     });
   };
@@ -59,7 +61,7 @@ export function VotePage() {
         <div>
           <Link to={`/leagues/${league.id}`} className="link-muted">← {league.name}</Link>
           <h1>Vote{currentRound ? `: ${currentRound.theme}` : ""}</h1>
-          <p className="vote-sub">Spread your points across the songs you want to win. Submitters stay hidden until reveal.</p>
+          <p className="vote-sub">Spread your points across the songs you want to win — up to {perSongMax} on any one song. Submitters stay hidden until reveal.</p>
         </div>
         <div className={`points-left${remaining === 0 ? " spent" : ""}`}>
           <span className="points-num">{remaining}</span>
@@ -91,7 +93,7 @@ export function VotePage() {
                   <button
                     className="step-btn plus"
                     onClick={() => setPoints(sub.id, pts + 1)}
-                    disabled={remaining <= 0}
+                    disabled={remaining <= 0 || pts >= perSongMax}
                     aria-label="Add a point"
                   >+</button>
                 </div>
