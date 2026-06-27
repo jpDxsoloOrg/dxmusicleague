@@ -1,0 +1,97 @@
+/* DX Music League — "Sonic Syndicate" theme tokens (from the Stitch designs). */
+
+:root {
+  /* surfaces */
+  --bg: #0c0810;
+  --bg-2: #120c1a;
+  --panel: #181020;
+  --panel-2: #1f1530;
+  --border: #2a1f3d;
+
+  /* text */
+  --text: #f5f2fa;
+  --text-muted: #9b90b3;
+  --text-dim: #6f6485;
+
+  /* brand */
+  --magenta: #e040fb;
+  --violet: #7c3aed;
+  --grad: linear-gradient(135deg, #e83cff 0%, #8b2fe0 60%, #6d28d9 100%);
+
+  /* status */
+  --status-submitting: #e040fb;
+  --status-voting: #8b5cf6;
+  --status-revealed: #22c55e;
+
+  --radius: 16px;
+  --radius-sm: 10px;
+  --sidebar-w: 248px;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; text-decoration: none; }
+button { font-family: inherit; cursor: pointer; }
+
+/* gradient text accent */
+.grad-text {
+  background: var(--grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* primary gradient button */
+.btn {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 10px 18px;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: 14px;
+  transition: filter 0.15s ease, transform 0.05s ease;
+}
+.btn:hover { filter: brightness(1.15); }
+.btn:active { transform: translateY(1px); }
+
+.btn-primary {
+  border: none;
+  background: var(--grad);
+  color: white;
+  box-shadow: 0 6px 24px -8px rgba(224, 64, 251, 0.6);
+}
+
+/* status pill */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.pill::before {
+  content: "";
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.pill-submitting { color: var(--status-submitting); background: rgba(224, 64, 251, 0.12); }
+.pill-voting     { color: var(--status-voting);     background: rgba(139, 92, 246, 0.14); }
+.pill-revealed   { color: var(--status-revealed);   background: rgba(34, 197, 94, 0.14); }
+.pill-complete   { color: var(--text-muted);        background: rgba(155, 144, 179, 0.12); }
+.pill-draft      { color: var(--text-muted);        background: rgba(155, 144, 179, 0.12); }

@@ -1,0 +1,22 @@
+.rounds-page { display: flex; flex-direction: column; gap: 28px; }
+.page-title { margin: 0; font-size: 28px; }
+.rounds-section-head { margin: 0 0 14px; font-size: 16px; color: var(--text-muted); font-weight: 600; }
+
+.rounds-list { display: flex; flex-direction: column; gap: 12px; }
+.round-row {
+  display: flex; align-items: center; gap: 16px;
+  padding: 16px 20px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.round-row.attention { border-color: rgba(224, 64, 251, 0.4); }
+.round-row-main { display: flex; flex-direction: column; min-width: 0; }
+.round-row-league { font-size: 12px; color: var(--text-dim); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.round-row-theme { font-size: 16px; margin-top: 2px; }
+.round-row-deadline { font-size: 13px; color: var(--text-muted); }
+.round-row-cta { margin-left: auto; white-space: nowrap; }
+.round-row .pill { flex-shrink: 0; }
+
+@media (max-width: 720px) {
+  .round-row { flex-wrap: wrap; }
+  .round-row-cta { margin-left: 0; width: 100%; text-align: center; }
+}

@@ -1,0 +1,106 @@
+.dashboard { display: flex; flex-direction: column; gap: 36px; }
+
+/* ---- action cards ---- */
+.action-row { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.action-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 22px 24px;
+  border-radius: var(--radius);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  transition: transform 0.12s ease, filter 0.12s ease;
+}
+.action-card:hover { transform: translateY(-2px); filter: brightness(1.08); }
+.action-card h3 { margin: 0 0 4px; font-size: 18px; }
+.action-card p { margin: 0; color: var(--text-muted); font-size: 13px; }
+.action-create { background: var(--grad); border: none; color: white; }
+.action-create p { color: rgba(255, 255, 255, 0.85); }
+.action-plus {
+  font-size: 28px;
+  width: 44px; height: 44px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.18);
+}
+.action-plus.subtle { background: var(--panel-2); color: var(--text-muted); }
+
+/* ---- section headings ---- */
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.section-head h2 { margin: 0; font-size: 20px; }
+.link-muted { color: var(--text-muted); font-size: 13px; font-weight: 600; }
+.link-muted:hover { color: var(--magenta); }
+
+/* ---- league cards ---- */
+.league-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 18px;
+}
+.league-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  border-radius: var(--radius);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  transition: transform 0.12s ease, border-color 0.12s ease;
+}
+.league-card:hover { transform: translateY(-2px); border-color: var(--magenta); }
+.league-card-top { display: flex; align-items: center; justify-content: space-between; }
+.round-tag { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
+.league-name { margin: 0; font-size: 19px; }
+.league-theme { margin: -6px 0 0; color: var(--text-muted); font-size: 13px; }
+
+.avatar-stack { display: flex; align-items: center; }
+.avatar-stack .avatar { margin-right: -8px; }
+.avatar-more {
+  margin-left: 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.completion { margin-top: 4px; }
+.completion-head {
+  display: flex; justify-content: space-between;
+  font-size: 12px; color: var(--text-muted); margin-bottom: 6px;
+}
+.bar { height: 7px; border-radius: 999px; background: var(--bg-2); overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 999px; background: var(--grad); }
+
+/* ---- trending ---- */
+.trending-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+}
+.trending-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+  border-radius: var(--radius);
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+.trending-art {
+  width: 48px; height: 48px; flex-shrink: 0;
+  border-radius: 12px;
+  background: var(--grad);
+}
+.trending-info { display: flex; flex-direction: column; min-width: 0; }
+.trending-info strong { font-size: 15px; }
+.trending-info span { font-size: 12px; color: var(--text-muted); }
+.trending-join { margin-left: auto; width: 40px; height: 40px; border-radius: 50%; font-size: 20px; padding: 0; }
+
+@media (max-width: 640px) {
+  .action-row { grid-template-columns: 1fr; }
+}

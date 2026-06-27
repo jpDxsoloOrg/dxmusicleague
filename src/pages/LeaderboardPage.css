@@ -1,0 +1,29 @@
+.leaderboard-page { display: flex; flex-direction: column; gap: 22px; }
+
+.league-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+.league-tab {
+  padding: 9px 16px; border-radius: 999px;
+  background: var(--panel); border: 1px solid var(--border); color: var(--text-muted);
+  font-size: 14px; font-weight: 600;
+}
+.league-tab:hover { color: var(--text); }
+.league-tab.active { background: var(--grad); border: none; color: white; }
+
+.leaderboard-panel {
+  padding: 22px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.leaderboard-league-name { margin: 0 0 16px; font-size: 18px; }
+.leaderboard-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.leaderboard-list li {
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 14px; border-radius: var(--radius-sm);
+}
+.leaderboard-list li.top { background: var(--bg-2); }
+.leaderboard-list li.is-me { outline: 1px solid var(--magenta); }
+.leaderboard-list .standing-info strong { font-size: 16px; display: flex; align-items: center; gap: 8px; }
+.you-tag {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+  background: var(--grad); color: white; padding: 2px 8px; border-radius: 999px;
+}
+.leaderboard-list .standing-pts { font-size: 16px; }

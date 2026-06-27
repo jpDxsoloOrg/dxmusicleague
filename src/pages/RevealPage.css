@@ -1,0 +1,104 @@
+.reveal-grid {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 24px;
+  align-items: start;
+}
+.reveal-main { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
+
+.reveal-head h1 { margin: 6px 0 0; font-size: 28px; }
+.reveal-theme { margin: 4px 0 0; color: var(--text-muted); }
+
+/* winner */
+.winner-card {
+  position: relative;
+  display: flex; flex-direction: column; gap: 16px;
+  padding: 24px;
+  border-radius: var(--radius);
+  background:
+    radial-gradient(140% 160% at 0% 0%, rgba(224, 64, 251, 0.35), transparent 55%),
+    var(--grad);
+  color: white;
+  overflow: hidden;
+}
+.winner-top { display: flex; align-items: center; gap: 18px; }
+.winner-badge {
+  position: absolute; top: 14px; right: 16px;
+  font-size: 12px; font-weight: 800; letter-spacing: 0.03em;
+  background: rgba(0, 0, 0, 0.28); padding: 6px 12px; border-radius: 999px;
+}
+.winner-card .track-art { box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.5); }
+.winner-info { display: flex; flex-direction: column; gap: 4px; }
+.winner-info strong { font-size: 26px; line-height: 1.1; }
+.winner-info > span { font-size: 15px; opacity: 0.92; }
+.winner-by { display: inline-flex; align-items: center; gap: 8px; font-size: 13px !important; margin-top: 4px; }
+.winner-by .avatar { border-color: rgba(255, 255, 255, 0.4); }
+
+/* ranked rows */
+.result-list { display: flex; flex-direction: column; gap: 10px; }
+.result-item {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.result-rank-row {
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 16px;
+}
+.rank-num { width: 22px; text-align: center; font-weight: 800; color: var(--text-dim); font-size: 16px; }
+.rank-info { display: flex; flex-direction: column; min-width: 0; }
+.rank-info strong { font-size: 15px; }
+.rank-info span { font-size: 12px; color: var(--text-muted); }
+.rank-by { display: inline-flex; align-items: center; gap: 7px; margin-left: auto; font-size: 13px; color: var(--text-muted); }
+.rank-pts { width: 64px; text-align: right; font-weight: 700; color: var(--magenta); font-size: 14px; }
+
+/* voter comments */
+.comments { display: flex; flex-direction: column; gap: 8px; }
+/* comments under a ranked row: indented panel below the row */
+.result-item .comments {
+  padding: 12px 16px 14px 52px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-2);
+}
+.comment { display: flex; align-items: flex-start; gap: 8px; }
+.comment-text { font-size: 13px; color: var(--text-muted); line-height: 1.4; }
+.comment-text strong { color: var(--text); }
+/* comments on the winner's gradient card */
+.comments.on-winner {
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+.comments.on-winner .comment-text { color: rgba(255, 255, 255, 0.9); }
+.comments.on-winner .comment-text strong { color: white; }
+
+/* playlist button — green like the design */
+.playlist-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+  align-self: stretch;
+  padding: 15px; border-radius: 999px;
+  background: #1db954; color: white; font-weight: 700; font-size: 15px;
+  transition: filter 0.12s ease;
+}
+.playlist-btn:hover { filter: brightness(1.08); }
+.play-ic {
+  width: 18px; height: 18px; background: white;
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'><path d='M8 5v14l11-7z'/></svg>") center/contain no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'><path d='M8 5v14l11-7z'/></svg>") center/contain no-repeat;
+}
+
+/* overall leaderboard (reuses standings look) */
+.reveal-standings {
+  position: sticky; top: 96px;
+  padding: 20px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.reveal-standings h3 { margin: 0 0 14px; font-size: 16px; }
+.reveal-standings ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.reveal-standings li { display: flex; align-items: center; gap: 12px; padding: 10px 8px; border-radius: var(--radius-sm); }
+.reveal-standings li.top { background: var(--bg-2); }
+
+@media (max-width: 900px) {
+  .reveal-grid { grid-template-columns: 1fr; }
+  .reveal-standings { position: static; }
+  .rank-by { display: none; }
+}

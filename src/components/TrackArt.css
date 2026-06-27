@@ -1,0 +1,15 @@
+.track-art {
+  display: inline-block;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.track-art-fallback {
+  display: grid;
+  place-items: center;
+}
+.track-art-fallback .note {
+  width: 42%; height: 42%;
+  background: rgba(255, 255, 255, 0.92);
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'><path d='M9 18V5l10-2v13'/><circle cx='6' cy='18' r='3'/><circle cx='16' cy='16' r='3'/></svg>") center / contain no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'><path d='M9 18V5l10-2v13'/><circle cx='6' cy='18' r='3'/><circle cx='16' cy='16' r='3'/></svg>") center / contain no-repeat;
+}

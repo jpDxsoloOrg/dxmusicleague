@@ -1,0 +1,16 @@
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 2px solid var(--bg-2);
+}
+
+.avatar-initials {
+  background: var(--grad);
+  color: white;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
