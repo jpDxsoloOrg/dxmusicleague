@@ -8,12 +8,12 @@
 import type { MusicProvider, MusicProviderId, MusicProviderInfo } from "./types";
 import { MockMusicProvider } from "./providers/mockProvider";
 import { SpotifyMusicProvider } from "./providers/spotifyProvider";
+import { YouTubeMusicProvider } from "./providers/youtubeMusicProvider";
 
 const REGISTRY: Record<MusicProviderId, MusicProvider> = {
   mock: new MockMusicProvider(),
   spotify: new SpotifyMusicProvider(),
-  // "youtube-music": new YouTubeMusicProvider(),  // future — just add a class + this line
-  "youtube-music": new MockMusicProvider(), // placeholder until implemented
+  "youtube-music": new YouTubeMusicProvider(),
 };
 
 /** Get the provider implementation for a given id. */
@@ -25,8 +25,6 @@ export function getProvider(id: MusicProviderId): MusicProvider {
 export function listAvailableProviders(): MusicProviderInfo[] {
   return Object.values(REGISTRY)
     .map((p) => p.info)
-    // de-dupe placeholders that reuse the mock implementation
-    .filter((info, i, arr) => arr.findIndex((x) => x.id === info.id) === i)
     .filter((info) => info.available);
 }
 
@@ -40,7 +38,7 @@ export function listAvailableProviders(): MusicProviderInfo[] {
 export function listProviderOptions(): MusicProviderInfo[] {
   return [
     { id: "spotify", name: "Spotify", available: true },
-    { id: "youtube-music", name: "YouTube Music", available: false },
+    { id: "youtube-music", name: "YouTube Music", available: true },
     { id: "mock", name: "Demo Catalog", available: true },
   ];
 }

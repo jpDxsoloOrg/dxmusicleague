@@ -24,8 +24,9 @@ src/
   music/                  ← the provider abstraction (keystone)
     types.ts              MusicProvider interface + normalized Track / Playlist
     providers/
-      mockProvider.ts     in-memory catalog; powers the UI today
-      spotifyProvider.ts  talks to OUR backend proxy (never to Spotify from the browser)
+      mockProvider.ts        in-memory catalog; powers the UI today
+      spotifyProvider.ts     talks to OUR backend proxy (never to Spotify from the browser)
+      youtubeMusicProvider.ts talks to OUR proxy; in `vite dev` the bundled proxy makes search live
     index.ts              registry: getProvider(id), listAvailableProviders()
   domain/types.ts         League, Round, Submission, Vote (League.musicProvider selects service)
   data/mock.ts            mock leagues/rounds + view-model helpers (swap for API in Phase 2+)
@@ -48,6 +49,23 @@ Players never authenticate with Spotify. `spotifyProvider` calls our backend pro
 (`VITE_API_BASE`), which holds the client secret + host refresh token — the secret never
 reaches the browser. The Spotify provider is `available` only once `VITE_API_BASE` is set;
 until then the app runs on the `mock` provider.
+
+### YouTube Music
+
+Same "players never authenticate" rule, but split across two APIs (see
+[docs/youtube-music-poc.md](docs/youtube-music-poc.md)):
+
+- **Search / get track** — the unofficial [`ytmusic-api`](https://github.com/zS1L3NT/ts-npm-ytmusic-api)
+  (no auth, free, pinned to `5.3.1`). It's Node-only and CORS-blocked in the browser, so it
+  must run server-side.
+- **Playlist on reveal** — the **official YouTube Data API v3** (host-account OAuth);
+  `ytmusic-api` is read-only and can't create playlists.
+
+For local dev, [`vite-plugin-ytmusic.ts`](vite-plugin-ytmusic.ts) runs `ytmusic-api` inside the
+Vite dev server and serves the same `/youtube-music/*` endpoints the real proxy will, so search
+works end-to-end with **zero config** in `npm run dev`. Playlist writes are deliberately not
+implemented there (they need the official API). `poc/ytmusic_search.mjs` is the standalone spike
+that proved the search path.
 
 ## Status
 
