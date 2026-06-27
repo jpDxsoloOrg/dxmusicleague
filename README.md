@@ -1,6 +1,9 @@
 # DX Music League — Web App
 
-Vite + React + TypeScript frontend. Phase 2 of [../musicLeagueClone.md](../musicLeagueClone.md).
+Vite + React + TypeScript frontend for a self-hosted **Music League** clone: players join a
+league, each round has a theme, everyone submits one song, players vote by spreading a point
+pool across submissions, scores tally across rounds, and a playlist of each round's songs is
+shared. Currently runs on mock data — no backend yet.
 
 ## Run
 
@@ -26,9 +29,11 @@ src/
     index.ts              registry: getProvider(id), listAvailableProviders()
   domain/types.ts         League, Round, Submission, Vote (League.musicProvider selects service)
   data/mock.ts            mock leagues/rounds + view-model helpers (swap for API in Phase 2+)
-  components/             AppLayout (sidebar + topbar), Avatar
-  pages/                  DashboardPage (built), Placeholder (stubs for the rest)
-  styles/global.css       "Sonic Syndicate" theme tokens (from the Stitch designs)
+  components/             AppLayout (sidebar + topbar), Avatar, TrackArt
+  pages/                  Dashboard, RoundOverview, SubmitSong, Vote, Reveal, Rounds,
+                          Leaderboard, Profile, Placeholder (for not-yet-built routes)
+  lib/                    small helpers (e.g. time/countdown formatting)
+  styles/global.css       "Sonic Syndicate" theme tokens (from the original designs)
 ```
 
 ### Adding a music provider
@@ -37,11 +42,12 @@ src/
 2. Register it in `src/music/index.ts`.
 3. That's it — UI/domain already consume it via `getProvider(league.musicProvider)`.
 
-### Spotify rule (see ../CLAUDE.md)
+### Spotify rule
 
-Players never authenticate with Spotify. `spotifyProvider` calls our Lambda proxy
-(`VITE_API_BASE`), which holds the client secret + host refresh token. It's `available`
-only once `VITE_API_BASE` is set; until then the app runs on the `mock` provider.
+Players never authenticate with Spotify. `spotifyProvider` calls our backend proxy
+(`VITE_API_BASE`), which holds the client secret + host refresh token — the secret never
+reaches the browser. The Spotify provider is `available` only once `VITE_API_BASE` is set;
+until then the app runs on the `mock` provider.
 
 ## Status
 
