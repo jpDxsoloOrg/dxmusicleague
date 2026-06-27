@@ -30,4 +30,19 @@ export function listAvailableProviders(): MusicProviderInfo[] {
     .filter((info) => info.available);
 }
 
+/**
+ * Options for the create-league music-service picker. Unlike
+ * `listAvailableProviders`, this lists the full roadmap — services not yet wired
+ * up appear with `available: false` so the form can show them disabled
+ * ("coming soon"). Choosing a provider is a league-config decision, kept
+ * independent of whether its backend proxy happens to be running right now.
+ */
+export function listProviderOptions(): MusicProviderInfo[] {
+  return [
+    { id: "spotify", name: "Spotify", available: true },
+    { id: "youtube-music", name: "YouTube Music", available: false },
+    { id: "mock", name: "Demo Catalog", available: true },
+  ];
+}
+
 export * from "./types";

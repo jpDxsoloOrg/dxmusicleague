@@ -1,0 +1,10 @@
+.join-code-input {
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.field-error {
+  font-size: 13px;
+  color: #f87171;
+}

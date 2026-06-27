@@ -1,0 +1,41 @@
+.create-league {
+  max-width: 560px;
+  margin: 0 auto;
+}
+
+.create-card {
+  margin-top: 18px;
+  padding: 28px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.create-head h1 { margin: 0 0 8px; font-size: 26px; }
+.create-head p { margin: 0; color: var(--text-muted); font-size: 14px; line-height: 1.5; }
+
+.field { display: flex; flex-direction: column; gap: 7px; }
+.field-label { font-size: 13px; font-weight: 700; letter-spacing: 0.02em; }
+
+.field-input {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 12px 14px;
+  font-size: 15px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.12s ease;
+}
+.field-input:focus { border-color: var(--magenta); }
+.field-input::placeholder { color: var(--text-dim); }
+select.field-input { cursor: pointer; }
+
+.field-hint { font-size: 12px; color: var(--text-dim); line-height: 1.45; }
+
+.create-btn { align-self: flex-start; padding: 12px 22px; }
+.create-btn:disabled { opacity: 0.5; cursor: not-allowed; filter: none; }

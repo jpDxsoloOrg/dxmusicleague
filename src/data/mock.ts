@@ -3,7 +3,7 @@
 
 import type { League, Round, User } from "../domain/types";
 import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types";
-import type { Track } from "../music";
+import type { MusicProviderId, Track } from "../music";
 import { trackKey } from "../music";
 
 export const currentUser: User = {
@@ -45,7 +45,24 @@ export const leagues: League[] = [
     settings: DEFAULT_LEAGUE_SETTINGS,
     memberIds: ["u-me", "u-james", "u-mia", "u-jpop", "u-sarah", "u-luna"],
   },
+  // A league the current user is NOT in yet — joinable via invite code below.
+  {
+    id: "lg-indie",
+    name: "Indie Anthems",
+    ownerId: "u-luna",
+    musicProvider: "mock",
+    settings: DEFAULT_LEAGUE_SETTINGS,
+    memberIds: ["u-luna", "u-mia", "u-jpop"],
+  },
 ];
+
+// Invite codes for the Join-a-league flow (mock stand-in for real share links).
+// Code (case-insensitive) → leagueId.
+export const inviteCodes: Record<string, string> = {
+  "SYNTH-23": "lg-synthwave",
+  "VAPOR-88": "lg-vaporwave",
+  "INDIE-25": "lg-indie",
+};
 
 // A few rounds per league. Status drives the dashboard pill + completion bar.
 export const rounds: Round[] = [
@@ -54,6 +71,8 @@ export const rounds: Round[] = [
   { id: "r-sw-1", leagueId: "lg-synthwave", index: 1, theme: "First Impressions", status: "complete" },
   { id: "r-vw-1", leagueId: "lg-vaporwave", index: 1, theme: "Mall Soundtrack", status: "voting", voteDeadline: isoInDays(1) },
   { id: "r-bb-4", leagueId: "lg-bassline", index: 4, theme: "Drop the Bass", status: "revealed", playlistUrl: "https://example.com/mock-playlist/bb4" },
+  { id: "r-in-2", leagueId: "lg-indie", index: 2, theme: "Bedroom Pop Gems", status: "submitting", submissionDeadline: isoInDays(3) },
+  { id: "r-in-1", leagueId: "lg-indie", index: 1, theme: "Garage Revival", status: "complete" },
 ];
 
 /** Trending leagues a player could discover/join (not yet a member). */
@@ -94,6 +113,52 @@ export function getMyLeagueSummaries(): LeagueSummary[] {
         members: league.memberIds.map((id) => users[id]).filter(Boolean),
       };
     });
+}
+
+// ---- create / join (mock mutations of the in-memory store) ----
+// These push into the module-level arrays, so a created/joined league persists
+// across navigation within the session. Phase 2 swaps these for API calls.
+
+let createdLeagueSeq = 0;
+
+export interface CreateLeagueInput {
+  name: string;
+  musicProvider: MusicProviderId;
+}
+
+/** Create a league owned by the current user and return it. */
+export function createLeague(input: CreateLeagueInput): League {
+  createdLeagueSeq += 1;
+  const league: League = {
+    id: `lg-new-${createdLeagueSeq}`,
+    name: input.name.trim(),
+    ownerId: currentUser.id,
+    musicProvider: input.musicProvider,
+    settings: DEFAULT_LEAGUE_SETTINGS,
+    memberIds: [currentUser.id],
+  };
+  leagues.push(league);
+  // Mint a shareable invite code so the new league is joinable too.
+  inviteCodes[`NEW-${100 + createdLeagueSeq}`] = league.id;
+  return league;
+}
+
+export type JoinResult =
+  | { ok: true; league: League }
+  | { ok: false; error: string };
+
+/** Join the current user to a league by invite code (case-insensitive). */
+export function joinLeague(rawCode: string): JoinResult {
+  const code = rawCode.trim().toUpperCase();
+  if (!code) return { ok: false, error: "Enter an invite code to join." };
+  const leagueId = inviteCodes[code];
+  const league = leagues.find((lg) => lg.id === leagueId);
+  if (!league) return { ok: false, error: "That code doesn't match any league." };
+  if (league.memberIds.includes(currentUser.id)) {
+    return { ok: false, error: `You're already a member of ${league.name}.` };
+  }
+  league.memberIds.push(currentUser.id);
+  return { ok: true, league };
 }
 
 function isoInDays(days: number): string {

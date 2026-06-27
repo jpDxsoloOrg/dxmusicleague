@@ -71,7 +71,7 @@ export function DashboardPage() {
   );
 }
 
-function LeagueCard({ summary }: { summary: LeagueSummary }) {
+export function LeagueCard({ summary }: { summary: LeagueSummary }) {
   const { league, currentRound, totalRounds, completionPct, members } = summary;
   const status = currentRound?.status ?? "draft";
 
