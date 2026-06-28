@@ -1,0 +1,160 @@
+/* Auth screens (Sign in / Sign up / Verify) — from the Stitch "Sonic Syndicate"
+   designs. Full-screen centered glassmorphism card on the dark magenta glow. */
+
+.auth-screen {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  padding: 32px 20px;
+  background:
+    radial-gradient(60% 50% at 50% 42%, rgba(124, 58, 237, 0.22) 0%, rgba(224, 64, 251, 0.10) 35%, transparent 70%),
+    var(--bg);
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 412px;
+  background: rgba(24, 16, 32, 0.72);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  padding: 36px 34px 32px;
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  box-shadow: 0 30px 80px -30px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.02) inset;
+}
+
+/* brand lockup */
+.auth-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.auth-brand-mark {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}
+.auth-brand-name { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+
+.auth-eyebrow {
+  margin: 7px 0 22px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.auth-title {
+  margin: 0;
+  text-align: center;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.auth-subtitle {
+  margin: 8px 0 26px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+/* form */
+.auth-form { display: flex; flex-direction: column; gap: 18px; }
+.auth-field { display: flex; flex-direction: column; gap: 8px; }
+.auth-field-top { display: flex; align-items: baseline; justify-content: space-between; }
+.auth-label { font-size: 13px; font-weight: 600; color: var(--text); }
+
+.auth-input {
+  width: 100%;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 13px 15px;
+  color: var(--text);
+  font-size: 14px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.auth-input::placeholder { color: var(--text-dim); }
+.auth-input:focus {
+  outline: none;
+  border-color: var(--magenta);
+  box-shadow: 0 0 0 3px rgba(224, 64, 251, 0.18);
+}
+
+.auth-hint { font-size: 12px; color: var(--text-dim); }
+/* shared by <a> (Link) and link-styled <button>; reset native button chrome */
+.auth-link, .auth-link-sm {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+.auth-link { color: var(--magenta); font-weight: 600; }
+.auth-link:hover { filter: brightness(1.15); }
+.auth-link-sm { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+.auth-link-sm:hover { color: var(--magenta); }
+
+.auth-error {
+  margin: 0;
+  font-size: 13px;
+  color: #ff8a8a;
+  background: rgba(255, 80, 80, 0.08);
+  border: 1px solid rgba(255, 80, 80, 0.22);
+  border-radius: 10px;
+  padding: 9px 12px;
+}
+
+/* full-width gradient pill submit */
+.auth-submit {
+  margin-top: 4px;
+  width: 100%;
+  border: none;
+  background: var(--grad);
+  color: #fff;
+  font-weight: 700;
+  font-size: 15px;
+  padding: 14px;
+  border-radius: 999px;
+  box-shadow: 0 10px 30px -10px rgba(224, 64, 251, 0.65);
+  transition: filter 0.15s ease, transform 0.05s ease, opacity 0.15s ease;
+}
+.auth-submit:hover:not(:disabled) { filter: brightness(1.1); }
+.auth-submit:active:not(:disabled) { transform: translateY(1px); }
+.auth-submit:disabled { opacity: 0.6; cursor: progress; }
+
+.auth-foot {
+  margin: 22px 0 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.auth-screen-foot { font-size: 12px; color: var(--text-dim); }
+
+/* verify-email code input */
+.auth-code {
+  text-align: center;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.5em;
+  padding: 16px 15px;
+  text-indent: 0.5em;
+}
+.auth-badge {
+  width: 44px; height: 44px;
+  margin: 0 auto 18px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 14px;
+  background: rgba(224, 64, 251, 0.12);
+  border: 1px solid var(--border);
+  font-size: 20px;
+}
+.auth-resend { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 20px; }

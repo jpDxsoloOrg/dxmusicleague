@@ -79,9 +79,20 @@
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
-.me { display: flex; flex-direction: column; }
+.me { display: flex; flex-direction: column; gap: 2px; }
 .me strong { font-size: 13px; }
 .me span { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; }
+.sign-out {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  transition: color 0.15s ease;
+}
+.sign-out:hover { color: var(--magenta); }
 
 /* ---- main column ---- */
 .main { display: flex; flex-direction: column; min-width: 0; }

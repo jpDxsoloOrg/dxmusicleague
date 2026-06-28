@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { currentUser } from "../data/mock";
+import { useAuth } from "../auth/AuthContext";
 import { Avatar } from "./Avatar";
 import "./AppLayout.css";
 
@@ -12,6 +12,9 @@ const NAV = [
 ];
 
 export function AppLayout() {
+  const { user, signOut } = useAuth();
+  const displayName = user?.displayName ?? "Player";
+
   return (
     <div className="layout">
       <aside className="sidebar">
@@ -38,10 +41,12 @@ export function AppLayout() {
         </nav>
 
         <div className="sidebar-footer">
-          <Avatar name={currentUser.displayName} size={36} />
+          <Avatar name={displayName} size={36} />
           <div className="me">
-            <strong>{currentUser.displayName}</strong>
-            <span className="grad-text">PRO PLAN</span>
+            <strong>{displayName}</strong>
+            <button type="button" className="sign-out" onClick={() => void signOut()}>
+              Sign out
+            </button>
           </div>
         </div>
       </aside>
@@ -56,7 +61,7 @@ export function AppLayout() {
             <button className="icon-btn" aria-label="Notifications">
               <span className="bell" aria-hidden />
             </button>
-            <Avatar name={currentUser.displayName} size={36} />
+            <Avatar name={displayName} size={36} />
           </div>
         </header>
 
