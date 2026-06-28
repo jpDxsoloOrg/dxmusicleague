@@ -1,0 +1,12 @@
+{
+  "app": "node --experimental-strip-types infra/app.ts",
+  "watch": {
+    "include": ["infra/**", "src/**"],
+    "exclude": ["node_modules"]
+  },
+  "context": {
+    "@aws-cdk/core:checkSecretUsage": true,
+    "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
+    "@aws-cdk/aws-apigateway:disableCloudWatchRole": true
+  }
+}

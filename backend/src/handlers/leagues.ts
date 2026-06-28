@@ -1,0 +1,174 @@
+// League handlers — the create / join / list / detail loop. Pure business
+// logic over the Repository port: no AWS, no HTTP. The HTTP adapters parse a
+// request into these calls and serialize the result. Return shapes match the
+// frontend's mock functions exactly (src/data/mock.ts) so the pages don't change.
+
+import type { League, Round } from "../domain/types.ts";
+import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types.ts";
+import { badRequest, conflict, forbidden, notFound } from "../domain/errors.ts";
+import type { Repository, UserDirectory } from "../data/repository.ts";
+
+export interface Deps {
+  repo: Repository;
+  users: UserDirectory;
+}
+
+// ---- view models (mirror src/data/mock.ts) ----
+
+interface UserView {
+  id: string;
+  displayName: string;
+}
+
+interface LeagueSummary {
+  league: League;
+  currentRound?: Round;
+  totalRounds: number;
+  completionPct: number;
+  members: UserView[];
+}
+
+interface Standing {
+  rank: number;
+  user: UserView;
+  points: number;
+}
+
+interface LeagueDetail {
+  league: League;
+  rounds: Round[];
+  currentRound?: Round;
+  totalRounds: number;
+  standings: Standing[];
+  activity: never[]; // activity feed is not backed by data yet — empty for now.
+}
+
+// ---- helpers ----
+
+async function toUserViews(users: UserDirectory, ids: string[]): Promise<UserView[]> {
+  return Promise.all(ids.map(async (id) => ({ id, displayName: await users.getDisplayName(id) })));
+}
+
+function latestRound(rounds: Round[]): Round | undefined {
+  return [...rounds].sort((a, b) => b.index - a.index)[0];
+}
+
+/** Real completion %: for a voting round, ballots-cast / members; for a
+ *  submitting round, submissions / members; otherwise 0/100 by status. */
+async function completionPct(repo: Repository, league: League, round: Round | undefined): Promise<number> {
+  if (!round) return 0;
+  const members = league.memberIds.length || 1;
+  if (round.status === "submitting") {
+    const subs = await repo.getSubmissionsForRound(round.id);
+    return Math.round((subs.length / members) * 100);
+  }
+  if (round.status === "voting") {
+    const ballots = await repo.getBallotsForRound(round.id);
+    return Math.round((ballots.length / members) * 100);
+  }
+  return round.status === "revealed" || round.status === "complete" ? 100 : 0;
+}
+
+// ---- id + invite-code generation ----
+
+let leagueSeq = 0;
+function newLeagueId(name: string): string {
+  leagueSeq += 1;
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || "league";
+  return `lg-${slug}-${leagueSeq}`;
+}
+
+let inviteSeq = 0;
+function newInviteCode(): string {
+  inviteSeq += 1;
+  // Short, human-shareable, case-insensitive. e.g. "DXL-1042".
+  return `DXL-${1000 + inviteSeq}`;
+}
+
+// ---- handlers ----
+
+export interface CreateLeagueInput {
+  name: string;
+  musicProvider: League["musicProvider"];
+}
+
+export async function createLeague(deps: Deps, caller: string, input: CreateLeagueInput): Promise<League> {
+  const name = (input?.name ?? "").trim();
+  if (!name) throw badRequest("Give your league a name.");
+  if (!input?.musicProvider) throw badRequest("Pick a music service.");
+
+  const league: League = {
+    id: newLeagueId(name),
+    name,
+    ownerId: caller,
+    musicProvider: input.musicProvider,
+    settings: { ...DEFAULT_LEAGUE_SETTINGS },
+    memberIds: [caller],
+  };
+  await deps.repo.createLeague(league);
+  await deps.repo.putInvite(newInviteCode(), league.id);
+  await deps.repo.addStandingPoints(league.id, caller, 0); // seed standing at 0
+  return league;
+}
+
+export async function listMyLeagues(deps: Deps, caller: string): Promise<LeagueSummary[]> {
+  const leagues = await deps.repo.getLeaguesForUser(caller);
+  return Promise.all(
+    leagues.map(async (league) => {
+      const rounds = await deps.repo.getRoundsForLeague(league.id);
+      const currentRound = latestRound(rounds);
+      return {
+        league,
+        currentRound,
+        totalRounds: rounds.length,
+        completionPct: await completionPct(deps.repo, league, currentRound),
+        members: await toUserViews(deps.users, league.memberIds),
+      };
+    }),
+  );
+}
+
+export async function getLeagueDetail(deps: Deps, caller: string, leagueId: string): Promise<LeagueDetail> {
+  const league = await deps.repo.getLeague(leagueId);
+  if (!league) throw notFound("That league doesn't exist.");
+  if (!league.memberIds.includes(caller)) throw forbidden("You're not a member of this league.");
+
+  const rounds = (await deps.repo.getRoundsForLeague(leagueId)).sort((a, b) => a.index - b.index);
+  const currentRound = latestRound(rounds);
+
+  const rawStandings = await deps.repo.getStandings(leagueId);
+  const standings: Standing[] = (
+    await Promise.all(
+      rawStandings
+        .sort((a, b) => b.points - a.points)
+        .map(async (s, i) => ({
+          rank: i + 1,
+          user: { id: s.userId, displayName: await deps.users.getDisplayName(s.userId) },
+          points: s.points,
+        })),
+    )
+  );
+
+  return {
+    league,
+    rounds,
+    currentRound,
+    totalRounds: rounds.length,
+    standings,
+    activity: [],
+  };
+}
+
+export async function joinLeague(deps: Deps, caller: string, rawCode: string): Promise<{ league: League }> {
+  const code = (rawCode ?? "").trim().toUpperCase();
+  if (!code) throw badRequest("Enter an invite code to join.");
+
+  const leagueId = await deps.repo.getLeagueIdForInvite(code);
+  const league = leagueId ? await deps.repo.getLeague(leagueId) : undefined;
+  if (!league) throw notFound("That code doesn't match any league.");
+  if (league.memberIds.includes(caller)) throw conflict(`You're already a member of ${league.name}.`);
+
+  const updated = await deps.repo.addMember(league.id, caller);
+  await deps.repo.addStandingPoints(league.id, caller, 0);
+  return { league: updated };
+}
