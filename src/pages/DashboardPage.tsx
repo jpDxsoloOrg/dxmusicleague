@@ -1,7 +1,8 @@
 import { Link } from "react-router-dom";
-import { getMyLeagueSummaries, trendingLeagues } from "../data/mock";
-import type { LeagueSummary } from "../data/mock";
+import { data, trendingLeagues } from "../data";
+import type { LeagueSummary } from "../data";
 import type { RoundStatus } from "../domain/types";
+import { useAsync } from "../lib/useAsync";
 import { Avatar } from "../components/Avatar";
 import "./DashboardPage.css";
 
@@ -14,7 +15,7 @@ const STATUS_LABEL: Record<RoundStatus, string> = {
 };
 
 export function DashboardPage() {
-  const summaries = getMyLeagueSummaries();
+  const { data: summaries, loading, error } = useAsync(() => data.getMyLeagueSummaries(), []);
 
   return (
     <div className="dashboard">
@@ -42,8 +43,10 @@ export function DashboardPage() {
           <h2>Your Leagues</h2>
           <Link to="/leagues" className="link-muted">View all</Link>
         </div>
+        {loading && <p className="page-loading">Loading your leagues…</p>}
+        {error && <p className="page-error">{error}</p>}
         <div className="league-grid">
-          {summaries.map((s) => (
+          {summaries?.map((s) => (
             <LeagueCard key={s.league.id} summary={s} />
           ))}
         </div>

@@ -1,7 +1,8 @@
 import { Link, useParams } from "react-router-dom";
-import { getLeagueDetail } from "../data/mock";
+import { data } from "../data";
 import type { Round, RoundStatus } from "../domain/types";
 import { getProvider } from "../music";
+import { useAsync } from "../lib/useAsync";
 import { formatCountdown } from "../lib/time";
 import { Avatar } from "../components/Avatar";
 import "./RoundOverviewPage.css";
@@ -31,7 +32,11 @@ function primaryAction(leagueId: string, round: Round) {
 
 export function RoundOverviewPage() {
   const { leagueId = "" } = useParams();
-  const detail = getLeagueDetail(leagueId);
+  const { data: detail, loading } = useAsync(() => data.getLeagueDetail(leagueId), [leagueId]);
+
+  if (loading) {
+    return <div className="round-overview"><p className="page-loading">Loading league…</p></div>;
+  }
 
   if (!detail) {
     return (

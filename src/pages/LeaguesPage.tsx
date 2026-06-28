@@ -1,11 +1,12 @@
 import { Link } from "react-router-dom";
-import { getMyLeagueSummaries } from "../data/mock";
+import { data } from "../data";
+import { useAsync } from "../lib/useAsync";
 import { LeagueCard } from "./DashboardPage";
 import "./DashboardPage.css";
 import "./LeaguesPage.css";
 
 export function LeaguesPage() {
-  const summaries = getMyLeagueSummaries();
+  const { data: summaries, loading, error } = useAsync(() => data.getMyLeagueSummaries(), []);
 
   return (
     <div className="leagues-page">
@@ -17,14 +18,17 @@ export function LeaguesPage() {
         </div>
       </div>
 
-      {summaries.length === 0 ? (
+      {loading && <p className="page-loading">Loading your leagues…</p>}
+      {error && <p className="page-error">{error}</p>}
+
+      {summaries && summaries.length === 0 ? (
         <div className="leagues-empty">
           <p>You're not in any leagues yet.</p>
           <Link to="/leagues/new" className="btn btn-primary">Create your first league</Link>
         </div>
       ) : (
         <div className="league-grid">
-          {summaries.map((s) => (
+          {summaries?.map((s) => (
             <LeagueCard key={s.league.id} summary={s} />
           ))}
         </div>

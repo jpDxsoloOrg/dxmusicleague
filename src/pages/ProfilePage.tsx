@@ -1,25 +1,34 @@
 import { Link } from "react-router-dom";
-import { currentUser, getMyLeagueSummaries, getStandings } from "../data/mock";
+import { data } from "../data";
+import { useAsync } from "../lib/useAsync";
+import { useAuth } from "../auth/AuthContext";
 import { Avatar } from "../components/Avatar";
 import "./ProfilePage.css";
 
 export function ProfilePage() {
-  const summaries = getMyLeagueSummaries();
+  const { user } = useAuth();
 
-  // Per-league standing for the current user.
-  const myRanks = summaries.map((s) => {
-    const standing = getStandings(s.league.id).find((st) => st.user.id === currentUser.id);
-    return { league: s.league, rank: standing?.rank, points: standing?.points ?? 0, field: getStandings(s.league.id).length };
-  });
+  // My per-league standing: load my leagues, then my rank within each.
+  const { data: myRanks, loading } = useAsync(async () => {
+    const summaries = await data.getMyLeagueSummaries();
+    return Promise.all(
+      summaries.map(async (s) => {
+        const standings = await data.getStandings(s.league.id);
+        const mine = standings.find((st) => st.user.id === user?.id);
+        return { league: s.league, rank: mine?.rank, points: mine?.points ?? 0, field: standings.length };
+      }),
+    );
+  }, [user?.id]);
 
-  const totalPoints = myRanks.reduce((a, r) => a + r.points, 0);
-  const bestRank = myRanks.reduce<number | undefined>(
+  const ranks = myRanks ?? [];
+  const totalPoints = ranks.reduce((a, r) => a + r.points, 0);
+  const bestRank = ranks.reduce<number | undefined>(
     (best, r) => (r.rank && (best === undefined || r.rank < best) ? r.rank : best),
     undefined,
   );
 
   const stats = [
-    { label: "Leagues", value: summaries.length },
+    { label: "Leagues", value: ranks.length },
     { label: "Total points", value: totalPoints },
     { label: "Best finish", value: bestRank ? `#${bestRank}` : "—" },
   ];
@@ -27,9 +36,9 @@ export function ProfilePage() {
   return (
     <div className="profile-page">
       <header className="profile-header">
-        <Avatar name={currentUser.displayName} size={84} />
+        <Avatar name={user?.displayName ?? "Player"} size={84} />
         <div className="profile-id">
-          <h1>{currentUser.displayName}</h1>
+          <h1>{user?.displayName ?? "Player"}</h1>
           <span className="grad-text profile-plan">PRO PLAN · Curator</span>
         </div>
         <button className="btn profile-edit">Edit profile</button>
@@ -46,8 +55,9 @@ export function ProfilePage() {
 
       <section>
         <h2 className="profile-section-head">Your standings</h2>
+        {loading && <p className="page-loading">Loading…</p>}
         <div className="profile-leagues">
-          {myRanks.map((r) => (
+          {ranks.map((r) => (
             <Link key={r.league.id} to={`/leagues/${r.league.id}`} className="profile-league-row">
               <strong>{r.league.name}</strong>
               <span className="profile-league-rank">

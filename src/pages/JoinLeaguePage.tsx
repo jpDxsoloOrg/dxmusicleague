@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { joinLeague } from "../data/mock";
+import { data } from "../data";
 import "./CreateLeaguePage.css";
 import "./JoinLeaguePage.css";
 
@@ -8,13 +8,18 @@ export function JoinLeaguePage() {
   const navigate = useNavigate();
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  function handleJoin() {
-    const result = joinLeague(code);
+  async function handleJoin() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    const result = await data.joinLeague(code);
     if (result.ok) {
       navigate(`/leagues/${result.league.id}`);
     } else {
       setError(result.error);
+      setBusy(false);
     }
   }
 
@@ -44,8 +49,8 @@ export function JoinLeaguePage() {
           {error && <span className="field-error">{error}</span>}
         </label>
 
-        <button className="btn btn-primary create-btn" disabled={!code.trim()} onClick={handleJoin}>
-          Join league →
+        <button className="btn btn-primary create-btn" disabled={!code.trim() || busy} onClick={handleJoin}>
+          {busy ? "Joining…" : "Join league →"}
         </button>
       </div>
     </div>

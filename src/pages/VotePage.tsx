@@ -1,20 +1,26 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { getLeagueDetail, getVotableSubmissions, saveVoteComments } from "../data/mock";
+import { data } from "../data";
 import { formatDuration } from "../music";
+import { useAsync } from "../lib/useAsync";
 import { TrackArt } from "../components/TrackArt";
 import "./VotePage.css";
 
 export function VotePage() {
   const { leagueId = "" } = useParams();
-  const detail = getLeagueDetail(leagueId);
-  const submissions = useMemo(() => getVotableSubmissions(leagueId), [leagueId]);
+  const { data: detail, loading: detailLoading } = useAsync(() => data.getLeagueDetail(leagueId), [leagueId]);
+  const { data: subs } = useAsync(() => data.getVotableSubmissions(leagueId), [leagueId]);
+  const submissions = subs ?? [];
 
   // points allocated per submission id
   const [allocations, setAllocations] = useState<Record<string, number>>({});
   // optional voter comment per submission id (shown on reveal)
   const [comments, setComments] = useState<Record<string, string>>({});
   const [submitted, setSubmitted] = useState(false);
+
+  if (detailLoading) {
+    return <div className="vote-page"><p className="page-loading">Loading…</p></div>;
+  }
 
   if (!detail) {
     return (
@@ -114,7 +120,7 @@ export function VotePage() {
         <button
           className="btn btn-primary vote-submit"
           disabled={!canSubmit}
-          onClick={() => { saveVoteComments(league.id, comments); setSubmitted(true); }}
+          onClick={async () => { await data.saveVoteComments(league.id, comments); setSubmitted(true); }}
         >
           Submit votes
         </button>

@@ -95,3 +95,11 @@ button { font-family: inherit; cursor: pointer; }
 .pill-revealed   { color: var(--status-revealed);   background: rgba(34, 197, 94, 0.14); }
 .pill-complete   { color: var(--text-muted);        background: rgba(155, 144, 179, 0.12); }
 .pill-draft      { color: var(--text-muted);        background: rgba(155, 144, 179, 0.12); }
+
+/* async data states (shared by pages using the DataClient) */
+.page-loading, .page-error {
+  padding: 48px 8px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+.page-error { color: #ff8a8a; }

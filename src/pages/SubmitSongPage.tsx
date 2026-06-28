@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { getLeagueDetail } from "../data/mock";
+import { data } from "../data";
 import { getProvider, formatDuration } from "../music";
 import type { Track } from "../music";
+import { useAsync } from "../lib/useAsync";
 import { TrackArt } from "../components/TrackArt";
 import "./SubmitSongPage.css";
 
 export function SubmitSongPage() {
   const { leagueId = "" } = useParams();
-  const detail = getLeagueDetail(leagueId);
+  const { data: detail, loading: detailLoading } = useAsync(() => data.getLeagueDetail(leagueId), [leagueId]);
 
   // Resolve the league's chosen music service. The page never names Spotify.
   const provider = useMemo(
@@ -41,6 +42,10 @@ export function SubmitSongPage() {
       clearTimeout(t);
     };
   }, [provider, query]);
+
+  if (detailLoading) {
+    return <div className="submit-page"><p className="page-loading">Loading…</p></div>;
+  }
 
   if (!detail) {
     return (

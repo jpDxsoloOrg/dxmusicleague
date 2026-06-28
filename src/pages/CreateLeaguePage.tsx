@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { createLeague } from "../data/mock";
+import { data } from "../data";
 import { listProviderOptions } from "../music";
 import type { MusicProviderId } from "../music";
 import "./CreateLeaguePage.css";
@@ -12,13 +12,22 @@ export function CreateLeaguePage() {
   const [name, setName] = useState("");
   // Default to Spotify per the product decision (musicLeagueClone.md §8).
   const [provider, setProvider] = useState<MusicProviderId>("spotify");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const canCreate = name.trim().length >= 3;
+  const canCreate = name.trim().length >= 3 && !busy;
 
-  function handleCreate() {
+  async function handleCreate() {
     if (!canCreate) return;
-    const league = createLeague({ name, musicProvider: provider });
-    navigate(`/leagues/${league.id}`);
+    setBusy(true);
+    setError(null);
+    try {
+      const league = await data.createLeague({ name, musicProvider: provider });
+      navigate(`/leagues/${league.id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't create the league.");
+      setBusy(false);
+    }
   }
 
   return (
@@ -63,8 +72,10 @@ export function CreateLeaguePage() {
           </span>
         </label>
 
+        {error && <span className="field-error">{error}</span>}
+
         <button className="btn btn-primary create-btn" disabled={!canCreate} onClick={handleCreate}>
-          Create league →
+          {busy ? "Creating…" : "Create league →"}
         </button>
       </div>
     </div>

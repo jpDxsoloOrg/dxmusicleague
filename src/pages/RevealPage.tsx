@@ -1,16 +1,21 @@
-import { useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
-import { getLeagueDetail, getRoundResults } from "../data/mock";
-import type { VoterComment } from "../data/mock";
+import { data } from "../data";
+import type { VoterComment } from "../data";
 import { getProvider } from "../music";
+import { useAsync } from "../lib/useAsync";
 import { TrackArt } from "../components/TrackArt";
 import { Avatar } from "../components/Avatar";
 import "./RevealPage.css";
 
 export function RevealPage() {
   const { leagueId = "" } = useParams();
-  const detail = getLeagueDetail(leagueId);
-  const results = useMemo(() => getRoundResults(leagueId), [leagueId]);
+  const { data: detail, loading: detailLoading } = useAsync(() => data.getLeagueDetail(leagueId), [leagueId]);
+  const { data: resultsData } = useAsync(() => data.getRoundResults(leagueId), [leagueId]);
+  const results = resultsData ?? [];
+
+  if (detailLoading) {
+    return <div className="reveal-page"><p className="page-loading">Loading…</p></div>;
+  }
 
   if (!detail) {
     return (

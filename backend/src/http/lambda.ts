@@ -19,7 +19,12 @@ const routes = buildRoutes(deps);
 
 const json = (statusCode: number, body: unknown): APIGatewayProxyResult => ({
   statusCode,
-  headers: { "Content-Type": "application/json" },
+  headers: {
+    "Content-Type": "application/json",
+    // Browser clients call this cross-origin; the API GW preflight (OPTIONS) is
+    // handled by CORS config, but the actual responses must carry the header too.
+    "Access-Control-Allow-Origin": "*",
+  },
   body: JSON.stringify(body),
 });
 

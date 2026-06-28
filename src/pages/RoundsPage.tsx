@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
-import { getMyLeagueSummaries } from "../data/mock";
+import { data } from "../data";
 import type { Round, RoundStatus } from "../domain/types";
+import { useAsync } from "../lib/useAsync";
 import { formatCountdown } from "../lib/time";
 import "./RoundsPage.css";
 
@@ -25,13 +26,16 @@ function action(leagueId: string, round: Round) {
 const NEEDS_ACTION: RoundStatus[] = ["submitting", "voting"];
 
 export function RoundsPage() {
-  const summaries = getMyLeagueSummaries().filter((s) => s.currentRound);
+  const { data: all, loading, error } = useAsync(() => data.getMyLeagueSummaries(), []);
+  const summaries = (all ?? []).filter((s) => s.currentRound);
   const active = summaries.filter((s) => NEEDS_ACTION.includes(s.currentRound!.status));
   const other = summaries.filter((s) => !NEEDS_ACTION.includes(s.currentRound!.status));
 
   return (
     <div className="rounds-page">
       <h1 className="page-title">Rounds</h1>
+      {loading && <p className="page-loading">Loading rounds…</p>}
+      {error && <p className="page-error">{error}</p>}
 
       <section>
         <h2 className="rounds-section-head">Needs your attention</h2>
