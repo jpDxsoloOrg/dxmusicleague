@@ -6,6 +6,7 @@
 import type { Deps } from "../handlers/leagues.ts";
 import * as leagues from "../handlers/leagues.ts";
 import * as rounds from "../handlers/rounds.ts";
+import * as submissions from "../handlers/submissions.ts";
 
 export interface RouteRequest {
   /** The authenticated caller's user id (Cognito `sub`, or a dev stub locally). */
@@ -81,6 +82,22 @@ export function buildRoutes(deps: Deps): Route[] {
           voteDeadline: asOptString(body.voteDeadline),
         });
       },
+    },
+    {
+      method: "POST",
+      pattern: "/rounds/:roundId/submission",
+      handler: (req) => {
+        const body = asRecord(req.body);
+        return submissions.submitSong(deps, req.caller, req.params.roundId!, {
+          track: body.track,
+          comment: asOptString(body.comment),
+        });
+      },
+    },
+    {
+      method: "GET",
+      pattern: "/rounds/:roundId/submissions",
+      handler: (req) => submissions.listVotableSubmissions(deps, req.caller, req.params.roundId!),
     },
   ];
 }
