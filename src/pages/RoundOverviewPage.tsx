@@ -122,6 +122,17 @@ export function RoundOverviewPage() {
                     <span className="clock" aria-hidden /> {countdown} left
                   </span>
                 )}
+                {currentRound.playlistUrl &&
+                  (currentRound.status === "previewing" || currentRound.status === "voting") && (
+                    <a
+                      className="btn hero-cta"
+                      href={currentRound.playlistUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      🎧 Open playlist
+                    </a>
+                  )}
                 {action && (
                   <Link to={action.to} className="btn btn-primary hero-cta">
                     {action.label} →

@@ -7,6 +7,7 @@
 
 import type { Round, RoundStatus } from "../domain/types.ts";
 import { badRequest, forbidden, notFound } from "../domain/errors.ts";
+import { createPlaylistForRound } from "./providers.ts";
 import type { Deps } from "./leagues.ts";
 
 /** Round ids encode their league + 1-based index as `<leagueId>~<index4>`,
@@ -85,7 +86,7 @@ export async function updateRound(
   roundId: string,
   input: UpdateRoundInput,
 ): Promise<Round> {
-  await requireOwnedLeague(deps, caller, leagueId);
+  const league = await requireOwnedLeague(deps, caller, leagueId);
 
   const round = await deps.repo.getRound(roundId);
   if (!round || round.leagueId !== leagueId) throw notFound("That round doesn't exist.");
@@ -98,6 +99,18 @@ export async function updateRound(
       throw badRequest(`Can't move a ${round.status} round to ${input.status}.`);
     }
     round.status = input.status;
+
+    // Submissions close → build the round's public playlist from its songs.
+    // Best-effort: a Spotify hiccup shouldn't block the round from advancing.
+    if (input.status === "previewing" && !round.playlistUrl) {
+      try {
+        const subs = await deps.repo.getSubmissionsForRound(round.id);
+        const url = await createPlaylistForRound(league, round, subs);
+        if (url) round.playlistUrl = url;
+      } catch (err) {
+        console.error(`Playlist creation failed for round ${round.id}:`, err);
+      }
+    }
   }
 
   if (input.theme !== undefined) {
