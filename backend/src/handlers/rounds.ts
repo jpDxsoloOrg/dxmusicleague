@@ -60,9 +60,11 @@ export async function createRound(
 
 // The only status moves a PATCH may make. `revealed`/`complete` are off-limits
 // here (reveal endpoint owns them); nothing moves backwards or skips a step.
+// submitting → previewing is where the playlist gets created (later slice).
 const ALLOWED_NEXT: Record<RoundStatus, RoundStatus[]> = {
   draft: ["submitting"],
-  submitting: ["voting"],
+  submitting: ["previewing"],
+  previewing: ["voting"],
   voting: [],
   revealed: [],
   complete: [],

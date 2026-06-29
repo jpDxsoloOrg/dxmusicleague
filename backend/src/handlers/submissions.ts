@@ -74,15 +74,18 @@ export async function submitSong(
   return submission;
 }
 
-/** What a voter sees: every submission except their own, with no submitter
- *  identity — only available once the round is in voting. */
+/** The anonymized song list — every submission except the caller's own, with no
+ *  submitter identity. Available once submissions close: during `previewing`
+ *  (listen to the playlist) and `voting`. */
 export async function listVotableSubmissions(
   deps: Deps,
   caller: string,
   roundId: string,
 ): Promise<Array<{ id: string; track: Track }>> {
   const { round } = await roundForMember(deps, caller, roundId);
-  if (round.status !== "voting") throw badRequest("Voting hasn't started for this round.");
+  if (round.status !== "previewing" && round.status !== "voting") {
+    throw badRequest("The songs aren't revealed yet for this round.");
+  }
 
   const subs = await deps.repo.getSubmissionsForRound(roundId);
   return subs

@@ -20,6 +20,7 @@
 
   /* status */
   --status-submitting: #e040fb;
+  --status-previewing: #38bdf8;
   --status-voting: #8b5cf6;
   --status-revealed: #22c55e;
 
@@ -91,6 +92,7 @@ button { font-family: inherit; cursor: pointer; }
   background: currentColor;
 }
 .pill-submitting { color: var(--status-submitting); background: rgba(224, 64, 251, 0.12); }
+.pill-previewing { color: var(--status-previewing); background: rgba(56, 189, 248, 0.14); }
 .pill-voting     { color: var(--status-voting);     background: rgba(139, 92, 246, 0.14); }
 .pill-revealed   { color: var(--status-revealed);   background: rgba(34, 197, 94, 0.14); }
 .pill-complete   { color: var(--text-muted);        background: rgba(155, 144, 179, 0.12); }

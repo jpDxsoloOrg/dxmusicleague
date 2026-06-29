@@ -6,7 +6,10 @@
 
 export type MusicProviderId = "spotify" | "youtube-music" | "mock";
 
-export type RoundStatus = "draft" | "submitting" | "voting" | "revealed" | "complete";
+// Lifecycle: draft → submitting → previewing → voting → revealed (→ complete).
+// `previewing` = submissions are closed and the songs (a public playlist) are
+// revealed for listening, but voting hasn't opened yet.
+export type RoundStatus = "draft" | "submitting" | "previewing" | "voting" | "revealed" | "complete";
 
 /** A track normalized across providers — mirror of the frontend `Track`. */
 export interface Track {

@@ -4,7 +4,10 @@
 
 import type { MusicProviderId, Track } from "../music/types";
 
-export type RoundStatus = "draft" | "submitting" | "voting" | "revealed" | "complete";
+// Lifecycle: draft → submitting → previewing → voting → revealed (→ complete).
+// `previewing` = submissions closed, songs revealed as a playlist for listening,
+// voting not yet open.
+export type RoundStatus = "draft" | "submitting" | "previewing" | "voting" | "revealed" | "complete";
 
 export interface User {
   id: string;

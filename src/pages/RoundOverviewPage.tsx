@@ -12,16 +12,20 @@ import "./RoundOverviewPage.css";
 const STATUS_LABEL: Record<RoundStatus, string> = {
   draft: "Draft",
   submitting: "Submitting",
+  previewing: "Listening",
   voting: "Voting",
   revealed: "Revealed",
   complete: "Complete",
 };
 
-// What the active round's primary button does, by status.
-function primaryAction(leagueId: string, round: Round) {
+// What the active round's primary button does, by status. `previewing` has no
+// action — players just listen until voting opens.
+function primaryAction(leagueId: string, round: Round): { label: string; to: string } | undefined {
   switch (round.status) {
     case "submitting":
       return { label: "Submit your song", to: `/leagues/${leagueId}/submit` };
+    case "previewing":
+      return undefined;
     case "voting":
       return { label: "Vote now", to: `/leagues/${leagueId}/vote` };
     case "revealed":
@@ -107,6 +111,10 @@ export function RoundOverviewPage() {
               </div>
               <h2 className="hero-theme">{currentRound.theme}</h2>
               {currentRound.description && <p className="hero-desc">{currentRound.description}</p>}
+
+              {currentRound.status === "previewing" && (
+                <p className="hero-desc">🎧 Submissions are in — give the songs a listen. Voting opens shortly.</p>
+              )}
 
               <div className="hero-footer">
                 {countdown && (
@@ -230,6 +238,14 @@ function OwnerRoundControl({
           {busy ? "Opening…" : "Open for submissions →"}
         </button>
       ) : status === "submitting" ? (
+        <button
+          className="btn btn-primary"
+          disabled={busy}
+          onClick={() => run(() => data.advanceRound(league.id, currentRound!.id, "previewing"))}
+        >
+          {busy ? "Closing…" : "Close submissions & reveal songs →"}
+        </button>
+      ) : status === "previewing" ? (
         <button
           className="btn btn-primary"
           disabled={busy}

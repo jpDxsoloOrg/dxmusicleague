@@ -9,6 +9,7 @@ import "./DashboardPage.css";
 const STATUS_LABEL: Record<RoundStatus, string> = {
   draft: "Draft",
   submitting: "Submitting",
+  previewing: "Listening",
   voting: "Voting",
   revealed: "Revealed",
   complete: "Complete",

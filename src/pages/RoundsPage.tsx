@@ -8,6 +8,7 @@ import "./RoundsPage.css";
 const STATUS_LABEL: Record<RoundStatus, string> = {
   draft: "Draft",
   submitting: "Submitting",
+  previewing: "Listening",
   voting: "Voting",
   revealed: "Revealed",
   complete: "Complete",
@@ -16,6 +17,7 @@ const STATUS_LABEL: Record<RoundStatus, string> = {
 function action(leagueId: string, round: Round) {
   switch (round.status) {
     case "submitting": return { label: "Submit song", to: `/leagues/${leagueId}/submit` };
+    case "previewing": return { label: "Listen", to: `/leagues/${leagueId}` };
     case "voting": return { label: "Vote now", to: `/leagues/${leagueId}/vote` };
     case "revealed":
     case "complete": return { label: "View results", to: `/leagues/${leagueId}/reveal` };
