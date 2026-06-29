@@ -5,6 +5,7 @@
 
 import type { Deps } from "../handlers/leagues.ts";
 import * as leagues from "../handlers/leagues.ts";
+import * as rounds from "../handlers/rounds.ts";
 
 export interface RouteRequest {
   /** The authenticated caller's user id (Cognito `sub`, or a dev stub locally). */
@@ -23,6 +24,7 @@ export interface Route {
 }
 
 const asString = (v: unknown): string => (typeof v === "string" ? v : "");
+const asOptString = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
 const asRecord = (v: unknown): Record<string, unknown> => (v && typeof v === "object" ? (v as Record<string, unknown>) : {});
 
 export function buildRoutes(deps: Deps): Route[] {
@@ -52,6 +54,33 @@ export function buildRoutes(deps: Deps): Route[] {
       method: "GET",
       pattern: "/leagues/:leagueId",
       handler: (req) => leagues.getLeagueDetail(deps, req.caller, req.params.leagueId!),
+    },
+    {
+      method: "POST",
+      pattern: "/leagues/:leagueId/rounds",
+      handler: (req) => {
+        const body = asRecord(req.body);
+        return rounds.createRound(deps, req.caller, req.params.leagueId!, {
+          theme: asString(body.theme),
+          description: asOptString(body.description),
+          submissionDeadline: asOptString(body.submissionDeadline),
+          voteDeadline: asOptString(body.voteDeadline),
+        });
+      },
+    },
+    {
+      method: "PATCH",
+      pattern: "/leagues/:leagueId/rounds/:roundId",
+      handler: (req) => {
+        const body = asRecord(req.body);
+        return rounds.updateRound(deps, req.caller, req.params.leagueId!, req.params.roundId!, {
+          status: asOptString(body.status) as never,
+          theme: asOptString(body.theme),
+          description: asOptString(body.description),
+          submissionDeadline: asOptString(body.submissionDeadline),
+          voteDeadline: asOptString(body.voteDeadline),
+        });
+      },
     },
   ];
 }
