@@ -14,8 +14,10 @@ import type {
   Track,
 } from "../types";
 import { trackKey } from "../types";
+import { auth } from "../../auth/config";
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "";
+// Same backend base URL as the data client; in AWS mode the proxy is live.
+const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
 // Shape our backend proxy returns for a track (already simplified server-side).
 interface ApiTrack {
@@ -46,18 +48,24 @@ function toTrack(raw: ApiTrack): Track {
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   if (!API_BASE) {
-    throw new Error("Spotify provider not configured: set VITE_API_BASE to the backend proxy URL.");
+    throw new Error("Spotify provider not configured: set VITE_API_URL to the backend proxy URL.");
   }
+  // The proxy sits behind the Cognito authorizer, so send the caller's token.
+  const token = await auth.idToken();
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...init?.headers,
+    },
   });
   if (!res.ok) throw new Error(`Backend error ${res.status} for ${path}`);
   return res.json() as Promise<T>;
 }
 
 export class SpotifyMusicProvider implements MusicProvider {
-  // Flip `available` to true once VITE_API_BASE points at a live proxy.
+  // `available` once VITE_API_URL points at the live proxy (AWS mode).
   readonly info: MusicProviderInfo = {
     id: "spotify",
     name: "Spotify",

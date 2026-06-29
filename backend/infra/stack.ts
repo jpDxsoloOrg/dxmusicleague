@@ -13,6 +13,7 @@ import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as cognito from "aws-cdk-lib/aws-cognito";
 import * as apigateway from "aws-cdk-lib/aws-apigateway";
 import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import { NodejsFunction, OutputFormat } from "aws-cdk-lib/aws-lambda-nodejs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -57,6 +58,14 @@ export class MusicLeagueStack extends Stack {
       preventUserExistenceErrors: true,
     });
 
+    // ---- Spotify app credentials ----
+    // Created empty here; the real {clientId, clientSecret} is set out-of-band
+    // (CLI / console) so it never lands in source or the CloudFormation template.
+    const spotifySecret = new secretsmanager.Secret(this, "SpotifySecret", {
+      secretName: "music-league/spotify",
+      description: "Spotify app credentials JSON {clientId, clientSecret} — set out-of-band.",
+    });
+
     // ---- API Lambda (one function, internal route table) ----
     const apiFn = new NodejsFunction(this, "ApiFn", {
       runtime: lambda.Runtime.NODEJS_22_X,
@@ -67,6 +76,7 @@ export class MusicLeagueStack extends Stack {
       environment: {
         TABLE_NAME: table.tableName,
         USER_POOL_ID: userPool.userPoolId,
+        SPOTIFY_SECRET_ID: spotifySecret.secretArn,
       },
       // ESM output matches the source; esbuild resolves the `.ts` import
       // extensions and tree-shakes the unused (local-server) paths.
@@ -75,6 +85,7 @@ export class MusicLeagueStack extends Stack {
 
     table.grantReadWriteData(apiFn);
     userPool.grant(apiFn, "cognito-idp:ListUsers"); // resolve display names
+    spotifySecret.grantRead(apiFn);
 
     // ---- API Gateway REST + Cognito authorizer ----
     const api = new apigateway.RestApi(this, "MusicLeagueApi", {

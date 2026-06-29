@@ -8,6 +8,7 @@ import * as leagues from "../handlers/leagues.ts";
 import * as rounds from "../handlers/rounds.ts";
 import * as submissions from "../handlers/submissions.ts";
 import * as voting from "../handlers/voting.ts";
+import * as providers from "../handlers/providers.ts";
 
 export interface RouteRequest {
   /** The authenticated caller's user id (Cognito `sub`, or a dev stub locally). */
@@ -120,6 +121,12 @@ export function buildRoutes(deps: Deps): Route[] {
       method: "GET",
       pattern: "/rounds/:roundId/results",
       handler: (req) => voting.getResults(deps, req.caller, req.params.roundId!),
+    },
+    {
+      method: "GET",
+      pattern: "/spotify/search",
+      handler: (req) =>
+        providers.searchSpotify(req.query.q ?? "", req.query.market ?? "", Number(req.query.limit) || 10),
     },
   ];
 }
