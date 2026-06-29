@@ -7,6 +7,7 @@ import type { Deps } from "../handlers/leagues.ts";
 import * as leagues from "../handlers/leagues.ts";
 import * as rounds from "../handlers/rounds.ts";
 import * as submissions from "../handlers/submissions.ts";
+import * as voting from "../handlers/voting.ts";
 
 export interface RouteRequest {
   /** The authenticated caller's user id (Cognito `sub`, or a dev stub locally). */
@@ -98,6 +99,27 @@ export function buildRoutes(deps: Deps): Route[] {
       method: "GET",
       pattern: "/rounds/:roundId/submissions",
       handler: (req) => submissions.listVotableSubmissions(deps, req.caller, req.params.roundId!),
+    },
+    {
+      method: "POST",
+      pattern: "/rounds/:roundId/ballot",
+      handler: (req) => {
+        const body = asRecord(req.body);
+        return voting.castBallot(deps, req.caller, req.params.roundId!, {
+          allocations: body.allocations as Record<string, number>,
+          comments: body.comments as Record<string, string> | undefined,
+        });
+      },
+    },
+    {
+      method: "POST",
+      pattern: "/rounds/:roundId/reveal",
+      handler: (req) => voting.revealRound(deps, req.caller, req.params.roundId!),
+    },
+    {
+      method: "GET",
+      pattern: "/rounds/:roundId/results",
+      handler: (req) => voting.getResults(deps, req.caller, req.params.roundId!),
     },
   ];
 }
