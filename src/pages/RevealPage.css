@@ -102,3 +102,18 @@
   .reveal-standings { position: static; }
   .rank-by { display: none; }
 }
+
+/* round-not-yet-revealed state (owner reveal / waiting) */
+.reveal-pending {
+  margin-top: 28px;
+  padding: 40px 28px;
+  text-align: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  color: var(--text-muted);
+}

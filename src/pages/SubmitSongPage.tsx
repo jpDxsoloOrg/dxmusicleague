@@ -23,6 +23,8 @@ export function SubmitSongPage() {
   const [selected, setSelected] = useState<Track | null>(null);
   const [comment, setComment] = useState("");
   const [submitted, setSubmitted] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   // Debounced search through the provider abstraction.
   useEffect(() => {
@@ -144,9 +146,25 @@ export function SubmitSongPage() {
                 rows={3}
               />
 
-              <button className="btn btn-primary submit-btn" onClick={() => setSubmitted(true)}>
-                Submit song →
+              <button
+                className="btn btn-primary submit-btn"
+                disabled={busy || !currentRound}
+                onClick={async () => {
+                  if (!currentRound) return;
+                  setBusy(true);
+                  setSubmitError(null);
+                  try {
+                    await data.submitSong(currentRound.id, selected, comment.trim() || undefined);
+                    setSubmitted(true);
+                  } catch (err) {
+                    setSubmitError(err instanceof Error ? err.message : "Couldn't submit your song.");
+                    setBusy(false);
+                  }
+                }}
+              >
+                {busy ? "Submitting…" : "Submit song →"}
               </button>
+              {submitError && <p className="page-error">{submitError}</p>}
               <p className="submit-note">You can change your pick until the round closes.</p>
             </div>
           ) : (

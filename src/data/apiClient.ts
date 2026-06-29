@@ -1,26 +1,19 @@
 // ApiClient — the real DataClient, talking to the deployed REST API
 // (API Gateway + Lambda + DynamoDB) with the Cognito ID token as a bearer.
-// Selected when VITE_API_URL is set (AWS mode).
-//
-// The league-loop endpoints are live. The round/voting endpoints don't exist on
-// the backend yet (build-order steps 3-4), so those methods fall back to the
-// in-memory mock for now — clearly logged — so the app stays navigable on AWS
-// until those endpoints land.
+// Selected when VITE_API_URL is set (AWS mode). Every method is a live endpoint.
 
-import type { League } from "../domain/types";
+import type { League, Round, RoundStatus, Submission } from "../domain/types";
+import type { Track } from "../music";
 import { auth } from "../auth/config";
-import type { DataClient } from "./client";
-import {
-  getRoundResults as mockRoundResults,
-  getVotableSubmissions as mockVotableSubmissions,
-  saveVoteComments as mockSaveVoteComments,
-  type CreateLeagueInput,
-  type JoinResult,
-  type LeagueDetail,
-  type LeagueSummary,
-  type RoundResult,
-  type Standing,
-  type VotableSubmission,
+import type { CreateRoundInput, DataClient } from "./client";
+import type {
+  CreateLeagueInput,
+  JoinResult,
+  LeagueDetail,
+  LeagueSummary,
+  RoundResult,
+  Standing,
+  VotableSubmission,
 } from "./mock";
 
 class ApiRequestError extends Error {
@@ -34,14 +27,7 @@ class ApiRequestError extends Error {
 // Empty in mock mode (this module is imported but never instantiated then).
 const BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/+$/, "");
 
-let warnedRoundsStub = false;
-function warnRoundsStub(): void {
-  if (warnedRoundsStub) return;
-  warnedRoundsStub = true;
-  console.warn(
-    "[data] Round/voting data is still served from the mock — the backend rounds API isn't built yet (build-order steps 3-4).",
-  );
-}
+const enc = encodeURIComponent;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = await auth.idToken();
@@ -94,17 +80,36 @@ export class ApiClient implements DataClient {
     return detail?.standings ?? [];
   }
 
-  // ---- round/voting: mock fallback until the backend rounds API exists ----
-  async getVotableSubmissions(leagueId: string): Promise<VotableSubmission[]> {
-    warnRoundsStub();
-    return mockVotableSubmissions(leagueId);
+  // ---- Rounds (owner) ----
+  createRound(leagueId: string, input: CreateRoundInput): Promise<Round> {
+    return request<Round>(`/leagues/${enc(leagueId)}/rounds`, { method: "POST", body: JSON.stringify(input) });
   }
-  async saveVoteComments(leagueId: string, comments: Record<string, string>): Promise<void> {
-    warnRoundsStub();
-    mockSaveVoteComments(leagueId, comments);
+  advanceRound(leagueId: string, roundId: string, status: RoundStatus): Promise<Round> {
+    return request<Round>(`/leagues/${enc(leagueId)}/rounds/${enc(roundId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    });
   }
-  async getRoundResults(leagueId: string): Promise<RoundResult[]> {
-    warnRoundsStub();
-    return mockRoundResults(leagueId);
+  revealRound(roundId: string): Promise<RoundResult[]> {
+    return request<RoundResult[]>(`/rounds/${enc(roundId)}/reveal`, { method: "POST" });
+  }
+
+  // ---- Submissions ----
+  submitSong(roundId: string, track: Track, comment?: string): Promise<Submission> {
+    return request<Submission>(`/rounds/${enc(roundId)}/submission`, {
+      method: "POST",
+      body: JSON.stringify({ track, comment }),
+    });
+  }
+  getVotableSubmissions(roundId: string): Promise<VotableSubmission[]> {
+    return request<VotableSubmission[]>(`/rounds/${enc(roundId)}/submissions`);
+  }
+
+  // ---- Voting + results ----
+  async castBallot(roundId: string, allocations: Record<string, number>, comments?: Record<string, string>): Promise<void> {
+    await request(`/rounds/${enc(roundId)}/ballot`, { method: "POST", body: JSON.stringify({ allocations, comments }) });
+  }
+  getResults(roundId: string): Promise<RoundResult[]> {
+    return request<RoundResult[]>(`/rounds/${enc(roundId)}/results`);
   }
 }

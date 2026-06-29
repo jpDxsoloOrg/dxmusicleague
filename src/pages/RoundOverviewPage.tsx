@@ -1,8 +1,10 @@
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { data } from "../data";
-import type { Round, RoundStatus } from "../domain/types";
+import type { League, Round, RoundStatus } from "../domain/types";
 import { getProvider } from "../music";
 import { useAsync } from "../lib/useAsync";
+import { useAuth } from "../auth/AuthContext";
 import { formatCountdown } from "../lib/time";
 import { Avatar } from "../components/Avatar";
 import "./RoundOverviewPage.css";
@@ -32,7 +34,8 @@ function primaryAction(leagueId: string, round: Round) {
 
 export function RoundOverviewPage() {
   const { leagueId = "" } = useParams();
-  const { data: detail, loading } = useAsync(() => data.getLeagueDetail(leagueId), [leagueId]);
+  const { user } = useAuth();
+  const { data: detail, loading, reload } = useAsync(() => data.getLeagueDetail(leagueId), [leagueId]);
 
   if (loading) {
     return <div className="round-overview"><p className="page-loading">Loading league…</p></div>;
@@ -76,6 +79,10 @@ export function RoundOverviewPage() {
             </div>
             <span className="provider-badge">via {providerName}</span>
           </header>
+
+          {league.ownerId === user?.id && (
+            <OwnerRoundControl league={league} currentRound={currentRound} onChange={reload} />
+          )}
 
           {/* round stepper */}
           <div className="stepper">
@@ -160,6 +167,83 @@ export function RoundOverviewPage() {
           </ol>
         </aside>
       </div>
+    </div>
+  );
+}
+
+// Owner-only panel that drives the round lifecycle: create the next round, then
+// advance draft -> submitting -> voting. (Reveal lives on the Results page.)
+function OwnerRoundControl({
+  league,
+  currentRound,
+  onChange,
+}: {
+  league: League;
+  currentRound?: Round;
+  onChange: () => void;
+}) {
+  const [theme, setTheme] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+      onChange();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const status = currentRound?.status;
+  const needsNewRound = !currentRound || status === "revealed" || status === "complete";
+
+  return (
+    <div className="owner-control">
+      <span className="owner-tag">Owner controls</span>
+      {needsNewRound ? (
+        <div className="owner-create">
+          <input
+            className="owner-input"
+            placeholder="Theme for the next round…"
+            value={theme}
+            onChange={(e) => setTheme(e.target.value)}
+          />
+          <button
+            className="btn btn-primary"
+            disabled={busy || theme.trim().length < 2}
+            onClick={() => run(async () => { await data.createRound(league.id, { theme }); setTheme(""); })}
+          >
+            {busy ? "Creating…" : "Create round"}
+          </button>
+        </div>
+      ) : status === "draft" ? (
+        <button
+          className="btn btn-primary"
+          disabled={busy}
+          onClick={() => run(() => data.advanceRound(league.id, currentRound!.id, "submitting"))}
+        >
+          {busy ? "Opening…" : "Open for submissions →"}
+        </button>
+      ) : status === "submitting" ? (
+        <button
+          className="btn btn-primary"
+          disabled={busy}
+          onClick={() => run(() => data.advanceRound(league.id, currentRound!.id, "voting"))}
+        >
+          {busy ? "Opening…" : "Open voting →"}
+        </button>
+      ) : (
+        <span className="owner-hint">
+          Voting is open — reveal results from the{" "}
+          <Link className="link-muted" to={`/leagues/${league.id}/reveal`}>Results page</Link>.
+        </span>
+      )}
+      {error && <span className="page-error">{error}</span>}
     </div>
   );
 }

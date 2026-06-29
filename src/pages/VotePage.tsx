@@ -9,7 +9,12 @@ import "./VotePage.css";
 export function VotePage() {
   const { leagueId = "" } = useParams();
   const { data: detail, loading: detailLoading } = useAsync(() => data.getLeagueDetail(leagueId), [leagueId]);
-  const { data: subs } = useAsync(() => data.getVotableSubmissions(leagueId), [leagueId]);
+  // Voting always targets the league's current round.
+  const roundId = detail?.currentRound?.id ?? "";
+  const { data: subs } = useAsync(
+    () => (roundId ? data.getVotableSubmissions(roundId) : Promise.resolve([])),
+    [roundId],
+  );
   const submissions = subs ?? [];
 
   // points allocated per submission id
@@ -17,6 +22,8 @@ export function VotePage() {
   // optional voter comment per submission id (shown on reveal)
   const [comments, setComments] = useState<Record<string, string>>({});
   const [submitted, setSubmitted] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (detailLoading) {
     return <div className="vote-page"><p className="page-loading">Loading…</p></div>;
@@ -119,12 +126,23 @@ export function VotePage() {
       <div className="vote-footer">
         <button
           className="btn btn-primary vote-submit"
-          disabled={!canSubmit}
-          onClick={async () => { await data.saveVoteComments(league.id, comments); setSubmitted(true); }}
+          disabled={!canSubmit || busy}
+          onClick={async () => {
+            setBusy(true);
+            setError(null);
+            try {
+              await data.castBallot(roundId, allocations, comments);
+              setSubmitted(true);
+            } catch (err) {
+              setError(err instanceof Error ? err.message : "Couldn't submit your votes.");
+              setBusy(false);
+            }
+          }}
         >
-          Submit votes
+          {busy ? "Submitting…" : "Submit votes"}
         </button>
-        {!canSubmit && (
+        {error && <span className="vote-hint" style={{ color: "#ff8a8a" }}>{error}</span>}
+        {!canSubmit && !error && (
           <span className="vote-hint">Allocate all {pool} points to submit ({remaining} left)</span>
         )}
       </div>

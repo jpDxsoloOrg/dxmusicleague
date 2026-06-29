@@ -1,22 +1,40 @@
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { data } from "../data";
 import type { VoterComment } from "../data";
 import { getProvider } from "../music";
 import { useAsync } from "../lib/useAsync";
+import { useAuth } from "../auth/AuthContext";
 import { TrackArt } from "../components/TrackArt";
 import { Avatar } from "../components/Avatar";
 import "./RevealPage.css";
 
 export function RevealPage() {
   const { leagueId = "" } = useParams();
-  const { data: detail, loading: detailLoading } = useAsync(() => data.getLeagueDetail(leagueId), [leagueId]);
-  const { data: resultsData } = useAsync(() => data.getRoundResults(leagueId), [leagueId]);
+  const { user } = useAuth();
+  const { data: detail, loading: detailLoading, reload: reloadDetail } = useAsync(
+    () => data.getLeagueDetail(leagueId),
+    [leagueId],
+  );
+
+  const currentRound = detail?.currentRound;
+  const roundId = currentRound?.id ?? "";
+  const status = currentRound?.status;
+  const revealed = status === "revealed" || status === "complete";
+
+  // Results only exist once a round is revealed.
+  const { data: resultsData, reload: reloadResults } = useAsync(
+    () => (roundId && revealed ? data.getResults(roundId) : Promise.resolve([])),
+    [roundId, revealed],
+  );
   const results = resultsData ?? [];
+
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (detailLoading) {
     return <div className="reveal-page"><p className="page-loading">Loading…</p></div>;
   }
-
   if (!detail) {
     return (
       <div className="reveal-page">
@@ -26,11 +44,52 @@ export function RevealPage() {
     );
   }
 
-  const { league, currentRound, standings } = detail;
+  const { league, standings } = detail;
   const providerName = getProvider(league.musicProvider).info.name;
+  const isOwner = league.ownerId === user?.id;
+
+  async function reveal() {
+    setBusy(true);
+    setError(null);
+    try {
+      await data.revealRound(roundId);
+      reloadDetail();
+      reloadResults();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't reveal the round.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Round not revealed yet: owner can reveal; everyone else waits.
+  if (!revealed) {
+    return (
+      <div className="reveal-page">
+        <header className="reveal-head">
+          <Link to={`/leagues/${league.id}`} className="link-muted">← {league.name}</Link>
+          <h1>Round Results</h1>
+          {currentRound && <p className="reveal-theme">{currentRound.theme}</p>}
+        </header>
+        <div className="reveal-pending">
+          {isOwner && status === "voting" ? (
+            <>
+              <p>Voting is open. Reveal the results to tally points and update the leaderboard.</p>
+              <button className="btn btn-primary" disabled={busy} onClick={reveal}>
+                {busy ? "Revealing…" : "Reveal results"}
+              </button>
+            </>
+          ) : (
+            <p>Results will appear once the league owner reveals this round.</p>
+          )}
+          {error && <p className="page-error">{error}</p>}
+        </div>
+      </div>
+    );
+  }
+
   const winner = results[0];
   const rest = results.slice(1);
-  // In production this comes from currentRound.playlistUrl (set on reveal by the host account).
   const playlistUrl = currentRound?.playlistUrl ?? "#";
 
   return (
@@ -82,9 +141,11 @@ export function RevealPage() {
             ))}
           </div>
 
-          <a className="playlist-btn" href={playlistUrl} target="_blank" rel="noreferrer">
-            <span className="play-ic" aria-hidden /> Open round playlist on {providerName}
-          </a>
+          {playlistUrl !== "#" && (
+            <a className="playlist-btn" href={playlistUrl} target="_blank" rel="noreferrer">
+              <span className="play-ic" aria-hidden /> Open round playlist on {providerName}
+            </a>
+          )}
         </div>
 
         {/* overall leaderboard */}

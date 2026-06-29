@@ -4,10 +4,12 @@
 // chosen by env in data/index.ts, so the app runs fully on mock data locally
 // and against the deployed API on AWS.
 //
-// Return shapes are exactly today's mock functions (src/data/mock.ts), so the
-// pages only change *how* they fetch (async), not what they render.
+// Round/submission/vote operations are round-centric (they take a roundId — the
+// league's current round, resolved from the league detail), matching the REST
+// API. Return shapes match the view-model types in src/data/mock.ts.
 
-import type { League } from "../domain/types";
+import type { League, Round, RoundStatus, Submission } from "../domain/types";
+import type { Track } from "../music";
 import type {
   CreateLeagueInput,
   JoinResult,
@@ -18,16 +20,29 @@ import type {
   VotableSubmission,
 } from "./mock";
 
+export interface CreateRoundInput {
+  theme: string;
+  description?: string;
+}
+
 export interface DataClient {
-  // ---- League loop (backed by the deployed API) ----
+  // ---- Leagues ----
   getMyLeagueSummaries(): Promise<LeagueSummary[]>;
   getLeagueDetail(leagueId: string): Promise<LeagueDetail | undefined>;
   createLeague(input: CreateLeagueInput): Promise<League>;
   joinLeague(code: string): Promise<JoinResult>;
   getStandings(leagueId: string): Promise<Standing[]>;
 
-  // ---- Round / voting (not on the backend yet — build-order steps 3-4) ----
-  getVotableSubmissions(leagueId: string): Promise<VotableSubmission[]>;
-  saveVoteComments(leagueId: string, comments: Record<string, string>): Promise<void>;
-  getRoundResults(leagueId: string): Promise<RoundResult[]>;
+  // ---- Rounds (league owner) ----
+  createRound(leagueId: string, input: CreateRoundInput): Promise<Round>;
+  advanceRound(leagueId: string, roundId: string, status: RoundStatus): Promise<Round>;
+  revealRound(roundId: string): Promise<RoundResult[]>;
+
+  // ---- Submissions ----
+  submitSong(roundId: string, track: Track, comment?: string): Promise<Submission>;
+  getVotableSubmissions(roundId: string): Promise<VotableSubmission[]>;
+
+  // ---- Voting + results ----
+  castBallot(roundId: string, allocations: Record<string, number>, comments?: Record<string, string>): Promise<void>;
+  getResults(roundId: string): Promise<RoundResult[]>;
 }
