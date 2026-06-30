@@ -305,11 +305,16 @@ function OwnerRoundControl({
         >
           {busy ? "Opening…" : "Open voting →"}
         </button>
+      ) : status === "voting" ? (
+        <button
+          className="btn btn-primary"
+          disabled={busy}
+          onClick={() => run(() => data.revealRound(currentRound!.id))}
+        >
+          {busy ? "Revealing…" : "Close voting & reveal results →"}
+        </button>
       ) : (
-        <span className="owner-hint">
-          Voting is open — reveal results from the{" "}
-          <Link className="link-muted" to={`/leagues/${league.id}/reveal`}>Results page</Link>.
-        </span>
+        <span className="owner-hint">This round is complete.</span>
       )}
       {error && <span className="page-error">{error}</span>}
     </div>
