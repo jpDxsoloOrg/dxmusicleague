@@ -34,6 +34,30 @@ function normalizeTrack(raw: unknown): Track {
   };
 }
 
+const norm = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, " ");
+
+/** Block two players from submitting the same song, or two songs by the same
+ *  artist, within one round. Compares against everyone else's picks (the caller's
+ *  own existing pick is excluded so re-submitting/editing stays allowed). */
+function assertNoDuplicate(track: Track, others: Submission[]): void {
+  for (const sub of others) {
+    const same =
+      track.providerTrackId && sub.track.providerTrackId
+        ? track.provider === sub.track.provider && track.providerTrackId === sub.track.providerTrackId
+        : norm(track.title) === norm(sub.track.title) &&
+          track.artists.map(norm).join(",") === sub.track.artists.map(norm).join(",");
+    if (same) {
+      throw badRequest("That song has already been submitted for this round — pick a different one.");
+    }
+  }
+
+  const taken = new Set(others.flatMap((s) => s.track.artists.map(norm)));
+  const clash = track.artists.find((a) => taken.has(norm(a)));
+  if (clash) {
+    throw badRequest(`A song by ${clash} is already in this round — each artist can only appear once.`);
+  }
+}
+
 /** Load a round + its league, asserting the caller is a member of the league. */
 async function roundForMember(deps: Deps, caller: string, roundId: string) {
   const round = await deps.repo.getRound(roundId);
@@ -62,6 +86,10 @@ export async function submitSong(
 
   const track = normalizeTrack(input?.track);
   const existing = await deps.repo.getSubmission(roundId, caller); // stable id across re-submits
+
+  // Reject duplicate songs/artists across the round (ignoring the caller's own pick).
+  const others = (await deps.repo.getSubmissionsForRound(roundId)).filter((s) => s.userId !== caller);
+  assertNoDuplicate(track, others);
 
   const submission: Submission = {
     id: existing?.id ?? `sub-${randomUUID()}`,
