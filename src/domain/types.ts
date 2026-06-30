@@ -36,6 +36,8 @@ export interface League {
   musicProvider: MusicProviderId;
   settings: LeagueSettings;
   memberIds: string[];
+  /** Shareable code players enter to join. Minted at creation, case-insensitive. */
+  inviteCode: string;
 }
 
 export interface Round {

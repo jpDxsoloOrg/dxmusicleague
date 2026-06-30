@@ -59,6 +59,23 @@ export function buildRoutes(deps: Deps): Route[] {
       handler: (req) => leagues.getLeagueDetail(deps, req.caller, req.params.leagueId!),
     },
     {
+      method: "PATCH",
+      pattern: "/leagues/:leagueId/settings",
+      handler: (req) => {
+        const body = asRecord(req.body);
+        return leagues.updateLeagueSettings(deps, req.caller, req.params.leagueId!, {
+          votePoolSize: body.votePoolSize,
+          maxPointsPerSong: body.maxPointsPerSong,
+          allowSelfVote: body.allowSelfVote,
+        });
+      },
+    },
+    {
+      method: "DELETE",
+      pattern: "/leagues/:leagueId",
+      handler: (req) => leagues.deleteLeague(deps, req.caller, req.params.leagueId!),
+    },
+    {
       method: "POST",
       pattern: "/leagues/:leagueId/rounds",
       handler: (req) => {

@@ -5,10 +5,11 @@
 
 import type { League, Round, RoundStatus, Submission } from "../domain/types";
 import type { Track } from "../music";
-import type { CreateRoundInput, DataClient } from "./client";
+import type { CreateRoundInput, DataClient, EditableLeagueSettings } from "./client";
 import {
   createLeague,
   currentUser,
+  deleteLeague,
   getLeagueDetail,
   getMyLeagueSummaries,
   getRoundResults,
@@ -17,6 +18,7 @@ import {
   joinLeague,
   rounds,
   saveVoteComments,
+  updateLeagueSettings,
   type CreateLeagueInput,
   type JoinResult,
   type LeagueDetail,
@@ -40,6 +42,12 @@ export class MockClient implements DataClient {
   }
   async joinLeague(code: string): Promise<JoinResult> {
     return joinLeague(code);
+  }
+  async updateLeagueSettings(leagueId: string, settings: EditableLeagueSettings): Promise<League> {
+    return updateLeagueSettings(leagueId, settings);
+  }
+  async deleteLeague(leagueId: string): Promise<void> {
+    deleteLeague(leagueId);
   }
   async getStandings(leagueId: string): Promise<Standing[]> {
     return getStandings(leagueId);

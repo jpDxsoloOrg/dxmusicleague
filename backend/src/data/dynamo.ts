@@ -16,6 +16,7 @@
 
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
+  BatchWriteCommand,
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
@@ -23,7 +24,7 @@ import {
   TransactWriteCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
-import type { Ballot, League, Round, Submission } from "../domain/types.ts";
+import type { Ballot, League, LeagueSettings, Round, Submission } from "../domain/types.ts";
 import type { Repository } from "./repository.ts";
 
 const index4 = (n: number) => String(n).padStart(4, "0");
@@ -47,6 +48,7 @@ export class DynamoRepository implements Repository {
         ownerId: league.ownerId,
         musicProvider: league.musicProvider,
         settings: league.settings,
+        inviteCode: league.inviteCode,
         createdAt: new Date().toISOString(),
       },
       ...league.memberIds.map((userId) => this.memberItem(league.id, userId)),
@@ -80,6 +82,8 @@ export class DynamoRepository implements Repository {
       musicProvider: meta.Item.musicProvider,
       settings: meta.Item.settings,
       memberIds,
+      // Older leagues created before invite codes were stored on META fall back to "".
+      inviteCode: (meta.Item.inviteCode as string | undefined) ?? "",
     };
   }
 
@@ -102,6 +106,65 @@ export class DynamoRepository implements Repository {
     const lg = await this.getLeague(leagueId);
     if (!lg) throw new Error(`League not found after addMember: ${leagueId}`);
     return lg;
+  }
+
+  async updateLeagueSettings(leagueId: string, settings: LeagueSettings): Promise<League> {
+    await this.doc.send(
+      new UpdateCommand({
+        TableName: this.tableName,
+        Key: { PK: `LEAGUE#${leagueId}`, SK: "META" },
+        UpdateExpression: "SET settings = :s",
+        ConditionExpression: "attribute_exists(PK)", // fail loud if the league is gone
+        ExpressionAttributeValues: { ":s": settings },
+      }),
+    );
+    const lg = await this.getLeague(leagueId);
+    if (!lg) throw new Error(`League not found after updateLeagueSettings: ${leagueId}`);
+    return lg;
+  }
+
+  async deleteLeague(leagueId: string): Promise<void> {
+    // 1) Everything under PK=LEAGUE#<id>: META, MEMBER#, ROUND#, STANDING#.
+    const leagueItems = await this.doc.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        KeyConditionExpression: "PK = :pk",
+        ExpressionAttributeValues: { ":pk": `LEAGUE#${leagueId}` },
+      }),
+    );
+    const keys: Array<{ PK: string; SK: string }> = (leagueItems.Items ?? []).map((it) => ({
+      PK: it.PK as string,
+      SK: it.SK as string,
+    }));
+
+    // 2) Per-round children live under their own PK=ROUND#<roundId>.
+    const roundIds = (leagueItems.Items ?? [])
+      .filter((it) => typeof it.SK === "string" && (it.SK as string).startsWith("ROUND#"))
+      .map((it) => it.roundId as string);
+    for (const roundId of roundIds) {
+      const children = await this.doc.send(
+        new QueryCommand({
+          TableName: this.tableName,
+          KeyConditionExpression: "PK = :pk",
+          ExpressionAttributeValues: { ":pk": `ROUND#${roundId}` },
+        }),
+      );
+      for (const it of children.Items ?? []) keys.push({ PK: it.PK as string, SK: it.SK as string });
+    }
+
+    // 3) The invite-code lookup row (separate partition).
+    const inviteCode = (leagueItems.Items ?? []).find((it) => it.SK === "META")?.inviteCode as string | undefined;
+    if (inviteCode) keys.push({ PK: `INVITE#${inviteCode.toUpperCase()}`, SK: "META" });
+
+    // BatchWrite caps at 25 deletes per request — chunk it.
+    for (let i = 0; i < keys.length; i += 25) {
+      const chunk = keys.slice(i, i + 25);
+      await this.doc.send(
+        new BatchWriteCommand({
+          RequestItems: { [this.tableName]: chunk.map((Key) => ({ DeleteRequest: { Key } })) },
+        }),
+      );
+    }
   }
 
   private memberItem(leagueId: string, userId: string) {

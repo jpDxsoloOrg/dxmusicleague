@@ -2,7 +2,7 @@
 // fixture leagues/rounds/users as the frontend mock (src/data/mock.ts) so the
 // app behaves identically whether it talks to this or to DynamoDB.
 
-import type { Ballot, League, Round, Submission } from "../domain/types.ts";
+import type { Ballot, League, LeagueSettings, Round, Submission } from "../domain/types.ts";
 import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types.ts";
 import type { Repository, UserDirectory } from "./repository.ts";
 
@@ -52,6 +52,33 @@ export class MemoryRepository implements Repository {
     if (!lg) throw new Error(`League not found: ${leagueId}`);
     if (!lg.memberIds.includes(userId)) lg.memberIds.push(userId);
     return structuredClone(lg);
+  }
+  async updateLeagueSettings(leagueId: string, settings: LeagueSettings): Promise<League> {
+    const lg = this.leagues.get(leagueId);
+    if (!lg) throw new Error(`League not found: ${leagueId}`);
+    lg.settings = { ...settings };
+    return structuredClone(lg);
+  }
+  async deleteLeague(leagueId: string): Promise<void> {
+    const lg = this.leagues.get(leagueId);
+    if (!lg) return;
+    // Drop every record scoped to this league so nothing is orphaned.
+    const roundIds = [...this.rounds.values()].filter((r) => r.leagueId === leagueId).map((r) => r.id);
+    const roundSet = new Set(roundIds);
+    for (const id of roundIds) this.rounds.delete(id);
+    for (const key of this.submissions.keys()) {
+      if (roundSet.has(key.split("/")[0]!)) this.submissions.delete(key);
+    }
+    for (const key of this.ballots.keys()) {
+      if (roundSet.has(key.split("/")[0]!)) this.ballots.delete(key);
+    }
+    for (const key of this.standings.keys()) {
+      if (key.startsWith(`${leagueId}/`)) this.standings.delete(key);
+    }
+    for (const [code, lid] of this.invites.entries()) {
+      if (lid === leagueId) this.invites.delete(code);
+    }
+    this.leagues.delete(leagueId);
   }
 
   // ---- Invites ----
@@ -126,22 +153,18 @@ export class MemoryRepository implements Repository {
 
     const seedLeagues: League[] = [
       { id: "lg-synthwave", name: "Synthwave Souls", ownerId: "u-me", musicProvider: "youtube-music",
-        settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-me", "u-sarah", "u-james", "u-mia", "u-luna"] },
+        settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-me", "u-sarah", "u-james", "u-mia", "u-luna"], inviteCode: "SYNTH-23" },
       { id: "lg-vaporwave", name: "Vaporwave Vibes", ownerId: "u-sarah", musicProvider: "youtube-music",
-        settings: { ...DEFAULT_LEAGUE_SETTINGS, votePoolSize: 12 }, memberIds: ["u-me", "u-sarah", "u-jpop", "u-luna"] },
+        settings: { ...DEFAULT_LEAGUE_SETTINGS, votePoolSize: 12 }, memberIds: ["u-me", "u-sarah", "u-jpop", "u-luna"], inviteCode: "VAPOR-88" },
       { id: "lg-bassline", name: "Bassline Battle", ownerId: "u-james", musicProvider: "youtube-music",
-        settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-me", "u-james", "u-mia", "u-jpop", "u-sarah", "u-luna"] },
+        settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-me", "u-james", "u-mia", "u-jpop", "u-sarah", "u-luna"], inviteCode: "BASS-42" },
       { id: "lg-indie", name: "Indie Anthems", ownerId: "u-luna", musicProvider: "youtube-music",
-        settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-luna", "u-mia", "u-jpop"] },
+        settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-luna", "u-mia", "u-jpop"], inviteCode: "INDIE-25" },
     ];
-    for (const lg of seedLeagues) this.leagues.set(lg.id, lg);
-
-    const seedInvites: Record<string, string> = {
-      "SYNTH-23": "lg-synthwave",
-      "VAPOR-88": "lg-vaporwave",
-      "INDIE-25": "lg-indie",
-    };
-    for (const [code, leagueId] of Object.entries(seedInvites)) this.invites.set(code, leagueId);
+    for (const lg of seedLeagues) {
+      this.leagues.set(lg.id, lg);
+      this.invites.set(lg.inviteCode, lg.id); // keep the invite lookup in sync with each league's code
+    }
 
     const seedRounds: Round[] = [
       { id: "r-sw-3", leagueId: "lg-synthwave", index: 3, theme: "Songs for a road trip", status: "submitting", submissionDeadline: isoInDays(2) },

@@ -8,7 +8,7 @@
 // league's current round, resolved from the league detail), matching the REST
 // API. Return shapes match the view-model types in src/data/mock.ts.
 
-import type { League, Round, RoundStatus, Submission } from "../domain/types";
+import type { League, LeagueSettings, Round, RoundStatus, Submission } from "../domain/types";
 import type { Track } from "../music";
 import type {
   CreateLeagueInput,
@@ -25,6 +25,13 @@ export interface CreateRoundInput {
   description?: string;
 }
 
+/** The league settings an owner can edit. `submissionsPerPlayer` is intentionally
+ *  excluded — it's locked to 1 by the one-song-per-player storage model. */
+export type EditableLeagueSettings = Pick<
+  LeagueSettings,
+  "votePoolSize" | "maxPointsPerSong" | "allowSelfVote"
+>;
+
 export interface DataClient {
   // ---- Leagues ----
   getMyLeagueSummaries(): Promise<LeagueSummary[]>;
@@ -32,6 +39,10 @@ export interface DataClient {
   createLeague(input: CreateLeagueInput): Promise<League>;
   joinLeague(code: string): Promise<JoinResult>;
   getStandings(leagueId: string): Promise<Standing[]>;
+  /** Owner-only: update the league's voting settings. */
+  updateLeagueSettings(leagueId: string, settings: EditableLeagueSettings): Promise<League>;
+  /** Owner-only: permanently delete a league and all its data. */
+  deleteLeague(leagueId: string): Promise<void>;
 
   // ---- Rounds (league owner) ----
   createRound(leagueId: string, input: CreateRoundInput): Promise<Round>;

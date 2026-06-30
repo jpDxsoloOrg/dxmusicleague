@@ -3,7 +3,7 @@
 // request into these calls and serialize the result. Return shapes match the
 // frontend's mock functions exactly (src/data/mock.ts) so the pages don't change.
 
-import type { League, Round } from "../domain/types.ts";
+import type { League, LeagueSettings, Round } from "../domain/types.ts";
 import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types.ts";
 import { badRequest, conflict, forbidden, notFound } from "../domain/errors.ts";
 import type { Repository, UserDirectory } from "../data/repository.ts";
@@ -104,9 +104,10 @@ export async function createLeague(deps: Deps, caller: string, input: CreateLeag
     musicProvider: input.musicProvider,
     settings: { ...DEFAULT_LEAGUE_SETTINGS },
     memberIds: [caller],
+    inviteCode: newInviteCode(),
   };
   await deps.repo.createLeague(league);
-  await deps.repo.putInvite(newInviteCode(), league.id);
+  await deps.repo.putInvite(league.inviteCode, league.id);
   await deps.repo.addStandingPoints(league.id, caller, 0); // seed standing at 0
   return league;
 }
@@ -171,4 +172,52 @@ export async function joinLeague(deps: Deps, caller: string, rawCode: string): P
   const updated = await deps.repo.addMember(league.id, caller);
   await deps.repo.addStandingPoints(league.id, caller, 0);
   return { league: updated };
+}
+
+/** Load a league and assert the caller owns it. */
+async function ownedLeague(deps: Deps, caller: string, leagueId: string): Promise<League> {
+  const league = await deps.repo.getLeague(leagueId);
+  if (!league) throw notFound("That league doesn't exist.");
+  if (league.ownerId !== caller) throw forbidden("Only the league owner can do that.");
+  return league;
+}
+
+const asInt = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : NaN);
+
+export interface UpdateSettingsInput {
+  votePoolSize: unknown;
+  maxPointsPerSong: unknown;
+  allowSelfVote: unknown;
+}
+
+export async function updateLeagueSettings(
+  deps: Deps,
+  caller: string,
+  leagueId: string,
+  input: UpdateSettingsInput,
+): Promise<League> {
+  const league = await ownedLeague(deps, caller, leagueId);
+
+  const votePoolSize = asInt(input?.votePoolSize);
+  const maxPointsPerSong = asInt(input?.maxPointsPerSong);
+  if (!(votePoolSize >= 1)) throw badRequest("Vote pool must be at least 1 point.");
+  if (!(maxPointsPerSong >= 1)) throw badRequest("Max points per song must be at least 1.");
+  if (maxPointsPerSong > votePoolSize) {
+    throw badRequest("Max points per song can't exceed the vote pool.");
+  }
+
+  // submissionsPerPlayer stays fixed (one song per player) — see LeagueSettings.
+  const settings: LeagueSettings = {
+    votePoolSize,
+    maxPointsPerSong,
+    allowSelfVote: Boolean(input?.allowSelfVote),
+    submissionsPerPlayer: league.settings.submissionsPerPlayer,
+  };
+  return deps.repo.updateLeagueSettings(leagueId, settings);
+}
+
+export async function deleteLeague(deps: Deps, caller: string, leagueId: string): Promise<{ ok: true }> {
+  await ownedLeague(deps, caller, leagueId);
+  await deps.repo.deleteLeague(leagueId);
+  return { ok: true };
 }

@@ -1,7 +1,7 @@
 // Mock data so the UI is fully clickable before any backend exists.
 // Swap these reads for API calls in Phase 2+ without touching the components.
 
-import type { League, Round, User } from "../domain/types";
+import type { League, LeagueSettings, Round, User } from "../domain/types";
 import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types";
 import type { MusicProviderId, Track } from "../music";
 import { trackKey } from "../music";
@@ -28,6 +28,7 @@ export const leagues: League[] = [
     musicProvider: "youtube-music",
     settings: DEFAULT_LEAGUE_SETTINGS,
     memberIds: ["u-me", "u-sarah", "u-james", "u-mia", "u-luna"],
+    inviteCode: "SYNTH-23",
   },
   {
     id: "lg-vaporwave",
@@ -36,6 +37,7 @@ export const leagues: League[] = [
     musicProvider: "youtube-music",
     settings: { ...DEFAULT_LEAGUE_SETTINGS, votePoolSize: 12 },
     memberIds: ["u-me", "u-sarah", "u-jpop", "u-luna"],
+    inviteCode: "VAPOR-88",
   },
   {
     id: "lg-bassline",
@@ -44,6 +46,7 @@ export const leagues: League[] = [
     musicProvider: "youtube-music",
     settings: DEFAULT_LEAGUE_SETTINGS,
     memberIds: ["u-me", "u-james", "u-mia", "u-jpop", "u-sarah", "u-luna"],
+    inviteCode: "BASS-42",
   },
   // A league the current user is NOT in yet — joinable via invite code below.
   {
@@ -53,16 +56,15 @@ export const leagues: League[] = [
     musicProvider: "youtube-music",
     settings: DEFAULT_LEAGUE_SETTINGS,
     memberIds: ["u-luna", "u-mia", "u-jpop"],
+    inviteCode: "INDIE-25",
   },
 ];
 
-// Invite codes for the Join-a-league flow (mock stand-in for real share links).
-// Code (case-insensitive) → leagueId.
-export const inviteCodes: Record<string, string> = {
-  "SYNTH-23": "lg-synthwave",
-  "VAPOR-88": "lg-vaporwave",
-  "INDIE-25": "lg-indie",
-};
+// Invite-code → leagueId lookup for the Join-a-league flow, derived from each
+// league's own code so the two never drift. (Mock stand-in for real share links.)
+export const inviteCodes: Record<string, string> = Object.fromEntries(
+  leagues.map((lg) => [lg.inviteCode, lg.id]),
+);
 
 // A few rounds per league. Status drives the dashboard pill + completion bar.
 export const rounds: Round[] = [
@@ -136,10 +138,11 @@ export function createLeague(input: CreateLeagueInput): League {
     musicProvider: input.musicProvider,
     settings: DEFAULT_LEAGUE_SETTINGS,
     memberIds: [currentUser.id],
+    // Mint a shareable invite code so the new league is joinable too.
+    inviteCode: `NEW-${100 + createdLeagueSeq}`,
   };
   leagues.push(league);
-  // Mint a shareable invite code so the new league is joinable too.
-  inviteCodes[`NEW-${100 + createdLeagueSeq}`] = league.id;
+  inviteCodes[league.inviteCode] = league.id;
   return league;
 }
 
@@ -159,6 +162,29 @@ export function joinLeague(rawCode: string): JoinResult {
   }
   league.memberIds.push(currentUser.id);
   return { ok: true, league };
+}
+
+/** Owner edits a league's voting settings (mock: mutate in place). */
+export function updateLeagueSettings(
+  leagueId: string,
+  settings: Pick<LeagueSettings, "votePoolSize" | "maxPointsPerSong" | "allowSelfVote">,
+): League {
+  const league = leagues.find((lg) => lg.id === leagueId);
+  if (!league) throw new Error("That league doesn't exist.");
+  league.settings = { ...league.settings, ...settings };
+  return league;
+}
+
+/** Owner deletes a league and its rounds + invite codes (mock store cleanup). */
+export function deleteLeague(leagueId: string): void {
+  const idx = leagues.findIndex((lg) => lg.id === leagueId);
+  if (idx >= 0) leagues.splice(idx, 1);
+  for (let i = rounds.length - 1; i >= 0; i--) {
+    if (rounds[i]!.leagueId === leagueId) rounds.splice(i, 1);
+  }
+  for (const code of Object.keys(inviteCodes)) {
+    if (inviteCodes[code] === leagueId) delete inviteCodes[code];
+  }
 }
 
 function isoInDays(days: number): string {

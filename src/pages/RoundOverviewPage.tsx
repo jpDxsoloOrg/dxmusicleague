@@ -81,12 +81,19 @@ export function RoundOverviewPage() {
               <Link to="/" className="link-muted ro-back">← Leagues</Link>
               <h1>{league.name}</h1>
             </div>
-            <span className="provider-badge">via {providerName}</span>
+            <div className="ro-head-actions">
+              {league.ownerId === user?.id && (
+                <Link to={`/leagues/${league.id}/settings`} className="ro-settings-link">⚙ Settings</Link>
+              )}
+              <span className="provider-badge">via {providerName}</span>
+            </div>
           </header>
 
           {league.ownerId === user?.id && (
             <OwnerRoundControl league={league} currentRound={currentRound} onChange={reload} />
           )}
+
+          {league.inviteCode && <InvitePanel code={league.inviteCode} />}
 
           {/* round stepper */}
           <div className="stepper">
@@ -185,6 +192,40 @@ export function RoundOverviewPage() {
             ))}
           </ol>
         </aside>
+      </div>
+    </div>
+  );
+}
+
+// Invite strip — shows the league's shareable code and a ready-to-send join
+// link, each with a copy button. Any member can invite a friend.
+function InvitePanel({ code }: { code: string }) {
+  const joinUrl = `${window.location.origin}/leagues/join?code=${encodeURIComponent(code)}`;
+  const [copied, setCopied] = useState<"code" | "link" | null>(null);
+
+  const copy = async (what: "code" | "link", text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(what);
+      setTimeout(() => setCopied((c) => (c === what ? null : c)), 1800);
+    } catch {
+      // Clipboard blocked (e.g. insecure context) — leave the value on screen to copy by hand.
+    }
+  };
+
+  return (
+    <div className="invite-panel">
+      <div className="invite-info">
+        <span className="invite-label">Invite code</span>
+        <code className="invite-code">{code}</code>
+      </div>
+      <div className="invite-actions">
+        <button className="btn invite-btn" onClick={() => copy("code", code)}>
+          {copied === "code" ? "Copied ✓" : "Copy code"}
+        </button>
+        <button className="btn invite-btn" onClick={() => copy("link", joinUrl)}>
+          {copied === "link" ? "Copied ✓" : "Copy invite link"}
+        </button>
       </div>
     </div>
   );

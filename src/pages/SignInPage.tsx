@@ -76,7 +76,7 @@ export function SignInPage() {
 
         <p className="auth-foot">
           Don't have an account?{" "}
-          <Link className="auth-link" to="/signup">Create one</Link>
+          <Link className="auth-link" to="/signup" state={{ from: redirectTo }}>Create one</Link>
         </p>
       </div>
       <p className="auth-screen-foot">© DX Music League. All tracks reserved.</p>

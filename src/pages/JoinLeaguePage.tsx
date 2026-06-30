@@ -1,20 +1,23 @@
-import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { data } from "../data";
 import "./CreateLeaguePage.css";
 import "./JoinLeaguePage.css";
 
 export function JoinLeaguePage() {
   const navigate = useNavigate();
-  const [code, setCode] = useState("");
+  // Invite links land here as /leagues/join?code=XXXX — prefill the field from it.
+  const [params] = useSearchParams();
+  const codeFromLink = params.get("code") ?? "";
+  const [code, setCode] = useState(codeFromLink);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  async function handleJoin() {
+  async function handleJoin(raw: string = code) {
     if (busy) return;
     setBusy(true);
     setError(null);
-    const result = await data.joinLeague(code);
+    const result = await data.joinLeague(raw);
     if (result.ok) {
       navigate(`/leagues/${result.league.id}`);
     } else {
@@ -22,6 +25,17 @@ export function JoinLeaguePage() {
       setBusy(false);
     }
   }
+
+  // Arrived via an invite link — try to join automatically (once). On failure
+  // we fall back to the manual form below, with the code prefilled and the error shown.
+  const autoJoined = useRef(false);
+  useEffect(() => {
+    if (codeFromLink && !autoJoined.current) {
+      autoJoined.current = true;
+      void handleJoin(codeFromLink);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [codeFromLink]);
 
   return (
     <div className="create-league">
@@ -49,7 +63,7 @@ export function JoinLeaguePage() {
           {error && <span className="field-error">{error}</span>}
         </label>
 
-        <button className="btn btn-primary create-btn" disabled={!code.trim() || busy} onClick={handleJoin}>
+        <button className="btn btn-primary create-btn" disabled={!code.trim() || busy} onClick={() => handleJoin()}>
           {busy ? "Joining…" : "Join league →"}
         </button>
       </div>

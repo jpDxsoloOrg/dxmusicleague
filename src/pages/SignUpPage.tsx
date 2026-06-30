@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { AuthBrand } from "./AuthBrand";
 import "./AuthPage.css";
@@ -7,6 +7,9 @@ import "./AuthPage.css";
 export function SignUpPage() {
   const { signUp, signIn } = useAuth();
   const navigate = useNavigate();
+  // Where to land after sign-up completes — carries an invite link through the flow.
+  const location = useLocation() as { state?: { from?: string } };
+  const redirectTo = location.state?.from ?? "/";
 
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
@@ -26,11 +29,11 @@ export function SignUpPage() {
     try {
       const { needsConfirmation } = await signUp({ displayName, email, password });
       if (needsConfirmation) {
-        navigate("/confirm", { state: { email, password } });
+        navigate("/confirm", { state: { email, password, from: redirectTo } });
       } else {
         // Mock backend: account is immediately usable — sign straight in.
         await signIn(email, password);
-        navigate("/", { replace: true });
+        navigate(redirectTo, { replace: true });
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't create your account.");
@@ -89,7 +92,7 @@ export function SignUpPage() {
 
         <p className="auth-foot">
           Already have an account?{" "}
-          <Link className="auth-link" to="/signin">Sign in</Link>
+          <Link className="auth-link" to="/signin" state={{ from: redirectTo }}>Sign in</Link>
         </p>
       </div>
       <p className="auth-screen-foot">By joining, you agree to play fair and vote your conscience.</p>

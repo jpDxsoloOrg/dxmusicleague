@@ -5,7 +5,7 @@
 import type { League, Round, RoundStatus, Submission } from "../domain/types";
 import type { Track } from "../music";
 import { auth } from "../auth/config";
-import type { CreateRoundInput, DataClient } from "./client";
+import type { CreateRoundInput, DataClient, EditableLeagueSettings } from "./client";
 import type {
   CreateLeagueInput,
   JoinResult,
@@ -78,6 +78,16 @@ export class ApiClient implements DataClient {
   async getStandings(leagueId: string): Promise<Standing[]> {
     const detail = await this.getLeagueDetail(leagueId);
     return detail?.standings ?? [];
+  }
+
+  updateLeagueSettings(leagueId: string, settings: EditableLeagueSettings): Promise<League> {
+    return request<League>(`/leagues/${enc(leagueId)}/settings`, {
+      method: "PATCH",
+      body: JSON.stringify(settings),
+    });
+  }
+  async deleteLeague(leagueId: string): Promise<void> {
+    await request(`/leagues/${enc(leagueId)}`, { method: "DELETE" });
   }
 
   // ---- Rounds (owner) ----

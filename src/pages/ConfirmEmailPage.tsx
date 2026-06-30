@@ -7,9 +7,10 @@ import "./AuthPage.css";
 export function ConfirmEmailPage() {
   const { confirmSignUp, resendCode, signIn } = useAuth();
   const navigate = useNavigate();
-  const location = useLocation() as { state?: { email?: string; password?: string } };
+  const location = useLocation() as { state?: { email?: string; password?: string; from?: string } };
   const email = location.state?.email;
   const password = location.state?.password;
+  const redirectTo = location.state?.from ?? "/";
 
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -28,9 +29,9 @@ export function ConfirmEmailPage() {
       // If we still hold the password, sign in straight away; otherwise send to sign-in.
       if (password) {
         await signIn(email!, password);
-        navigate("/", { replace: true });
+        navigate(redirectTo, { replace: true });
       } else {
-        navigate("/signin", { replace: true, state: { confirmed: true, email } });
+        navigate("/signin", { replace: true, state: { confirmed: true, email, from: redirectTo } });
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "That code didn't work.");

@@ -10,6 +10,7 @@ import { RoundsPage } from "./pages/RoundsPage";
 import { LeaderboardPage } from "./pages/LeaderboardPage";
 import { ProfilePage } from "./pages/ProfilePage";
 import { CreateLeaguePage } from "./pages/CreateLeaguePage";
+import { LeagueSettingsPage } from "./pages/LeagueSettingsPage";
 import { JoinLeaguePage } from "./pages/JoinLeaguePage";
 import { LeaguesPage } from "./pages/LeaguesPage";
 import { Placeholder } from "./pages/Placeholder";
@@ -23,7 +24,8 @@ function RequireAuth() {
   const { user, loading } = useAuth();
   const location = useLocation();
   if (loading) return <div className="auth-screen" />; // brief: session restore
-  if (!user) return <Navigate to="/signin" replace state={{ from: location.pathname }} />;
+  // Keep the query string (e.g. /leagues/join?code=XXXX) so invite links survive the round-trip.
+  if (!user) return <Navigate to="/signin" replace state={{ from: location.pathname + location.search }} />;
   return <Outlet />;
 }
 
@@ -56,6 +58,7 @@ export default function App() {
               <Route path="/leagues/:leagueId/submit" element={<SubmitSongPage />} />
               <Route path="/leagues/:leagueId/vote" element={<VotePage />} />
               <Route path="/leagues/:leagueId/reveal" element={<RevealPage />} />
+              <Route path="/leagues/:leagueId/settings" element={<LeagueSettingsPage />} />
               <Route path="/leagues/new" element={<CreateLeaguePage />} />
               <Route path="/leagues/join" element={<JoinLeaguePage />} />
               <Route path="/leagues" element={<LeaguesPage />} />

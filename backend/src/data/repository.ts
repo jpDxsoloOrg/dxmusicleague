@@ -4,7 +4,7 @@
 //   - DynamoRepository (data/dynamo.ts)   — the real single-table backend
 // Swapping which one a handler runs against is the whole point of the seam.
 
-import type { Ballot, League, Round, Submission } from "../domain/types.ts";
+import type { Ballot, League, LeagueSettings, Round, Submission } from "../domain/types.ts";
 
 export interface Repository {
   // ---- Leagues ----
@@ -14,6 +14,11 @@ export interface Repository {
   getLeaguesForUser(userId: string): Promise<League[]>;
   /** Add a member to a league (idempotent). Returns the updated league. */
   addMember(leagueId: string, userId: string): Promise<League>;
+  /** Replace a league's settings. Returns the updated league. */
+  updateLeagueSettings(leagueId: string, settings: LeagueSettings): Promise<League>;
+  /** Delete a league and every record scoped to it (members, rounds, their
+   *  submissions/ballots, standings, and invite codes). */
+  deleteLeague(leagueId: string): Promise<void>;
 
   // ---- Invites ----
   putInvite(code: string, leagueId: string): Promise<void>;
