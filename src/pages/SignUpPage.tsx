@@ -14,6 +14,7 @@ export function SignUpPage() {
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -23,6 +24,10 @@ export function SignUpPage() {
     setError(null);
     if (password.length < 8) {
       setError("Password must be at least 8 characters.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError("Passwords don't match.");
       return;
     }
     setBusy(true);
@@ -81,6 +86,18 @@ export function SignUpPage() {
               onChange={(e) => setPassword(e.target.value)} required
             />
             <p className="auth-hint">At least 8 characters.</p>
+          </div>
+
+          <div className="auth-field">
+            <label className="auth-label" htmlFor="confirmPassword">Confirm password</label>
+            <input
+              id="confirmPassword" className="auth-input" type={showPassword ? "text" : "password"}
+              autoComplete="new-password" placeholder="••••••••" value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)} required
+            />
+            {confirmPassword.length > 0 && confirmPassword !== password && (
+              <p className="auth-hint" style={{ color: "var(--danger, #ff6b6b)" }}>Passwords don't match.</p>
+            )}
           </div>
 
           {error && <p className="auth-error">{error}</p>}
