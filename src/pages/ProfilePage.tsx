@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { data } from "../data";
 import { useAsync } from "../lib/useAsync";
@@ -6,7 +7,36 @@ import { Avatar } from "../components/Avatar";
 import "./ProfilePage.css";
 
 export function ProfilePage() {
-  const { user } = useAuth();
+  const { user, updateDisplayName } = useAuth();
+
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function startEdit() {
+    setName(user?.displayName ?? "");
+    setError(null);
+    setEditing(true);
+  }
+
+  async function saveName() {
+    const trimmed = name.trim();
+    if (trimmed.length < 2) {
+      setError("Display name must be at least 2 characters.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await updateDisplayName(trimmed);
+      setEditing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't update your profile.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   // My per-league standing: load my leagues, then my rank within each.
   const { data: myRanks, loading } = useAsync(async () => {
@@ -37,11 +67,37 @@ export function ProfilePage() {
     <div className="profile-page">
       <header className="profile-header">
         <Avatar name={user?.displayName ?? "Player"} size={84} />
-        <div className="profile-id">
-          <h1>{user?.displayName ?? "Player"}</h1>
-          {user?.email && <span className="profile-email">{user.email}</span>}
-        </div>
-        <button className="btn profile-edit">Edit profile</button>
+        {editing ? (
+          <div className="profile-id profile-id-edit">
+            <input
+              className="profile-name-input"
+              value={name}
+              maxLength={50}
+              autoFocus
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void saveName();
+                if (e.key === "Escape") setEditing(false);
+              }}
+            />
+            {user?.email && <span className="profile-email">{user.email}</span>}
+            {error && <span className="profile-edit-error">{error}</span>}
+            <div className="profile-edit-actions">
+              <button className="btn btn-primary" disabled={busy} onClick={saveName}>
+                {busy ? "Saving…" : "Save"}
+              </button>
+              <button className="btn" disabled={busy} onClick={() => setEditing(false)}>Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="profile-id">
+              <h1>{user?.displayName ?? "Player"}</h1>
+              {user?.email && <span className="profile-email">{user.email}</span>}
+            </div>
+            <button className="btn profile-edit" onClick={startEdit}>Edit profile</button>
+          </>
+        )}
       </header>
 
       <div className="stat-grid">

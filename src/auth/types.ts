@@ -44,6 +44,9 @@ export interface AuthBackend {
 
   signIn(email: string, password: string): Promise<AuthUser>;
   signOut(): Promise<void>;
+
+  /** Update the signed-in user's display name; returns the updated user. */
+  updateDisplayName(displayName: string): Promise<AuthUser>;
 }
 
 /** Thrown by backends with a user-facing message the pages render verbatim.

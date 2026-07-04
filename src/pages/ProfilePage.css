@@ -39,3 +39,19 @@
 @media (max-width: 640px) {
   .stat-grid { grid-template-columns: 1fr; }
 }
+
+/* inline display-name editor */
+.profile-id-edit { flex: 1; gap: 8px; }
+.profile-name-input {
+  font-size: 24px;
+  font-weight: 600;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--panel, rgba(255,255,255,0.05));
+  border: 1px solid var(--border);
+  color: var(--text);
+  max-width: 320px;
+}
+.profile-name-input:focus { outline: none; border-color: var(--magenta, #c026d3); }
+.profile-edit-actions { display: flex; gap: 8px; margin-top: 4px; }
+.profile-edit-error { font-size: 13px; color: var(--danger, #ff6b6b); }

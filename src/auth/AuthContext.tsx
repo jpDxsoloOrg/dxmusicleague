@@ -20,6 +20,7 @@ interface AuthContextValue {
   confirmForgotPassword(email: string, code: string, newPassword: string): Promise<void>;
   signIn(email: string, password: string): Promise<void>;
   signOut(): Promise<void>;
+  updateDisplayName(displayName: string): Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -51,6 +52,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     signOut: async () => {
       await auth.signOut();
       setUser(null);
+    },
+    updateDisplayName: async (displayName) => {
+      setUser(await auth.updateDisplayName(displayName));
     },
   };
 

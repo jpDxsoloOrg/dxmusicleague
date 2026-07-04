@@ -97,6 +97,15 @@ export class MockAuth implements AuthBackend {
     localStorage.removeItem(STORAGE_KEY);
   }
 
+  async updateDisplayName(displayName: string): Promise<AuthUser> {
+    const name = displayName.trim();
+    if (!name) throw new AuthError("Enter a display name.");
+    const current = (await this.currentUser()) ?? SEED_USER;
+    const updated: AuthUser = { ...current, displayName: name };
+    this.persist(updated);
+    return updated;
+  }
+
   private persist(user: AuthUser): void {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(user));
   }

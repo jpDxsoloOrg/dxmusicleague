@@ -111,6 +111,22 @@ export class CognitoAuth implements AuthBackend {
     this.pool.getCurrentUser()?.signOut();
   }
 
+  async updateDisplayName(displayName: string): Promise<AuthUser> {
+    const name = displayName.trim();
+    if (!name) throw new AuthError("Enter a display name.");
+    const cognitoUser = this.pool.getCurrentUser();
+    if (!cognitoUser) throw new AuthError("You're not signed in.");
+    const session = await this.session(cognitoUser); // hydrates the user for the write
+    await new Promise<void>((resolve, reject) => {
+      cognitoUser.updateAttributes([new CognitoUserAttribute({ Name: "name", Value: name })], (err) =>
+        err ? reject(toAuthError(err)) : resolve(),
+      );
+    });
+    // The ID token still carries the old name until it refreshes, so return an
+    // optimistic user the app can show immediately.
+    return { ...userFromSession(session), displayName: name };
+  }
+
   private session(cognitoUser: CognitoUser): Promise<CognitoUserSession> {
     return new Promise((resolve, reject) => {
       cognitoUser.getSession((err: Error | null, session: CognitoUserSession | null) => {
