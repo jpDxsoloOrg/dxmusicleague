@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { data } from "../data";
 import { listProviderOptions } from "../music";
 import type { MusicProviderId } from "../music";
-import type { LeagueVisibility } from "../domain/types";
+import type { LeagueVisibility, RoundProgression } from "../domain/types";
 import "./CreateLeaguePage.css";
 
 export function CreateLeaguePage() {
@@ -16,13 +16,18 @@ export function CreateLeaguePage() {
   const [visibility, setVisibility] = useState<LeagueVisibility>("private");
   const [maxMembers, setMaxMembers] = useState(5);
   const [roundCount, setRoundCount] = useState(3);
+  const [progression, setProgression] = useState<RoundProgression>("manual");
+  const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [phaseDays, setPhaseDays] = useState(3);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const isPublic = visibility === "public";
+  const isTimed = progression === "timed";
   const capOk = !isPublic || (maxMembers >= 2 && maxMembers <= 50);
   const roundsOk = roundCount >= 1 && roundCount <= 20;
-  const canCreate = name.trim().length >= 3 && capOk && roundsOk && !busy;
+  const timingOk = !isTimed || (phaseDays >= 1 && phaseDays <= 30);
+  const canCreate = name.trim().length >= 3 && capOk && roundsOk && timingOk && !busy;
 
   async function handleCreate() {
     if (!canCreate) return;
@@ -35,6 +40,9 @@ export function CreateLeaguePage() {
         visibility,
         maxMembers: isPublic ? maxMembers : undefined,
         roundCount,
+        progression,
+        startAt: isTimed && startDate ? new Date(startDate).toISOString() : undefined,
+        phaseDays: isTimed ? phaseDays : undefined,
       });
       navigate(`/leagues/${league.id}`);
     } catch (err) {
@@ -97,6 +105,50 @@ export function CreateLeaguePage() {
           />
           <span className="field-hint">How many rounds this league will run. Between 1 and 20 — you'll set each round's theme later.</span>
         </label>
+
+        <label className="field">
+          <span className="field-label">Round timing</span>
+          <select
+            className="field-input"
+            value={progression}
+            onChange={(e) => setProgression(e.target.value as RoundProgression)}
+          >
+            <option value="manual">Manual — you open each phase yourself</option>
+            <option value="timed">Timed — phases auto-advance on a schedule</option>
+          </select>
+          <span className="field-hint">
+            {isTimed
+              ? "Once you open a round, submitting → listening → voting → results advance automatically."
+              : "You control when submissions open, close, voting starts, and results reveal."}
+          </span>
+        </label>
+
+        {isTimed && (
+          <div className="timed-fields">
+            <label className="field">
+              <span className="field-label">League start</span>
+              <input
+                className="field-input"
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+              />
+              <span className="field-hint">The first round's timer won't begin before this date.</span>
+            </label>
+            <label className="field">
+              <span className="field-label">Days per phase</span>
+              <input
+                className="field-input"
+                type="number"
+                min={1}
+                max={30}
+                value={phaseDays}
+                onChange={(e) => setPhaseDays(Number(e.target.value))}
+              />
+              <span className="field-hint">How long each phase lasts before it auto-advances (1–30 days).</span>
+            </label>
+          </div>
+        )}
 
         <label className="field">
           <span className="field-label">Visibility</span>

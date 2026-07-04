@@ -16,7 +16,7 @@ async function deps(): Promise<Deps> {
   await repo.createLeague({
     id: "lg-test", name: "Test", ownerId: "u-sarah", musicProvider: "youtube-music",
     settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-sarah", "u-james"], inviteCode: "TEST-1",
-    visibility: "private", roundCount: 5,
+    visibility: "private", roundCount: 5, progression: "manual",
   });
   await repo.createRound({ id: ROUND, leagueId: "lg-test", index: 1, theme: "Theme", status: "submitting" });
   return { repo, users: new MemoryUserDirectory() };

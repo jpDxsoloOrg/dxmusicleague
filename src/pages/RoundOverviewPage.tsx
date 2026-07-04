@@ -87,7 +87,9 @@ export function RoundOverviewPage() {
   }
   const deadline = currentRound?.status === "voting"
     ? currentRound?.voteDeadline
-    : currentRound?.submissionDeadline;
+    : currentRound?.status === "previewing"
+      ? currentRound?.previewDeadline
+      : currentRound?.submissionDeadline;
   const countdown = formatCountdown(deadline);
   const action = currentRound ? primaryAction(league.id, currentRound, Boolean(mySubmission)) : undefined;
   // Show the player's own pick while a round is live (submitting → voting).
@@ -318,6 +320,8 @@ function OwnerRoundControl({
 
   const status = currentRound?.status;
   const needsNewRound = !currentRound || status === "revealed" || status === "complete";
+  // Timed leagues auto-advance the phases; the owner only creates + opens rounds.
+  const timed = league.progression === "timed";
 
   return (
     <div className="owner-control">
@@ -346,6 +350,8 @@ function OwnerRoundControl({
         >
           {busy ? "Opening…" : "Open for submissions →"}
         </button>
+      ) : timed ? (
+        <span className="owner-hint">⏱ Timed league — this round advances through its phases automatically.</span>
       ) : status === "submitting" ? (
         <button
           className="btn btn-primary"

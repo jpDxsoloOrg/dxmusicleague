@@ -1,7 +1,7 @@
 // Mock data so the UI is fully clickable before any backend exists.
 // Swap these reads for API calls in Phase 2+ without touching the components.
 
-import type { League, LeagueSettings, LeagueVisibility, Round, User } from "../domain/types";
+import type { League, LeagueSettings, LeagueVisibility, RoundProgression, Round, User } from "../domain/types";
 import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types";
 import type { MusicProviderId, Track } from "../music";
 import { trackKey } from "../music";
@@ -31,6 +31,7 @@ export const leagues: League[] = [
     inviteCode: "SYNTH-23",
     visibility: "private",
     roundCount: 12,
+    progression: "manual",
   },
   {
     id: "lg-vaporwave",
@@ -42,6 +43,7 @@ export const leagues: League[] = [
     inviteCode: "VAPOR-88",
     visibility: "private",
     roundCount: 8,
+    progression: "manual",
   },
   {
     id: "lg-bassline",
@@ -53,6 +55,7 @@ export const leagues: League[] = [
     inviteCode: "BASS-42",
     visibility: "private",
     roundCount: 8,
+    progression: "manual",
   },
   // A league the current user is NOT in yet — joinable via invite code below.
   {
@@ -65,6 +68,7 @@ export const leagues: League[] = [
     inviteCode: "INDIE-25",
     visibility: "private",
     roundCount: 8,
+    progression: "manual",
   },
   // Public, not-yet-started leagues with open slots — discoverable by u-me (not a member).
   {
@@ -78,6 +82,7 @@ export const leagues: League[] = [
     visibility: "public",
     maxMembers: 8,
     roundCount: 8,
+    progression: "manual",
   },
   {
     id: "lg-retro",
@@ -90,6 +95,7 @@ export const leagues: League[] = [
     visibility: "public",
     maxMembers: 6,
     roundCount: 6,
+    progression: "manual",
   },
   {
     id: "lg-urban",
@@ -102,6 +108,7 @@ export const leagues: League[] = [
     visibility: "public",
     maxMembers: 10,
     roundCount: 10,
+    progression: "manual",
   },
 ];
 
@@ -248,12 +255,18 @@ export interface CreateLeagueInput {
   maxMembers?: number;
   /** How many rounds the league will run (1–20). */
   roundCount?: number;
+  /** Round progression; defaults to "manual". */
+  progression?: RoundProgression;
+  /** Timed mode: ISO start (defaults to now) and days per phase. */
+  startAt?: string;
+  phaseDays?: number;
 }
 
 /** Create a league owned by the current user and return it. */
 export function createLeague(input: CreateLeagueInput): League {
   createdLeagueSeq += 1;
   const visibility: LeagueVisibility = input.visibility === "public" ? "public" : "private";
+  const progression: RoundProgression = input.progression === "timed" ? "timed" : "manual";
   const league: League = {
     id: `lg-new-${createdLeagueSeq}`,
     name: input.name.trim(),
@@ -266,6 +279,9 @@ export function createLeague(input: CreateLeagueInput): League {
     visibility,
     maxMembers: visibility === "public" ? input.maxMembers : undefined,
     roundCount: input.roundCount && input.roundCount >= 1 ? input.roundCount : 8,
+    progression,
+    startAt: progression === "timed" ? (input.startAt ?? new Date().toISOString()) : undefined,
+    phaseDays: progression === "timed" ? input.phaseDays : undefined,
   };
   leagues.push(league);
   inviteCodes[league.inviteCode] = league.id;

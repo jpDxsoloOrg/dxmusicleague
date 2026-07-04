@@ -111,6 +111,18 @@ export async function updateRound(
         console.error(`Playlist creation failed for round ${round.id}:`, err);
       }
     }
+
+    // Timed mode: when a round opens for submissions, lock in every phase's
+    // deadline up front (anchored no earlier than the league's start time), so
+    // lazy auto-advance has fixed times to compare against.
+    if (input.status === "submitting" && league.progression === "timed" && league.phaseDays) {
+      const DAY_MS = 86_400_000;
+      const startFloor = league.startAt ? new Date(league.startAt).getTime() : 0;
+      const anchor = Math.max(Date.now(), Number.isNaN(startFloor) ? 0 : startFloor);
+      round.submissionDeadline = new Date(anchor + league.phaseDays * DAY_MS).toISOString();
+      round.previewDeadline = new Date(anchor + 2 * league.phaseDays * DAY_MS).toISOString();
+      round.voteDeadline = new Date(anchor + 3 * league.phaseDays * DAY_MS).toISOString();
+    }
   }
 
   if (input.theme !== undefined) {

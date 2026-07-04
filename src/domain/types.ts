@@ -31,6 +31,10 @@ export interface LeagueSettings {
 /** Private = joinable by invite code only. Public = discoverable + claimable. */
 export type LeagueVisibility = "private" | "public";
 
+/** How rounds move between phases. `manual` = owner advances each phase;
+ *  `timed` = phases auto-advance after `phaseDays` days. */
+export type RoundProgression = "manual" | "timed";
+
 export interface League {
   id: string;
   name: string;
@@ -49,6 +53,12 @@ export interface League {
   /** How many rounds the league will run, chosen by the owner at creation.
    *  Drives the "Round X of N" display and the round stepper. */
   roundCount: number;
+  /** Round progression mode. Older records default to "manual". */
+  progression: RoundProgression;
+  /** Timed mode: when the first round's timer may begin (ISO). */
+  startAt?: string;
+  /** Timed mode: days each phase lasts before it auto-advances. */
+  phaseDays?: number;
 }
 
 export interface Round {
@@ -60,6 +70,8 @@ export interface Round {
   description?: string;
   status: RoundStatus;
   submissionDeadline?: string; // ISO 8601
+  /** End of the previewing phase (timed mode) — when voting auto-opens. */
+  previewDeadline?: string; // ISO 8601
   voteDeadline?: string; // ISO 8601
   /** Public playlist URL, set on reveal. */
   playlistUrl?: string;

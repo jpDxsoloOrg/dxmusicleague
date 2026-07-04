@@ -4,10 +4,11 @@
 // frontend's mock functions exactly (src/data/mock.ts) so the pages don't change.
 
 import { randomInt, randomUUID } from "node:crypto";
-import type { League, LeagueSettings, LeagueVisibility, Round } from "../domain/types.ts";
+import type { League, LeagueSettings, LeagueVisibility, RoundProgression, Round } from "../domain/types.ts";
 import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types.ts";
 import { badRequest, conflict, forbidden, notFound } from "../domain/errors.ts";
 import type { Repository, UserDirectory } from "../data/repository.ts";
+import { autoAdvanceRound } from "./progression.ts";
 
 export interface Deps {
   repo: Repository;
@@ -98,6 +99,9 @@ const MAX_PUBLIC_MEMBERS = 50;
 /** How many rounds a league may run. */
 const MIN_ROUNDS = 1;
 const MAX_ROUNDS = 20;
+/** How long each phase may last in timed mode. */
+const MIN_PHASE_DAYS = 1;
+const MAX_PHASE_DAYS = 30;
 
 export interface CreateLeagueInput {
   name: string;
@@ -108,6 +112,11 @@ export interface CreateLeagueInput {
   maxMembers?: number;
   /** How many rounds the league will run (1–20). */
   roundCount?: number;
+  /** Round progression; defaults to "manual". */
+  progression?: RoundProgression;
+  /** Timed mode: ISO start time (defaults to now) and days per phase (1–30). */
+  startAt?: string;
+  phaseDays?: number;
 }
 
 export async function createLeague(deps: Deps, caller: string, input: CreateLeagueInput): Promise<League> {
@@ -118,6 +127,18 @@ export async function createLeague(deps: Deps, caller: string, input: CreateLeag
   const roundCount = asInt(input?.roundCount);
   if (!(roundCount >= MIN_ROUNDS)) throw badRequest(`A league needs at least ${MIN_ROUNDS} round.`);
   if (roundCount > MAX_ROUNDS) throw badRequest(`A league can have at most ${MAX_ROUNDS} rounds.`);
+
+  const progression: RoundProgression = input?.progression === "timed" ? "timed" : "manual";
+  let startAt: string | undefined;
+  let phaseDays: number | undefined;
+  if (progression === "timed") {
+    const days = asInt(input?.phaseDays);
+    if (!(days >= MIN_PHASE_DAYS)) throw badRequest(`Each phase must last at least ${MIN_PHASE_DAYS} day.`);
+    if (days > MAX_PHASE_DAYS) throw badRequest(`Each phase can last at most ${MAX_PHASE_DAYS} days.`);
+    phaseDays = days;
+    const parsed = input?.startAt ? new Date(input.startAt) : new Date();
+    startAt = Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+  }
 
   const visibility: LeagueVisibility = input?.visibility === "public" ? "public" : "private";
   let maxMembers: number | undefined;
@@ -141,6 +162,9 @@ export async function createLeague(deps: Deps, caller: string, input: CreateLeag
     visibility,
     maxMembers,
     roundCount,
+    progression,
+    startAt,
+    phaseDays,
   };
   await deps.repo.createLeague(league);
   await deps.repo.putInvite(league.inviteCode, league.id);
@@ -246,7 +270,7 @@ export async function listMyLeagues(deps: Deps, caller: string): Promise<LeagueS
   return Promise.all(
     leagues.map(async (league) => {
       const rounds = await deps.repo.getRoundsForLeague(league.id);
-      const currentRound = latestRound(rounds);
+      const currentRound = await autoAdvanceRound(deps, league, latestRound(rounds));
       return {
         league,
         currentRound,
@@ -265,7 +289,9 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
   if (!league.memberIds.includes(caller)) throw forbidden("You're not a member of this league.");
 
   const rounds = (await deps.repo.getRoundsForLeague(leagueId)).sort((a, b) => a.index - b.index);
-  const currentRound = latestRound(rounds);
+  // Lazy timed advance BEFORE reading standings, so a just-revealed round's
+  // points are already banked in the response.
+  const currentRound = await autoAdvanceRound(deps, league, latestRound(rounds));
 
   const rawStandings = await deps.repo.getStandings(leagueId);
   const standings: Standing[] = (

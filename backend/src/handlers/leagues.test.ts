@@ -19,6 +19,7 @@ function league(over: Partial<League> & Pick<League, "id" | "name" | "visibility
     inviteCode: `C-${over.id}`,
     maxMembers: 8,
     roundCount: 8,
+    progression: "manual",
     ...over,
   };
 }

@@ -43,6 +43,9 @@ export function buildRoutes(deps: Deps): Route[] {
           visibility: body.visibility as never,
           maxMembers: typeof body.maxMembers === "number" ? body.maxMembers : undefined,
           roundCount: typeof body.roundCount === "number" ? body.roundCount : undefined,
+          progression: body.progression as never,
+          startAt: asOptString(body.startAt),
+          phaseDays: typeof body.phaseDays === "number" ? body.phaseDays : undefined,
         });
       },
     },

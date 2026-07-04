@@ -54,6 +54,9 @@ export class DynamoRepository implements Repository {
         visibility: league.visibility,
         maxMembers: league.maxMembers,
         roundCount: league.roundCount,
+        progression: league.progression,
+        startAt: league.startAt,
+        phaseDays: league.phaseDays,
         createdAt: new Date().toISOString(),
       },
       ...league.memberIds.map((userId) => this.memberItem(league.id, userId)),
@@ -95,6 +98,10 @@ export class DynamoRepository implements Repository {
       // Legacy leagues predate roundCount → 0, which the view models fall back
       // from to the count of created rounds.
       roundCount: (meta.Item.roundCount as number | undefined) ?? 0,
+      // Older leagues predate timed progression — treat them as manual.
+      progression: (meta.Item.progression as League["progression"] | undefined) ?? "manual",
+      startAt: meta.Item.startAt as string | undefined,
+      phaseDays: meta.Item.phaseDays as number | undefined,
     };
   }
 
@@ -281,6 +288,7 @@ export class DynamoRepository implements Repository {
       description: round.description,
       status: round.status,
       submissionDeadline: round.submissionDeadline,
+      previewDeadline: round.previewDeadline,
       voteDeadline: round.voteDeadline,
       playlistUrl: round.playlistUrl,
     };
@@ -294,6 +302,7 @@ export class DynamoRepository implements Repository {
       description: it.description as string | undefined,
       status: it.status as Round["status"],
       submissionDeadline: it.submissionDeadline as string | undefined,
+      previewDeadline: it.previewDeadline as string | undefined,
       voteDeadline: it.voteDeadline as string | undefined,
       playlistUrl: it.playlistUrl as string | undefined,
     };

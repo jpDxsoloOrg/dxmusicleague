@@ -3,7 +3,7 @@
 // in domain/rules.ts and are reused here; these handlers just supply context and
 // do the I/O. Same (deps, caller, ...) shape as the other handlers.
 
-import type { Ballot, Track } from "../domain/types.ts";
+import type { Ballot, Round, Track } from "../domain/types.ts";
 import { badRequest, forbidden, notFound } from "../domain/errors.ts";
 import { rankSubmissions, tallyBallots, validateBallot } from "../domain/rules.ts";
 import type { Deps } from "./leagues.ts";
@@ -120,6 +120,19 @@ async function commentsFor(deps: Deps, submissionId: string, ballots: Ballot[]):
   );
 }
 
+/** Tally + rank a voting round, bank each submitter's points, mark it revealed,
+ *  and persist. Shared by the owner reveal endpoint and timed auto-advance, so
+ *  both settle a round identically. Mutates `round.status`. */
+export async function finalizeReveal(deps: Deps, round: Round): Promise<RoundResult[]> {
+  const results = await computeResults(deps, round.id);
+  for (const r of results) {
+    if (r.points > 0) await deps.repo.addStandingPoints(round.leagueId, r.submitter.id, r.points);
+  }
+  round.status = "revealed";
+  await deps.repo.updateRound(round);
+  return results;
+}
+
 export async function revealRound(deps: Deps, caller: string, roundId: string): Promise<RoundResult[]> {
   const round = await deps.repo.getRound(roundId);
   if (!round) throw notFound("That round doesn't exist.");
@@ -128,16 +141,7 @@ export async function revealRound(deps: Deps, caller: string, roundId: string): 
   if (league.ownerId !== caller) throw forbidden("Only the league owner can reveal a round.");
   if (round.status !== "voting") throw badRequest("Only a round that's in voting can be revealed.");
 
-  const results = await computeResults(deps, roundId);
-
-  // Add each submission's points to its submitter's running season total.
-  for (const r of results) {
-    if (r.points > 0) await deps.repo.addStandingPoints(round.leagueId, r.submitter.id, r.points);
-  }
-
-  round.status = "revealed";
-  await deps.repo.updateRound(round);
-  return results;
+  return finalizeReveal(deps, round);
 }
 
 export async function getResults(deps: Deps, caller: string, roundId: string): Promise<RoundResult[]> {
