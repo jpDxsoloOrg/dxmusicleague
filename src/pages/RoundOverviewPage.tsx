@@ -40,7 +40,8 @@ function primaryAction(
     case "complete":
       return { label: "View results", to: `/leagues/${leagueId}/reveal` };
     default:
-      return { label: "Open round", to: `/leagues/${leagueId}` };
+      // draft (and any future status): players wait for the owner — no action.
+      return undefined;
   }
 }
 
@@ -141,6 +142,10 @@ export function RoundOverviewPage() {
 
               {currentRound.status === "previewing" && (
                 <p className="hero-desc">🎧 Submissions are in — give the songs a listen. Voting opens shortly.</p>
+              )}
+
+              {currentRound.status === "draft" && league.ownerId !== user?.id && (
+                <p className="hero-desc">⏳ Waiting on the league owner to start this round.</p>
               )}
 
               {showMyPick && mySubmission && (
