@@ -3,6 +3,7 @@
 // request into these calls and serialize the result. Return shapes match the
 // frontend's mock functions exactly (src/data/mock.ts) so the pages don't change.
 
+import { randomInt, randomUUID } from "node:crypto";
 import type { League, LeagueSettings, LeagueVisibility, Round } from "../domain/types.ts";
 import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types.ts";
 import { badRequest, conflict, forbidden, notFound } from "../domain/errors.ts";
@@ -70,19 +71,23 @@ async function completionPct(repo: Repository, league: League, round: Round | un
 }
 
 // ---- id + invite-code generation ----
+// Must be RANDOM, not a counter: handlers run on Lambda where a module-level
+// counter resets on every cold start, so sequential ids/codes collide across
+// invocations (two leagues both getting "DXL-1001", overwriting each other's
+// invite mapping). `crypto` gives per-call uniqueness with no shared state.
 
-let leagueSeq = 0;
 function newLeagueId(name: string): string {
-  leagueSeq += 1;
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || "league";
-  return `lg-${slug}-${leagueSeq}`;
+  return `lg-${slug}-${randomUUID().slice(0, 8)}`;
 }
 
-let inviteSeq = 0;
+// Unambiguous alphabet (no I/L/O/0/1) so codes are easy to read aloud/share.
+const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 function newInviteCode(): string {
-  inviteSeq += 1;
-  // Short, human-shareable, case-insensitive. e.g. "DXL-1042".
-  return `DXL-${1000 + inviteSeq}`;
+  let code = "";
+  for (let i = 0; i < 6; i++) code += CODE_ALPHABET[randomInt(CODE_ALPHABET.length)];
+  // Short, human-shareable, case-insensitive. e.g. "DXL-7K2QF9".
+  return `DXL-${code}`;
 }
 
 // ---- handlers ----
