@@ -21,7 +21,7 @@ export function AppLayout() {
         <div className="brand">
           <span className="brand-mark grad-text">DX</span>
           <div className="brand-text">
-            <strong>DX Music League</strong>
+            <strong>Music League</strong>
           </div>
         </div>
 
