@@ -77,6 +77,16 @@ export class ApiClient implements DataClient {
     }
   }
 
+  async claimSpot(leagueId: string): Promise<JoinResult> {
+    try {
+      const { league } = await request<{ league: League }>(`/leagues/${enc(leagueId)}/members`, { method: "POST" });
+      return { ok: true, league };
+    } catch (err) {
+      const message = err instanceof ApiRequestError ? err.message : "Couldn't claim a spot.";
+      return { ok: false, error: message };
+    }
+  }
+
   async joinLeague(code: string): Promise<JoinResult> {
     try {
       const { league } = await request<{ league: League }>("/leagues/join", {

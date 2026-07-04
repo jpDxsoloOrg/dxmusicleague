@@ -76,6 +76,12 @@ export function buildRoutes(deps: Deps): Route[] {
       handler: (req) => leagues.getPublicLeaguePreview(deps, req.caller, req.params.leagueId!),
     },
     {
+      // Claim a spot in an open public league = create the caller's membership.
+      method: "POST",
+      pattern: "/leagues/:leagueId/members",
+      handler: (req) => leagues.claimPublicSpot(deps, req.caller, req.params.leagueId!),
+    },
+    {
       method: "PATCH",
       pattern: "/leagues/:leagueId/settings",
       handler: (req) => {

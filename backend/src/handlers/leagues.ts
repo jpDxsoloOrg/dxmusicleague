@@ -288,6 +288,32 @@ export async function joinLeague(deps: Deps, caller: string, rawCode: string): P
   return { league: updated };
 }
 
+/** Claim a spot in an open public league — creates the caller's membership.
+ *  Enforces the same rules discovery/preview advertise: public, not started,
+ *  not full, not already a member. */
+export async function claimPublicSpot(
+  deps: Deps,
+  caller: string,
+  leagueId: string,
+): Promise<{ league: League }> {
+  const league = await deps.repo.getLeague(leagueId);
+  // 404 for missing OR non-public — private leagues aren't claimable this way.
+  if (!league || league.visibility !== "public") throw notFound("That public league doesn't exist.");
+  if (league.memberIds.includes(caller)) throw conflict(`You're already a member of ${league.name}.`);
+
+  const rounds = await deps.repo.getRoundsForLeague(leagueId);
+  if (rounds.some((r) => r.status !== "draft")) throw conflict("This league has already started.");
+
+  // Best-effort capacity check. Not atomic under concurrent claims — acceptable
+  // at this scale; promote to a conditional write if contention ever matters.
+  const cap = league.maxMembers ?? 0;
+  if (league.memberIds.length >= cap) throw conflict("This league is full.");
+
+  const updated = await deps.repo.addMember(leagueId, caller);
+  await deps.repo.addStandingPoints(leagueId, caller, 0); // seed standing at 0
+  return { league: updated };
+}
+
 /** Load a league and assert the caller owns it. */
 async function ownedLeague(deps: Deps, caller: string, leagueId: string): Promise<League> {
   const league = await deps.repo.getLeague(leagueId);

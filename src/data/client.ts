@@ -44,6 +44,8 @@ export interface DataClient {
   getPublicLeagues(): Promise<PublicLeagueSummary[]>;
   /** Non-member preview of one public league; undefined if private/missing. */
   getPublicLeaguePreview(leagueId: string): Promise<PublicLeaguePreview | undefined>;
+  /** Claim a spot in an open public league (creates the caller's membership). */
+  claimSpot(leagueId: string): Promise<JoinResult>;
   getStandings(leagueId: string): Promise<Standing[]>;
   /** Owner-only: update the league's voting settings. */
   updateLeagueSettings(leagueId: string, settings: EditableLeagueSettings): Promise<League>;

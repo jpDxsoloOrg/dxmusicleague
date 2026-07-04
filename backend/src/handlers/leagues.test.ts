@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MemoryRepository, MemoryUserDirectory } from "../data/memory.ts";
 import type { Deps } from "./leagues.ts";
-import { getPublicLeaguePreview, listOpenPublicLeagues } from "./leagues.ts";
+import { claimPublicSpot, getPublicLeaguePreview, listOpenPublicLeagues } from "./leagues.ts";
 import { ApiError } from "../domain/errors.ts";
 import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types.ts";
 import type { League, Round } from "../domain/types.ts";
@@ -96,4 +96,34 @@ test("preview 404s for a private or missing league", async () => {
   const deps = await depsWith([league({ id: "priv", name: "Priv", visibility: "private" })]);
   await assert.rejects(getPublicLeaguePreview(deps, "u-me", "priv"), (e) => e instanceof ApiError && e.statusCode === 404);
   await assert.rejects(getPublicLeaguePreview(deps, "u-me", "nope"), (e) => e instanceof ApiError && e.statusCode === 404);
+});
+
+test("claim adds the caller to an open public league", async () => {
+  const deps = await depsWith([
+    league({ id: "p", name: "P", visibility: "public", memberIds: ["u-owner"], maxMembers: 4 }),
+  ]);
+  const { league: updated } = await claimPublicSpot(deps, "u-me", "p");
+  assert.ok(updated.memberIds.includes("u-me"));
+  assert.equal(updated.memberIds.length, 2);
+  // standing seeded so the new member shows up on the board
+  const standings = await deps.repo.getStandings("p");
+  assert.ok(standings.some((s) => s.userId === "u-me" && s.points === 0));
+});
+
+test("claim rejects full / started / already-member / private-or-missing", async () => {
+  const deps = await depsWith(
+    [
+      league({ id: "full", name: "Full", visibility: "public", memberIds: ["u-owner", "u-2"], maxMembers: 2 }),
+      league({ id: "started", name: "Started", visibility: "public", memberIds: ["u-owner"], maxMembers: 4 }),
+      league({ id: "mine", name: "Mine", visibility: "public", memberIds: ["u-owner", "u-me"], maxMembers: 4 }),
+      league({ id: "priv", name: "Priv", visibility: "private", maxMembers: 4 }),
+    ],
+    [{ id: "started~1", leagueId: "started", index: 1, theme: "Go", status: "submitting" }],
+  );
+  const is = (code: number) => (e: unknown) => e instanceof ApiError && e.statusCode === code;
+  await assert.rejects(claimPublicSpot(deps, "u-me", "full"), is(409));
+  await assert.rejects(claimPublicSpot(deps, "u-me", "started"), is(409));
+  await assert.rejects(claimPublicSpot(deps, "u-me", "mine"), is(409));
+  await assert.rejects(claimPublicSpot(deps, "u-me", "priv"), is(404));
+  await assert.rejects(claimPublicSpot(deps, "u-me", "nope"), is(404));
 });

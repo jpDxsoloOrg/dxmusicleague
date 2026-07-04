@@ -280,6 +280,24 @@ export function joinLeague(rawCode: string): JoinResult {
   return { ok: true, league };
 }
 
+/** Claim a spot in an open public league (mock: mutate in place). Mirrors the
+ *  backend claimPublicSpot guards. */
+export function claimPublicSpot(leagueId: string): JoinResult {
+  const league = leagues.find((lg) => lg.id === leagueId && lg.visibility === "public");
+  if (!league) return { ok: false, error: "That public league doesn't exist." };
+  if (league.memberIds.includes(currentUser.id)) {
+    return { ok: false, error: `You're already a member of ${league.name}.` };
+  }
+  if (rounds.some((r) => r.leagueId === league.id && r.status !== "draft")) {
+    return { ok: false, error: "This league has already started." };
+  }
+  if (league.memberIds.length >= (league.maxMembers ?? 0)) {
+    return { ok: false, error: "This league is full." };
+  }
+  league.memberIds.push(currentUser.id);
+  return { ok: true, league };
+}
+
 /** Owner edits a league's voting settings (mock: mutate in place). */
 export function updateLeagueSettings(
   leagueId: string,

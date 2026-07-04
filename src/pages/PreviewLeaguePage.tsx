@@ -1,4 +1,5 @@
-import { Link, useParams } from "react-router-dom";
+import { useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { data } from "../data";
 import { useAsync } from "../lib/useAsync";
 import { Avatar } from "../components/Avatar";
@@ -7,7 +8,23 @@ import "./PreviewLeaguePage.css";
 
 export function PreviewLeaguePage() {
   const { leagueId = "" } = useParams();
+  const navigate = useNavigate();
   const { data: preview, loading, error } = useAsync(() => data.getPublicLeaguePreview(leagueId), [leagueId]);
+  const [busy, setBusy] = useState(false);
+  const [claimError, setClaimError] = useState<string | null>(null);
+
+  async function handleClaim() {
+    if (busy) return;
+    setBusy(true);
+    setClaimError(null);
+    const result = await data.claimSpot(leagueId);
+    if (result.ok) {
+      navigate(`/leagues/${result.league.id}`);
+    } else {
+      setClaimError(result.error);
+      setBusy(false);
+    }
+  }
 
   return (
     <div className="create-league">
@@ -58,7 +75,12 @@ export function PreviewLeaguePage() {
             ) : preview.isFull ? (
               <p className="preview-status">This league is full.</p>
             ) : (
-              <p className="preview-status">Open for new members — {preview.openSlots} spots left.</p>
+              <>
+                {claimError && <span className="field-error">{claimError}</span>}
+                <button className="btn btn-primary create-btn" disabled={busy} onClick={handleClaim}>
+                  {busy ? "Claiming…" : `Claim a spot (${preview.openSlots} left) →`}
+                </button>
+              </>
             )}
           </>
         )}

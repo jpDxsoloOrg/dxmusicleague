@@ -7,6 +7,7 @@ import type { League, Round, RoundStatus, Submission } from "../domain/types";
 import type { Track } from "../music";
 import type { CreateRoundInput, DataClient, EditableLeagueSettings } from "./client";
 import {
+  claimPublicSpot,
   createLeague,
   currentUser,
   deleteLeague,
@@ -52,6 +53,9 @@ export class MockClient implements DataClient {
   }
   async getPublicLeaguePreview(leagueId: string): Promise<PublicLeaguePreview | undefined> {
     return getPublicLeaguePreview(leagueId);
+  }
+  async claimSpot(leagueId: string): Promise<JoinResult> {
+    return claimPublicSpot(leagueId);
   }
   async updateLeagueSettings(leagueId: string, settings: EditableLeagueSettings): Promise<League> {
     return updateLeagueSettings(leagueId, settings);
