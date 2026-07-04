@@ -22,7 +22,6 @@ export function AppLayout() {
           <span className="brand-mark grad-text">DX</span>
           <div className="brand-text">
             <strong>DX Music League</strong>
-            <span>Premium Edition</span>
           </div>
         </div>
 
