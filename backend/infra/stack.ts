@@ -14,6 +14,9 @@ import * as cognito from "aws-cdk-lib/aws-cognito";
 import * as apigateway from "aws-cdk-lib/aws-apigateway";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
+import * as s3 from "aws-cdk-lib/aws-s3";
+import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
+import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import { NodejsFunction, OutputFormat } from "aws-cdk-lib/aws-lambda-nodejs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -111,10 +114,40 @@ export class MusicLeagueStack extends Stack {
     // Allow the root path too (e.g. POST /leagues lives under /{proxy+}, but
     // GET /leagues is a single segment — addProxy covers it via {proxy+}).
 
+    // ---- Static site hosting (S3 + CloudFront) ----
+    // The built Vite app (`dist/`) is synced to this bucket out-of-band. The
+    // bucket stays private; CloudFront reaches it via Origin Access Control, so
+    // the assets are only served through the CDN (HTTPS), never S3 directly.
+    const siteBucket = new s3.Bucket(this, "SiteBucket", {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      // Holds only build output (no data) — safe to empty + drop on teardown.
+      removalPolicy: RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+    });
+
+    const distribution = new cloudfront.Distribution(this, "SiteDistribution", {
+      defaultBehavior: {
+        origin: origins.S3BucketOrigin.withOriginAccessControl(siteBucket),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+      },
+      defaultRootObject: "index.html",
+      // SPA routing: React Router owns the path, so any missing S3 key (a deep
+      // link like /leagues/xyz) must return index.html with 200, not S3's 403/404.
+      errorResponses: [
+        { httpStatus: 403, responseHttpStatus: 200, responsePagePath: "/index.html" },
+        { httpStatus: 404, responseHttpStatus: 200, responsePagePath: "/index.html" },
+      ],
+    });
+
     // ---- Outputs the frontend needs ----
     new CfnOutput(this, "ApiUrl", { value: api.url });
     new CfnOutput(this, "UserPoolId", { value: userPool.userPoolId });
     new CfnOutput(this, "UserPoolClientId", { value: userPoolClient.userPoolClientId });
     new CfnOutput(this, "TableName", { value: table.tableName });
+    new CfnOutput(this, "SiteBucketName", { value: siteBucket.bucketName });
+    new CfnOutput(this, "DistributionId", { value: distribution.distributionId });
+    new CfnOutput(this, "SiteUrl", { value: `https://${distribution.distributionDomainName}` });
   }
 }
