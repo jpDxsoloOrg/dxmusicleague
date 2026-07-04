@@ -3,22 +3,14 @@
 // in domain/rules.ts and are reused here; these handlers just supply context and
 // do the I/O. Same (deps, caller, ...) shape as the other handlers.
 
-import type { Ballot, Round, Track } from "../domain/types.ts";
+import type { Ballot } from "../domain/types.ts";
 import { badRequest, forbidden, notFound } from "../domain/errors.ts";
-import { rankSubmissions, tallyBallots, validateBallot } from "../domain/rules.ts";
+import { validateBallot } from "../domain/rules.ts";
+import { computeResults, finalizeReveal, type RoundResult } from "./results.ts";
+import { autoAdvanceRound } from "./progression.ts";
 import type { Deps } from "./leagues.ts";
 
 const deadlinePassed = (iso?: string): boolean => (iso ? Date.now() > new Date(iso).getTime() : false);
-
-interface UserView { id: string; displayName: string }
-interface VoterComment { voter: UserView; text: string }
-interface RoundResult {
-  rank: number;
-  track: Track;
-  submitter: UserView;
-  points: number;
-  comments: VoterComment[];
-}
 
 /** Load a round + league, asserting league membership. */
 async function roundForMember(deps: Deps, caller: string, roundId: string) {
@@ -67,6 +59,9 @@ export async function castBallot(
     castAt: new Date().toISOString(),
   };
   await deps.repo.putBallot(ballot); // overwrites any earlier ballot from this voter
+  // Timed leagues: if this was the last outstanding vote, reveal the round now
+  // rather than waiting for the deadline.
+  await autoAdvanceRound(deps, league, round);
   return { ok: true };
 }
 
@@ -79,58 +74,6 @@ function cleanComments(raw: unknown, validIds: Set<string>): Record<string, stri
     }
   }
   return out;
-}
-
-/** Pure read side: tally ballots, rank with the tie-break, attach submitter
- *  names and voter comments. Used by both reveal and GET results. */
-async function computeResults(deps: Deps, roundId: string): Promise<RoundResult[]> {
-  const subs = await deps.repo.getSubmissionsForRound(roundId);
-  const ballots = await deps.repo.getBallotsForRound(roundId);
-  const tally = tallyBallots(ballots.map((b) => b.allocations));
-
-  const ranked = rankSubmissions(
-    subs.map((s) => ({
-      submissionId: s.id,
-      title: s.track.title,
-      points: tally.get(s.id)?.points ?? 0,
-      distinctVoters: tally.get(s.id)?.distinctVoters ?? 0,
-      userId: s.userId,
-      track: s.track,
-    })),
-  );
-
-  return Promise.all(
-    ranked.map(async (r) => ({
-      rank: r.rank,
-      track: r.track,
-      submitter: { id: r.userId, displayName: await deps.users.getDisplayName(r.userId) },
-      points: r.points,
-      comments: await commentsFor(deps, r.submissionId, ballots),
-    })),
-  );
-}
-
-async function commentsFor(deps: Deps, submissionId: string, ballots: Ballot[]): Promise<VoterComment[]> {
-  const withComment = ballots.filter((b) => b.comments?.[submissionId]);
-  return Promise.all(
-    withComment.map(async (b) => ({
-      voter: { id: b.voterId, displayName: await deps.users.getDisplayName(b.voterId) },
-      text: b.comments![submissionId]!,
-    })),
-  );
-}
-
-/** Tally + rank a voting round, bank each submitter's points, mark it revealed,
- *  and persist. Shared by the owner reveal endpoint and timed auto-advance, so
- *  both settle a round identically. Mutates `round.status`. */
-export async function finalizeReveal(deps: Deps, round: Round): Promise<RoundResult[]> {
-  const results = await computeResults(deps, round.id);
-  for (const r of results) {
-    if (r.points > 0) await deps.repo.addStandingPoints(round.leagueId, r.submitter.id, r.points);
-  }
-  round.status = "revealed";
-  await deps.repo.updateRound(round);
-  return results;
 }
 
 export async function revealRound(deps: Deps, caller: string, roundId: string): Promise<RoundResult[]> {

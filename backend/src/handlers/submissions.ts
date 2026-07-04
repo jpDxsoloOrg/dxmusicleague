@@ -9,6 +9,7 @@
 import { randomUUID } from "node:crypto";
 import type { MusicProviderId, Submission, Track } from "../domain/types.ts";
 import { badRequest, forbidden, notFound } from "../domain/errors.ts";
+import { autoAdvanceRound } from "./progression.ts";
 import type { Deps } from "./leagues.ts";
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
@@ -80,7 +81,7 @@ export async function submitSong(
   roundId: string,
   input: SubmitInput,
 ): Promise<Submission> {
-  const { round } = await roundForMember(deps, caller, roundId);
+  const { round, league } = await roundForMember(deps, caller, roundId);
   if (round.status !== "submitting") throw badRequest("This round isn't accepting submissions right now.");
   if (deadlinePassed(round.submissionDeadline)) throw badRequest("The submission deadline has passed.");
 
@@ -99,6 +100,8 @@ export async function submitSong(
     comment: optStr(input?.comment?.trim()),
   };
   await deps.repo.putSubmission(submission);
+  // Timed leagues: if that was the last member to submit, close submissions now.
+  await autoAdvanceRound(deps, league, round);
   return submission;
 }
 

@@ -8,6 +8,7 @@
 import type { Round, RoundStatus } from "../domain/types.ts";
 import { badRequest, forbidden, notFound } from "../domain/errors.ts";
 import { createPlaylistForRound } from "./providers.ts";
+import { phaseDeadline } from "./timing.ts";
 import type { Deps } from "./leagues.ts";
 
 /** Round ids encode their league + 1-based index as `<leagueId>~<index4>`,
@@ -112,16 +113,26 @@ export async function updateRound(
       }
     }
 
-    // Timed mode: when a round opens for submissions, lock in every phase's
-    // deadline up front (anchored no earlier than the league's start time), so
-    // lazy auto-advance has fixed times to compare against.
-    if (input.status === "submitting" && league.progression === "timed" && league.phaseDays) {
-      const DAY_MS = 86_400_000;
-      const startFloor = league.startAt ? new Date(league.startAt).getTime() : 0;
-      const anchor = Math.max(Date.now(), Number.isNaN(startFloor) ? 0 : startFloor);
-      round.submissionDeadline = new Date(anchor + league.phaseDays * DAY_MS).toISOString();
-      round.previewDeadline = new Date(anchor + 2 * league.phaseDays * DAY_MS).toISOString();
-      round.voteDeadline = new Date(anchor + 3 * league.phaseDays * DAY_MS).toISOString();
+    // Timed mode: stamp the ENTERING phase's deadline (phaseDays from when it
+    // begins). Each phase's clock is set as it starts, so advancing early — by
+    // the owner here, or by auto-advance — re-bases the next deadline instead of
+    // keeping stale fixed times. Round 1 is anchored no earlier than startAt.
+    if (league.progression === "timed" && league.phaseDays) {
+      const p = league.phaseDays;
+      if (input.status === "submitting") {
+        // Opening a round lays down the full schedule for all three phases.
+        const startFloor = league.startAt ? new Date(league.startAt).getTime() : 0;
+        const anchor = Math.max(Date.now(), Number.isNaN(startFloor) ? 0 : startFloor);
+        round.submissionDeadline = phaseDeadline(p, anchor);
+        round.previewDeadline = phaseDeadline(2 * p, anchor);
+        round.voteDeadline = phaseDeadline(3 * p, anchor);
+      } else if (input.status === "previewing") {
+        // Owner closed submissions early → shift the rest of the schedule to now.
+        round.previewDeadline = phaseDeadline(p);
+        round.voteDeadline = phaseDeadline(2 * p);
+      } else if (input.status === "voting") {
+        round.voteDeadline = phaseDeadline(p);
+      }
     }
   }
 

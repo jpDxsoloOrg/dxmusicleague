@@ -1,56 +1,80 @@
 // Lazy round auto-advance for timed leagues. There's no scheduler: whenever the
-// league (or its round) is read, we check whether the current phase's deadline
-// has passed and advance it — cascading through any phases that all elapsed
-// while nobody was looking. Manual leagues are a no-op.
+// league or its round is read (and right after a submission/ballot), we check
+// whether the current phase should end and advance it — cascading through any
+// phases that all elapsed while nobody was looking. Manual leagues are a no-op.
 //
-// Deadlines are set when a round opens for submissions (see rounds.updateRound):
-//   submitting → previewing → voting → revealed
-// (See docs/round-automation in memory for the deferred cron alternative.)
+// A phase ends when EITHER its deadline passes OR everyone has finished it
+// (all members submitted / all members voted). Advancing re-bases the next
+// phase's deadline to `phaseDays` from now, so finishing early shortens the
+// round instead of leaving dead time.
+//
+// The owner can still advance manually in timed mode (rounds.updateRound /
+// revealRound) — this just automates it. See memory: round-automation.
 
 import type { League, Round } from "../domain/types.ts";
 import { createPlaylistForRound } from "./providers.ts";
-import { finalizeReveal } from "./voting.ts";
+import { finalizeReveal } from "./results.ts";
+import { phaseDeadline } from "./timing.ts";
 import type { Deps } from "./leagues.ts";
 
 const past = (iso?: string): boolean => (iso ? Date.now() > new Date(iso).getTime() : false);
 
-/** Advance a timed league's current round through every phase whose deadline has
- *  passed, persisting as it goes. Returns the (possibly mutated) round. No-op for
- *  manual leagues, missing rounds, or when nothing is due. */
+/** Advance a timed league's current round through every phase that's ready
+ *  (deadline passed OR everyone finished), persisting as it goes. Returns the
+ *  (possibly mutated) round. No-op for manual leagues or when nothing is due. */
 export async function autoAdvanceRound(
   deps: Deps,
   league: League,
   round: Round | undefined,
 ): Promise<Round | undefined> {
-  if (!round || league.progression !== "timed") return round;
-
+  if (!round || league.progression !== "timed" || !league.phaseDays) return round;
+  const phaseDays = league.phaseDays;
+  const memberCount = league.memberIds.length;
   let advanced = false;
 
-  // submitting → previewing (build the playlist, best-effort)
-  if (round.status === "submitting" && past(round.submissionDeadline)) {
-    round.status = "previewing";
-    if (!round.playlistUrl) {
-      try {
-        const subs = await deps.repo.getSubmissionsForRound(round.id);
-        const url = await createPlaylistForRound(league, round, subs);
-        if (url) round.playlistUrl = url;
-      } catch (err) {
-        console.error(`Auto-advance playlist creation failed for round ${round.id}:`, err);
+  // submitting → previewing: deadline passed OR every member has submitted.
+  if (round.status === "submitting") {
+    const subs = await deps.repo.getSubmissionsForRound(round.id);
+    const everyoneSubmitted = memberCount > 0 && subs.length >= memberCount;
+    const deadlineHit = past(round.submissionDeadline);
+    if (deadlineHit || everyoneSubmitted) {
+      round.status = "previewing";
+      // Everyone finished before the deadline → pull the rest of the schedule
+      // forward. Deadline-triggered → keep the schedule so a long-dormant round
+      // can cascade through every elapsed phase on a single read.
+      if (!deadlineHit) {
+        round.previewDeadline = phaseDeadline(phaseDays);
+        round.voteDeadline = phaseDeadline(2 * phaseDays);
       }
+      if (!round.playlistUrl) {
+        try {
+          const url = await createPlaylistForRound(league, round, subs);
+          if (url) round.playlistUrl = url;
+        } catch (err) {
+          console.error(`Auto-advance playlist creation failed for round ${round.id}:`, err);
+        }
+      }
+      advanced = true;
     }
-    advanced = true;
   }
 
-  // previewing → voting
+  // previewing → voting: only the deadline (listening has no "finished" signal).
   if (round.status === "previewing" && past(round.previewDeadline)) {
     round.status = "voting";
     advanced = true;
   }
 
-  // voting → revealed (tally, bank points, persist — its own write)
-  if (round.status === "voting" && past(round.voteDeadline)) {
-    await finalizeReveal(deps, round);
-    return round;
+  // voting → revealed: deadline passed OR every member voted (with songs to rank).
+  if (round.status === "voting") {
+    const [subs, ballots] = await Promise.all([
+      deps.repo.getSubmissionsForRound(round.id),
+      deps.repo.getBallotsForRound(round.id),
+    ]);
+    const everyoneVoted = memberCount > 0 && ballots.length >= memberCount && subs.length > 0;
+    if (past(round.voteDeadline) || everyoneVoted) {
+      await finalizeReveal(deps, round); // tallies, banks points, persists
+      return round;
+    }
   }
 
   if (advanced) await deps.repo.updateRound(round);

@@ -57,6 +57,31 @@ test("voting → revealed once the vote deadline passes (points banked)", async 
   assert.equal(out?.status, "revealed");
 });
 
+test("advances early when every member has submitted (deadline not passed)", async () => {
+  const lg = timedLeague({ memberIds: ["u-owner", "u-2"] });
+  const r = round({ status: "submitting", submissionDeadline: ahead(24 * HOUR) });
+  const d = await deps(lg, r);
+  // both members submit → phase is finished before the deadline
+  for (const [u, t] of [["u-owner", "yt-a"], ["u-2", "yt-b"]] as const) {
+    await d.repo.putSubmission({ id: `s-${u}`, roundId: r.id, userId: u, track: { id: t, provider: "spotify", providerTrackId: t, title: t, artists: [u] } });
+  }
+  const out = await autoAdvanceRound(d, lg, r);
+  assert.equal(out?.status, "previewing");
+  // early advance re-bases the preview deadline into the future (not the old one)
+  assert.ok(new Date(out!.previewDeadline!).getTime() > Date.now());
+});
+
+test("reveals early when every member has voted", async () => {
+  const lg = timedLeague({ memberIds: ["u-owner", "u-2"] });
+  const r = round({ status: "voting", voteDeadline: ahead(24 * HOUR) });
+  const d = await deps(lg, r);
+  await d.repo.putSubmission({ id: "s1", roundId: r.id, userId: "u-owner", track: { id: "t", provider: "spotify", providerTrackId: "t", title: "T", artists: ["A"] } });
+  await d.repo.putBallot({ roundId: r.id, voterId: "u-owner", allocations: { s1: 10 }, castAt: "x" });
+  await d.repo.putBallot({ roundId: r.id, voterId: "u-2", allocations: { s1: 10 }, castAt: "x" });
+  const out = await autoAdvanceRound(d, lg, r);
+  assert.equal(out?.status, "revealed");
+});
+
 test("does nothing before the deadline, or for a manual league", async () => {
   const lg = timedLeague();
   const r = round({ status: "submitting", submissionDeadline: ahead(HOUR) });

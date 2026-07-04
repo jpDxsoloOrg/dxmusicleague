@@ -350,8 +350,6 @@ function OwnerRoundControl({
         >
           {busy ? "Opening…" : "Open for submissions →"}
         </button>
-      ) : timed ? (
-        <span className="owner-hint">⏱ Timed league — this round advances through its phases automatically.</span>
       ) : status === "submitting" ? (
         <button
           className="btn btn-primary"
@@ -378,6 +376,11 @@ function OwnerRoundControl({
         </button>
       ) : (
         <span className="owner-hint">This round is complete.</span>
+      )}
+      {/* In timed leagues the owner may still advance manually; the timer (or
+          everyone finishing) also advances it on its own. */}
+      {timed && !needsNewRound && status !== "draft" && (
+        <span className="owner-hint">⏱ Auto-advances when the timer ends or everyone's done — or move it on now.</span>
       )}
       {error && <span className="page-error">{error}</span>}
     </div>
