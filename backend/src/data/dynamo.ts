@@ -21,6 +21,7 @@ import {
   GetCommand,
   PutCommand,
   QueryCommand,
+  ScanCommand,
   TransactWriteCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
@@ -103,6 +104,30 @@ export class DynamoRepository implements Repository {
     );
     const leagueIds = (res.Items ?? []).map((it) => it.leagueId as string);
     const leagues = await Promise.all(leagueIds.map((id) => this.getLeague(id)));
+    return leagues.filter((lg): lg is League => Boolean(lg));
+  }
+
+  async getPublicLeagues(): Promise<League[]> {
+    // Discovery is a low-frequency, small-result read; a filtered Scan for the
+    // handful of public league META rows is fine at this scale. If public
+    // leagues ever grow large, promote this to a dedicated GSI.
+    const metas: Record<string, unknown>[] = [];
+    let start: Record<string, unknown> | undefined;
+    do {
+      const res = await this.doc.send(
+        new ScanCommand({
+          TableName: this.tableName,
+          FilterExpression: "entity = :e AND visibility = :v",
+          ExpressionAttributeValues: { ":e": "league", ":v": "public" },
+          ExclusiveStartKey: start,
+        }),
+      );
+      for (const it of res.Items ?? []) metas.push(it);
+      start = res.LastEvaluatedKey as Record<string, unknown> | undefined;
+    } while (start);
+
+    // Hydrate each with its members (a separate query per league).
+    const leagues = await Promise.all(metas.map((it) => this.getLeague(it.id as string)));
     return leagues.filter((lg): lg is League => Boolean(lg));
   }
 

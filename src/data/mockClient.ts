@@ -12,6 +12,7 @@ import {
   deleteLeague,
   getLeagueDetail,
   getMyLeagueSummaries,
+  getOpenPublicLeagues,
   getRoundResults,
   getStandings,
   getVotableSubmissions,
@@ -23,6 +24,7 @@ import {
   type JoinResult,
   type LeagueDetail,
   type LeagueSummary,
+  type PublicLeagueSummary,
   type RoundResult,
   type Standing,
   type VotableSubmission,
@@ -42,6 +44,9 @@ export class MockClient implements DataClient {
   }
   async joinLeague(code: string): Promise<JoinResult> {
     return joinLeague(code);
+  }
+  async getPublicLeagues(): Promise<PublicLeagueSummary[]> {
+    return getOpenPublicLeagues();
   }
   async updateLeagueSettings(leagueId: string, settings: EditableLeagueSettings): Promise<League> {
     return updateLeagueSettings(leagueId, settings);

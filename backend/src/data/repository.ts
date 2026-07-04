@@ -12,6 +12,9 @@ export interface Repository {
   getLeague(leagueId: string): Promise<League | undefined>;
   /** Leagues the user is a member of. */
   getLeaguesForUser(userId: string): Promise<League[]>;
+  /** All leagues with visibility "public" (fully hydrated with members).
+   *  The service filters these down to the "open" ones. */
+  getPublicLeagues(): Promise<League[]>;
   /** Add a member to a league (idempotent). Returns the updated league. */
   addMember(leagueId: string, userId: string): Promise<League>;
   /** Replace a league's settings. Returns the updated league. */

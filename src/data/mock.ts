@@ -62,6 +62,40 @@ export const leagues: League[] = [
     inviteCode: "INDIE-25",
     visibility: "private",
   },
+  // Public, not-yet-started leagues with open slots — discoverable by u-me (not a member).
+  {
+    id: "lg-midnight",
+    name: "Midnight Drives",
+    ownerId: "u-sarah",
+    musicProvider: "spotify",
+    settings: DEFAULT_LEAGUE_SETTINGS,
+    memberIds: ["u-sarah", "u-james", "u-luna"],
+    inviteCode: "NIGHT-1",
+    visibility: "public",
+    maxMembers: 8,
+  },
+  {
+    id: "lg-retro",
+    name: "Retro Futures",
+    ownerId: "u-jpop",
+    musicProvider: "spotify",
+    settings: DEFAULT_LEAGUE_SETTINGS,
+    memberIds: ["u-jpop", "u-mia"],
+    inviteCode: "RETRO-1",
+    visibility: "public",
+    maxMembers: 6,
+  },
+  {
+    id: "lg-urban",
+    name: "Urban Beats",
+    ownerId: "u-luna",
+    musicProvider: "spotify",
+    settings: DEFAULT_LEAGUE_SETTINGS,
+    memberIds: ["u-luna", "u-james", "u-sarah", "u-mia"],
+    inviteCode: "URBAN-1",
+    visibility: "public",
+    maxMembers: 10,
+  },
 ];
 
 // Invite-code → leagueId lookup for the Join-a-league flow, derived from each
@@ -79,14 +113,48 @@ export const rounds: Round[] = [
   { id: "r-bb-4", leagueId: "lg-bassline", index: 4, theme: "Drop the Bass", status: "revealed", playlistUrl: "https://example.com/mock-playlist/bb4" },
   { id: "r-in-2", leagueId: "lg-indie", index: 2, theme: "Bedroom Pop Gems", status: "submitting", submissionDeadline: isoInDays(3) },
   { id: "r-in-1", leagueId: "lg-indie", index: 1, theme: "Garage Revival", status: "complete" },
+  // Draft first rounds for the open public leagues (not started — still gathering members).
+  { id: "r-mn-1", leagueId: "lg-midnight", index: 1, theme: "Late-night highway anthems", status: "draft" },
+  { id: "r-rf-1", leagueId: "lg-retro", index: 1, theme: "80s sci-fi soundtracks", status: "draft" },
+  { id: "r-ub-1", leagueId: "lg-urban", index: 1, theme: "Lo-fi study session", status: "draft" },
 ];
 
-/** Trending leagues a player could discover/join (not yet a member). */
-export const trendingLeagues = [
-  { id: "tl-1", name: "Midnight Drives", members: 128, tag: "Late-Night" },
-  { id: "tl-2", name: "Retro Futures", members: 86, tag: "Synthpop" },
-  { id: "tl-3", name: "Urban Beats", members: 204, tag: "Lo-Fi / Hip-Hop" },
-];
+/** A public league a non-member could discover and claim a spot in. Mirrors the
+ *  backend `PublicLeagueSummary` (handlers/leagues.ts). */
+export interface PublicLeagueSummary {
+  id: string;
+  name: string;
+  memberCount: number;
+  maxMembers: number;
+  openSlots: number;
+  firstRoundTheme?: string;
+}
+
+/** Discover open public leagues: public, not started (no round past draft), with
+ *  open slots, that the current user isn't already in. Ranked fullest-first. */
+export function getOpenPublicLeagues(limit = 12): PublicLeagueSummary[] {
+  const open = leagues
+    .filter((lg) => lg.visibility === "public")
+    .filter((lg) => !lg.memberIds.includes(currentUser.id))
+    .filter((lg) => (lg.maxMembers ?? 0) - lg.memberIds.length > 0)
+    .filter((lg) => !rounds.some((r) => r.leagueId === lg.id && r.status !== "draft"))
+    .map((lg) => {
+      const firstRound = rounds
+        .filter((r) => r.leagueId === lg.id)
+        .sort((a, b) => a.index - b.index)[0];
+      const cap = lg.maxMembers ?? 0;
+      return {
+        id: lg.id,
+        name: lg.name,
+        memberCount: lg.memberIds.length,
+        maxMembers: cap,
+        openSlots: cap - lg.memberIds.length,
+        firstRoundTheme: firstRound?.theme,
+      };
+    });
+  open.sort((a, b) => b.memberCount - a.memberCount || a.name.localeCompare(b.name));
+  return open.slice(0, Math.max(0, limit));
+}
 
 // ---- view-model helpers (computed in the data layer, not the components) ----
 

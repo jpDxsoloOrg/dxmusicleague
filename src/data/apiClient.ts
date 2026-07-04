@@ -11,6 +11,7 @@ import type {
   JoinResult,
   LeagueDetail,
   LeagueSummary,
+  PublicLeagueSummary,
   RoundResult,
   Standing,
   VotableSubmission,
@@ -60,6 +61,10 @@ export class ApiClient implements DataClient {
 
   createLeague(input: CreateLeagueInput): Promise<League> {
     return request<League>("/leagues", { method: "POST", body: JSON.stringify(input) });
+  }
+
+  getPublicLeagues(): Promise<PublicLeagueSummary[]> {
+    return request<PublicLeagueSummary[]>("/leagues/public");
   }
 
   async joinLeague(code: string): Promise<JoinResult> {

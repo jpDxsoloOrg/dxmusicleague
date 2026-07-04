@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { data, trendingLeagues } from "../data";
+import { data } from "../data";
 import type { LeagueSummary } from "../data";
 import type { RoundStatus } from "../domain/types";
 import { useAsync } from "../lib/useAsync";
@@ -17,6 +17,8 @@ const STATUS_LABEL: Record<RoundStatus, string> = {
 
 export function DashboardPage() {
   const { data: summaries, loading, error } = useAsync(() => data.getMyLeagueSummaries(), []);
+  const { data: publicLeagues } = useAsync(() => data.getPublicLeagues(), []);
+  const trending = (publicLeagues ?? []).slice(0, 3);
 
   return (
     <div className="dashboard">
@@ -53,24 +55,28 @@ export function DashboardPage() {
         </div>
       </section>
 
-      {/* trending */}
-      <section>
-        <div className="section-head">
-          <h2>Trending Leagues</h2>
-        </div>
-        <div className="trending-grid">
-          {trendingLeagues.map((t) => (
-            <div key={t.id} className="trending-card">
-              <div className="trending-art" aria-hidden />
-              <div className="trending-info">
-                <strong>{t.name}</strong>
-                <span>{t.members} players · {t.tag}</span>
+      {/* trending — open public leagues waiting for members */}
+      {trending.length > 0 && (
+        <section>
+          <div className="section-head">
+            <h2>Trending Leagues</h2>
+          </div>
+          <div className="trending-grid">
+            {trending.map((t) => (
+              <div key={t.id} className="trending-card">
+                <div className="trending-art" aria-hidden />
+                <div className="trending-info">
+                  <strong>{t.name}</strong>
+                  <span>{t.firstRoundTheme ?? "Round 1 coming soon"}</span>
+                  <span className="trending-slots">
+                    {t.memberCount}/{t.maxMembers} players · {t.openSlots} open
+                  </span>
+                </div>
               </div>
-              <button className="btn trending-join" aria-label={`Join ${t.name}`}>+</button>
-            </div>
-          ))}
-        </div>
-      </section>
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

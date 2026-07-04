@@ -133,6 +133,54 @@ export async function createLeague(deps: Deps, caller: string, input: CreateLeag
   return league;
 }
 
+/** A public league a non-member could discover and claim a spot in. */
+export interface PublicLeagueSummary {
+  id: string;
+  name: string;
+  memberCount: number;
+  maxMembers: number;
+  openSlots: number;
+  /** Round 1's theme once the owner has set it; undefined while unannounced. */
+  firstRoundTheme?: string;
+}
+
+/** Discover open public leagues: public, not yet started (no round past draft),
+ *  with open slots, that the caller isn't already in. Ranked fullest-first
+ *  (momentum), tie-broken by name. Caller trims to the top N (e.g. 3) for the
+ *  dashboard. */
+export async function listOpenPublicLeagues(
+  deps: Deps,
+  caller: string,
+  limit = 12,
+): Promise<PublicLeagueSummary[]> {
+  const leagues = await deps.repo.getPublicLeagues();
+  const open: PublicLeagueSummary[] = [];
+
+  for (const league of leagues) {
+    if (league.visibility !== "public") continue;
+    if (league.memberIds.includes(caller)) continue; // already a member
+    const cap = league.maxMembers ?? 0;
+    const openSlots = cap - league.memberIds.length;
+    if (openSlots <= 0) continue; // full
+
+    const rounds = await deps.repo.getRoundsForLeague(league.id);
+    if (rounds.some((r) => r.status !== "draft")) continue; // already started
+
+    const firstRound = [...rounds].sort((a, b) => a.index - b.index)[0];
+    open.push({
+      id: league.id,
+      name: league.name,
+      memberCount: league.memberIds.length,
+      maxMembers: cap,
+      openSlots,
+      firstRoundTheme: firstRound?.theme,
+    });
+  }
+
+  open.sort((a, b) => b.memberCount - a.memberCount || a.name.localeCompare(b.name));
+  return open.slice(0, Math.max(0, limit));
+}
+
 export async function listMyLeagues(deps: Deps, caller: string): Promise<LeagueSummary[]> {
   const leagues = await deps.repo.getLeaguesForUser(caller);
   return Promise.all(

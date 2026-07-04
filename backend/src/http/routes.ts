@@ -56,6 +56,13 @@ export function buildRoutes(deps: Deps): Route[] {
       handler: (req) => leagues.joinLeague(deps, req.caller, asString(asRecord(req.body).code)),
     },
     {
+      // Discover open public leagues. Literal `public` is registered before the
+      // `:leagueId` param route so it wins the match.
+      method: "GET",
+      pattern: "/leagues/public",
+      handler: (req) => leagues.listOpenPublicLeagues(deps, req.caller, Number(req.query.limit) || 12),
+    },
+    {
       method: "GET",
       pattern: "/leagues/:leagueId",
       handler: (req) => leagues.getLeagueDetail(deps, req.caller, req.params.leagueId!),

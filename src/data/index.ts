@@ -12,13 +12,13 @@ export const isApiMode = Boolean(import.meta.env.VITE_API_URL);
 export const data: DataClient = isApiMode ? new ApiClient() : new MockClient();
 
 export type { DataClient } from "./client";
-export { trendingLeagues } from "./mock";
 export type {
   ActivityItem,
   CreateLeagueInput,
   JoinResult,
   LeagueDetail,
   LeagueSummary,
+  PublicLeagueSummary,
   RoundResult,
   Standing,
   VotableSubmission,

@@ -47,6 +47,11 @@ export class MemoryRepository implements Repository {
       .filter((lg) => lg.memberIds.includes(userId))
       .map((lg) => structuredClone(lg));
   }
+  async getPublicLeagues(): Promise<League[]> {
+    return [...this.leagues.values()]
+      .filter((lg) => lg.visibility === "public")
+      .map((lg) => structuredClone(lg));
+  }
   async addMember(leagueId: string, userId: string): Promise<League> {
     const lg = this.leagues.get(leagueId);
     if (!lg) throw new Error(`League not found: ${leagueId}`);
@@ -160,6 +165,13 @@ export class MemoryRepository implements Repository {
         settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-me", "u-james", "u-mia", "u-jpop", "u-sarah", "u-luna"], inviteCode: "BASS-42", visibility: "private" },
       { id: "lg-indie", name: "Indie Anthems", ownerId: "u-luna", musicProvider: "youtube-music",
         settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-luna", "u-mia", "u-jpop"], inviteCode: "INDIE-25", visibility: "private" },
+      // Public, not-yet-started leagues with open slots — discoverable by u-me (not a member).
+      { id: "lg-midnight", name: "Midnight Drives", ownerId: "u-sarah", musicProvider: "spotify",
+        settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-sarah", "u-james", "u-luna"], inviteCode: "NIGHT-1", visibility: "public", maxMembers: 8 },
+      { id: "lg-retro", name: "Retro Futures", ownerId: "u-jpop", musicProvider: "spotify",
+        settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-jpop", "u-mia"], inviteCode: "RETRO-1", visibility: "public", maxMembers: 6 },
+      { id: "lg-urban", name: "Urban Beats", ownerId: "u-luna", musicProvider: "spotify",
+        settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-luna", "u-james", "u-sarah", "u-mia"], inviteCode: "URBAN-1", visibility: "public", maxMembers: 10 },
     ];
     for (const lg of seedLeagues) {
       this.leagues.set(lg.id, lg);
@@ -174,6 +186,10 @@ export class MemoryRepository implements Repository {
       { id: "r-bb-4", leagueId: "lg-bassline", index: 4, theme: "Drop the Bass", status: "revealed", playlistUrl: "https://example.com/mock-playlist/bb4" },
       { id: "r-in-2", leagueId: "lg-indie", index: 2, theme: "Bedroom Pop Gems", status: "submitting", submissionDeadline: isoInDays(3) },
       { id: "r-in-1", leagueId: "lg-indie", index: 1, theme: "Garage Revival", status: "complete" },
+      // Draft first rounds for the open public leagues (not started — still gathering members).
+      { id: "r-mn-1", leagueId: "lg-midnight", index: 1, theme: "Late-night highway anthems", status: "draft" },
+      { id: "r-rf-1", leagueId: "lg-retro", index: 1, theme: "80s sci-fi soundtracks", status: "draft" },
+      { id: "r-ub-1", leagueId: "lg-urban", index: 1, theme: "Lo-fi study session", status: "draft" },
     ];
     for (const r of seedRounds) this.rounds.set(r.id, r);
 
