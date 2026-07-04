@@ -39,7 +39,7 @@ export function ProfilePage() {
         <Avatar name={user?.displayName ?? "Player"} size={84} />
         <div className="profile-id">
           <h1>{user?.displayName ?? "Player"}</h1>
-          <span className="grad-text profile-plan">PRO PLAN · Curator</span>
+          {user?.email && <span className="profile-email">{user.email}</span>}
         </div>
         <button className="btn profile-edit">Edit profile</button>
       </header>

@@ -11,7 +11,7 @@
 }
 .profile-id { display: flex; flex-direction: column; gap: 4px; }
 .profile-id h1 { margin: 0; font-size: 28px; }
-.profile-plan { font-size: 12px; font-weight: 700; letter-spacing: 0.05em; }
+.profile-email { font-size: 13px; color: var(--text-muted); }
 .profile-edit { margin-left: auto; }
 
 .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
