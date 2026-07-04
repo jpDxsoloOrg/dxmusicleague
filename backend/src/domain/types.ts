@@ -49,6 +49,9 @@ export interface League {
   /** Player cap for public leagues; open slots = maxMembers − memberIds.length.
    *  Unset for private (uncapped) leagues. */
   maxMembers?: number;
+  /** How many rounds the league will run, chosen by the owner at creation.
+   *  Drives the "Round X of N" display and the round stepper. */
+  roundCount: number;
 }
 
 export interface Round {

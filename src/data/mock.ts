@@ -30,6 +30,7 @@ export const leagues: League[] = [
     memberIds: ["u-me", "u-sarah", "u-james", "u-mia", "u-luna"],
     inviteCode: "SYNTH-23",
     visibility: "private",
+    roundCount: 12,
   },
   {
     id: "lg-vaporwave",
@@ -40,6 +41,7 @@ export const leagues: League[] = [
     memberIds: ["u-me", "u-sarah", "u-jpop", "u-luna"],
     inviteCode: "VAPOR-88",
     visibility: "private",
+    roundCount: 8,
   },
   {
     id: "lg-bassline",
@@ -50,6 +52,7 @@ export const leagues: League[] = [
     memberIds: ["u-me", "u-james", "u-mia", "u-jpop", "u-sarah", "u-luna"],
     inviteCode: "BASS-42",
     visibility: "private",
+    roundCount: 8,
   },
   // A league the current user is NOT in yet — joinable via invite code below.
   {
@@ -61,6 +64,7 @@ export const leagues: League[] = [
     memberIds: ["u-luna", "u-mia", "u-jpop"],
     inviteCode: "INDIE-25",
     visibility: "private",
+    roundCount: 8,
   },
   // Public, not-yet-started leagues with open slots — discoverable by u-me (not a member).
   {
@@ -73,6 +77,7 @@ export const leagues: League[] = [
     inviteCode: "NIGHT-1",
     visibility: "public",
     maxMembers: 8,
+    roundCount: 8,
   },
   {
     id: "lg-retro",
@@ -84,6 +89,7 @@ export const leagues: League[] = [
     inviteCode: "RETRO-1",
     visibility: "public",
     maxMembers: 6,
+    roundCount: 6,
   },
   {
     id: "lg-urban",
@@ -95,6 +101,7 @@ export const leagues: League[] = [
     inviteCode: "URBAN-1",
     visibility: "public",
     maxMembers: 10,
+    roundCount: 10,
   },
 ];
 
@@ -219,7 +226,7 @@ export function getMyLeagueSummaries(): LeagueSummary[] {
       return {
         league,
         currentRound,
-        totalRounds: Math.max(league.id === "lg-synthwave" ? 12 : 8, leagueRounds.length),
+        totalRounds: league.roundCount || leagueRounds.length,
         completionPct: MOCK_COMPLETION[league.id] ?? 0,
         members: league.memberIds.map((id) => users[id]).filter(Boolean),
       };
@@ -239,6 +246,8 @@ export interface CreateLeagueInput {
   visibility?: LeagueVisibility;
   /** Required (and only meaningful) when visibility is "public". */
   maxMembers?: number;
+  /** How many rounds the league will run (1–20). */
+  roundCount?: number;
 }
 
 /** Create a league owned by the current user and return it. */
@@ -256,6 +265,7 @@ export function createLeague(input: CreateLeagueInput): League {
     inviteCode: `NEW-${100 + createdLeagueSeq}`,
     visibility,
     maxMembers: visibility === "public" ? input.maxMembers : undefined,
+    roundCount: input.roundCount && input.roundCount >= 1 ? input.roundCount : 8,
   };
   leagues.push(league);
   inviteCodes[league.inviteCode] = league.id;

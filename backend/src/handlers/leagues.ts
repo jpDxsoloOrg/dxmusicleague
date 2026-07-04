@@ -90,6 +90,9 @@ function newInviteCode(): string {
 /** Player-cap bounds for public leagues (owner + at least one other; sane ceiling). */
 const MIN_PUBLIC_MEMBERS = 2;
 const MAX_PUBLIC_MEMBERS = 50;
+/** How many rounds a league may run. */
+const MIN_ROUNDS = 1;
+const MAX_ROUNDS = 20;
 
 export interface CreateLeagueInput {
   name: string;
@@ -98,12 +101,18 @@ export interface CreateLeagueInput {
   visibility?: LeagueVisibility;
   /** Required (and only meaningful) when visibility is "public". */
   maxMembers?: number;
+  /** How many rounds the league will run (1–20). */
+  roundCount?: number;
 }
 
 export async function createLeague(deps: Deps, caller: string, input: CreateLeagueInput): Promise<League> {
   const name = (input?.name ?? "").trim();
   if (!name) throw badRequest("Give your league a name.");
   if (!input?.musicProvider) throw badRequest("Pick a music service.");
+
+  const roundCount = asInt(input?.roundCount);
+  if (!(roundCount >= MIN_ROUNDS)) throw badRequest(`A league needs at least ${MIN_ROUNDS} round.`);
+  if (roundCount > MAX_ROUNDS) throw badRequest(`A league can have at most ${MAX_ROUNDS} rounds.`);
 
   const visibility: LeagueVisibility = input?.visibility === "public" ? "public" : "private";
   let maxMembers: number | undefined;
@@ -126,6 +135,7 @@ export async function createLeague(deps: Deps, caller: string, input: CreateLeag
     inviteCode: newInviteCode(),
     visibility,
     maxMembers,
+    roundCount,
   };
   await deps.repo.createLeague(league);
   await deps.repo.putInvite(league.inviteCode, league.id);
@@ -235,7 +245,8 @@ export async function listMyLeagues(deps: Deps, caller: string): Promise<LeagueS
       return {
         league,
         currentRound,
-        totalRounds: rounds.length,
+        // The owner's planned count; fall back to created rounds for legacy leagues.
+        totalRounds: league.roundCount || rounds.length,
         completionPct: await completionPct(deps.repo, league, currentRound),
         members: await toUserViews(deps.users, league.memberIds),
       };
@@ -268,7 +279,8 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
     league,
     rounds,
     currentRound,
-    totalRounds: rounds.length,
+    // The owner's planned count; fall back to created rounds for legacy leagues.
+    totalRounds: league.roundCount || rounds.length,
     standings,
     activity: [],
   };

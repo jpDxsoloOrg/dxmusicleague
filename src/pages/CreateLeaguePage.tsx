@@ -15,12 +15,14 @@ export function CreateLeaguePage() {
   const [provider, setProvider] = useState<MusicProviderId>("spotify");
   const [visibility, setVisibility] = useState<LeagueVisibility>("private");
   const [maxMembers, setMaxMembers] = useState(8);
+  const [roundCount, setRoundCount] = useState(8);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const isPublic = visibility === "public";
   const capOk = !isPublic || (maxMembers >= 2 && maxMembers <= 50);
-  const canCreate = name.trim().length >= 3 && capOk && !busy;
+  const roundsOk = roundCount >= 1 && roundCount <= 20;
+  const canCreate = name.trim().length >= 3 && capOk && roundsOk && !busy;
 
   async function handleCreate() {
     if (!canCreate) return;
@@ -32,6 +34,7 @@ export function CreateLeaguePage() {
         musicProvider: provider,
         visibility,
         maxMembers: isPublic ? maxMembers : undefined,
+        roundCount,
       });
       navigate(`/leagues/${league.id}`);
     } catch (err) {
@@ -80,6 +83,19 @@ export function CreateLeaguePage() {
           <span className="field-hint">
             Players never log in to this service — they just open the public playlist you share each round.
           </span>
+        </label>
+
+        <label className="field">
+          <span className="field-label">Number of rounds</span>
+          <input
+            className="field-input"
+            type="number"
+            min={1}
+            max={20}
+            value={roundCount}
+            onChange={(e) => setRoundCount(Number(e.target.value))}
+          />
+          <span className="field-hint">How many rounds this league will run. Between 1 and 20 — you'll set each round's theme later.</span>
         </label>
 
         <label className="field">

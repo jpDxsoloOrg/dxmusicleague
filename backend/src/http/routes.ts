@@ -42,6 +42,7 @@ export function buildRoutes(deps: Deps): Route[] {
           musicProvider: body.musicProvider as never,
           visibility: body.visibility as never,
           maxMembers: typeof body.maxMembers === "number" ? body.maxMembers : undefined,
+          roundCount: typeof body.roundCount === "number" ? body.roundCount : undefined,
         });
       },
     },

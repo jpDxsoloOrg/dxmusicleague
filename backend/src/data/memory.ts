@@ -158,20 +158,20 @@ export class MemoryRepository implements Repository {
 
     const seedLeagues: League[] = [
       { id: "lg-synthwave", name: "Synthwave Souls", ownerId: "u-me", musicProvider: "youtube-music",
-        settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-me", "u-sarah", "u-james", "u-mia", "u-luna"], inviteCode: "SYNTH-23", visibility: "private" },
+        settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-me", "u-sarah", "u-james", "u-mia", "u-luna"], inviteCode: "SYNTH-23", visibility: "private", roundCount: 12 },
       { id: "lg-vaporwave", name: "Vaporwave Vibes", ownerId: "u-sarah", musicProvider: "youtube-music",
-        settings: { ...DEFAULT_LEAGUE_SETTINGS, votePoolSize: 12 }, memberIds: ["u-me", "u-sarah", "u-jpop", "u-luna"], inviteCode: "VAPOR-88", visibility: "private" },
+        settings: { ...DEFAULT_LEAGUE_SETTINGS, votePoolSize: 12 }, memberIds: ["u-me", "u-sarah", "u-jpop", "u-luna"], inviteCode: "VAPOR-88", visibility: "private", roundCount: 8 },
       { id: "lg-bassline", name: "Bassline Battle", ownerId: "u-james", musicProvider: "youtube-music",
-        settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-me", "u-james", "u-mia", "u-jpop", "u-sarah", "u-luna"], inviteCode: "BASS-42", visibility: "private" },
+        settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-me", "u-james", "u-mia", "u-jpop", "u-sarah", "u-luna"], inviteCode: "BASS-42", visibility: "private", roundCount: 8 },
       { id: "lg-indie", name: "Indie Anthems", ownerId: "u-luna", musicProvider: "youtube-music",
-        settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-luna", "u-mia", "u-jpop"], inviteCode: "INDIE-25", visibility: "private" },
+        settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-luna", "u-mia", "u-jpop"], inviteCode: "INDIE-25", visibility: "private", roundCount: 8 },
       // Public, not-yet-started leagues with open slots — discoverable by u-me (not a member).
       { id: "lg-midnight", name: "Midnight Drives", ownerId: "u-sarah", musicProvider: "spotify",
-        settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-sarah", "u-james", "u-luna"], inviteCode: "NIGHT-1", visibility: "public", maxMembers: 8 },
+        settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-sarah", "u-james", "u-luna"], inviteCode: "NIGHT-1", visibility: "public", maxMembers: 8, roundCount: 8 },
       { id: "lg-retro", name: "Retro Futures", ownerId: "u-jpop", musicProvider: "spotify",
-        settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-jpop", "u-mia"], inviteCode: "RETRO-1", visibility: "public", maxMembers: 6 },
+        settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-jpop", "u-mia"], inviteCode: "RETRO-1", visibility: "public", maxMembers: 6, roundCount: 6 },
       { id: "lg-urban", name: "Urban Beats", ownerId: "u-luna", musicProvider: "spotify",
-        settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-luna", "u-james", "u-sarah", "u-mia"], inviteCode: "URBAN-1", visibility: "public", maxMembers: 10 },
+        settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-luna", "u-james", "u-sarah", "u-mia"], inviteCode: "URBAN-1", visibility: "public", maxMembers: 10, roundCount: 10 },
     ];
     for (const lg of seedLeagues) {
       this.leagues.set(lg.id, lg);

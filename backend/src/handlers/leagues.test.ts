@@ -18,6 +18,7 @@ function league(over: Partial<League> & Pick<League, "id" | "name" | "visibility
     memberIds: ["u-owner"],
     inviteCode: `C-${over.id}`,
     maxMembers: 8,
+    roundCount: 8,
     ...over,
   };
 }

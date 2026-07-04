@@ -52,6 +52,7 @@ export class DynamoRepository implements Repository {
         inviteCode: league.inviteCode,
         visibility: league.visibility,
         maxMembers: league.maxMembers,
+        roundCount: league.roundCount,
         createdAt: new Date().toISOString(),
       },
       ...league.memberIds.map((userId) => this.memberItem(league.id, userId)),
@@ -90,6 +91,9 @@ export class DynamoRepository implements Repository {
       // Older leagues predate visibility — treat them as private.
       visibility: (meta.Item.visibility as League["visibility"] | undefined) ?? "private",
       maxMembers: meta.Item.maxMembers as number | undefined,
+      // Legacy leagues predate roundCount → 0, which the view models fall back
+      // from to the count of created rounds.
+      roundCount: (meta.Item.roundCount as number | undefined) ?? 0,
     };
   }
 
