@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { data } from "../data";
 import { listProviderOptions } from "../music";
 import type { MusicProviderId } from "../music";
+import type { LeagueVisibility } from "../domain/types";
 import "./CreateLeaguePage.css";
 
 export function CreateLeaguePage() {
@@ -12,17 +13,26 @@ export function CreateLeaguePage() {
   const [name, setName] = useState("");
   // Default to Spotify per the product decision (musicLeagueClone.md §8).
   const [provider, setProvider] = useState<MusicProviderId>("spotify");
+  const [visibility, setVisibility] = useState<LeagueVisibility>("private");
+  const [maxMembers, setMaxMembers] = useState(8);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const canCreate = name.trim().length >= 3 && !busy;
+  const isPublic = visibility === "public";
+  const capOk = !isPublic || (maxMembers >= 2 && maxMembers <= 50);
+  const canCreate = name.trim().length >= 3 && capOk && !busy;
 
   async function handleCreate() {
     if (!canCreate) return;
     setBusy(true);
     setError(null);
     try {
-      const league = await data.createLeague({ name, musicProvider: provider });
+      const league = await data.createLeague({
+        name,
+        musicProvider: provider,
+        visibility,
+        maxMembers: isPublic ? maxMembers : undefined,
+      });
       navigate(`/leagues/${league.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't create the league.");
@@ -71,6 +81,38 @@ export function CreateLeaguePage() {
             Players never log in to this service — they just open the public playlist you share each round.
           </span>
         </label>
+
+        <label className="field">
+          <span className="field-label">Visibility</span>
+          <select
+            className="field-input"
+            value={visibility}
+            onChange={(e) => setVisibility(e.target.value as LeagueVisibility)}
+          >
+            <option value="private">Private — invite code only</option>
+            <option value="public">Public — anyone can find and join</option>
+          </select>
+          <span className="field-hint">
+            {isPublic
+              ? "Your league appears in Discover so players can claim an open spot."
+              : "Only people you share the invite code with can join."}
+          </span>
+        </label>
+
+        {isPublic && (
+          <label className="field">
+            <span className="field-label">Max players</span>
+            <input
+              className="field-input"
+              type="number"
+              min={2}
+              max={50}
+              value={maxMembers}
+              onChange={(e) => setMaxMembers(Number(e.target.value))}
+            />
+            <span className="field-hint">Sets the open slots players can claim. Between 2 and 50.</span>
+          </label>
+        )}
 
         {error && <span className="field-error">{error}</span>}
 

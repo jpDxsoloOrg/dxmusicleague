@@ -3,7 +3,7 @@
 // request into these calls and serialize the result. Return shapes match the
 // frontend's mock functions exactly (src/data/mock.ts) so the pages don't change.
 
-import type { League, LeagueSettings, Round } from "../domain/types.ts";
+import type { League, LeagueSettings, LeagueVisibility, Round } from "../domain/types.ts";
 import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types.ts";
 import { badRequest, conflict, forbidden, notFound } from "../domain/errors.ts";
 import type { Repository, UserDirectory } from "../data/repository.ts";
@@ -87,15 +87,34 @@ function newInviteCode(): string {
 
 // ---- handlers ----
 
+/** Player-cap bounds for public leagues (owner + at least one other; sane ceiling). */
+const MIN_PUBLIC_MEMBERS = 2;
+const MAX_PUBLIC_MEMBERS = 50;
+
 export interface CreateLeagueInput {
   name: string;
   musicProvider: League["musicProvider"];
+  /** Defaults to "private" when omitted. */
+  visibility?: LeagueVisibility;
+  /** Required (and only meaningful) when visibility is "public". */
+  maxMembers?: number;
 }
 
 export async function createLeague(deps: Deps, caller: string, input: CreateLeagueInput): Promise<League> {
   const name = (input?.name ?? "").trim();
   if (!name) throw badRequest("Give your league a name.");
   if (!input?.musicProvider) throw badRequest("Pick a music service.");
+
+  const visibility: LeagueVisibility = input?.visibility === "public" ? "public" : "private";
+  let maxMembers: number | undefined;
+  if (visibility === "public") {
+    const cap = asInt(input?.maxMembers);
+    if (!(cap >= MIN_PUBLIC_MEMBERS)) {
+      throw badRequest(`Public leagues need a player cap of at least ${MIN_PUBLIC_MEMBERS}.`);
+    }
+    if (cap > MAX_PUBLIC_MEMBERS) throw badRequest(`Player cap can't exceed ${MAX_PUBLIC_MEMBERS}.`);
+    maxMembers = cap;
+  }
 
   const league: League = {
     id: newLeagueId(name),
@@ -105,6 +124,8 @@ export async function createLeague(deps: Deps, caller: string, input: CreateLeag
     settings: { ...DEFAULT_LEAGUE_SETTINGS },
     memberIds: [caller],
     inviteCode: newInviteCode(),
+    visibility,
+    maxMembers,
   };
   await deps.repo.createLeague(league);
   await deps.repo.putInvite(league.inviteCode, league.id);

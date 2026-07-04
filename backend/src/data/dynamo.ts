@@ -49,6 +49,8 @@ export class DynamoRepository implements Repository {
         musicProvider: league.musicProvider,
         settings: league.settings,
         inviteCode: league.inviteCode,
+        visibility: league.visibility,
+        maxMembers: league.maxMembers,
         createdAt: new Date().toISOString(),
       },
       ...league.memberIds.map((userId) => this.memberItem(league.id, userId)),
@@ -84,6 +86,9 @@ export class DynamoRepository implements Repository {
       memberIds,
       // Older leagues created before invite codes were stored on META fall back to "".
       inviteCode: (meta.Item.inviteCode as string | undefined) ?? "",
+      // Older leagues predate visibility — treat them as private.
+      visibility: (meta.Item.visibility as League["visibility"] | undefined) ?? "private",
+      maxMembers: meta.Item.maxMembers as number | undefined,
     };
   }
 

@@ -32,6 +32,9 @@ export interface LeagueSettings {
   submissionsPerPlayer: number;
 }
 
+/** Private = joinable by invite code only. Public = discoverable + claimable. */
+export type LeagueVisibility = "private" | "public";
+
 export interface League {
   id: string;
   name: string;
@@ -41,6 +44,11 @@ export interface League {
   memberIds: string[];
   /** Shareable code players enter to join. Minted at creation, case-insensitive. */
   inviteCode: string;
+  /** Who can find/join this league. Older records default to "private". */
+  visibility: LeagueVisibility;
+  /** Player cap for public leagues; open slots = maxMembers − memberIds.length.
+   *  Unset for private (uncapped) leagues. */
+  maxMembers?: number;
 }
 
 export interface Round {

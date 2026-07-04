@@ -40,6 +40,8 @@ export function buildRoutes(deps: Deps): Route[] {
         return leagues.createLeague(deps, req.caller, {
           name: asString(body.name),
           musicProvider: body.musicProvider as never,
+          visibility: body.visibility as never,
+          maxMembers: typeof body.maxMembers === "number" ? body.maxMembers : undefined,
         });
       },
     },

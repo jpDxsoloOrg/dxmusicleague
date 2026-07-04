@@ -1,7 +1,7 @@
 // Mock data so the UI is fully clickable before any backend exists.
 // Swap these reads for API calls in Phase 2+ without touching the components.
 
-import type { League, LeagueSettings, Round, User } from "../domain/types";
+import type { League, LeagueSettings, LeagueVisibility, Round, User } from "../domain/types";
 import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types";
 import type { MusicProviderId, Track } from "../music";
 import { trackKey } from "../music";
@@ -29,6 +29,7 @@ export const leagues: League[] = [
     settings: DEFAULT_LEAGUE_SETTINGS,
     memberIds: ["u-me", "u-sarah", "u-james", "u-mia", "u-luna"],
     inviteCode: "SYNTH-23",
+    visibility: "private",
   },
   {
     id: "lg-vaporwave",
@@ -38,6 +39,7 @@ export const leagues: League[] = [
     settings: { ...DEFAULT_LEAGUE_SETTINGS, votePoolSize: 12 },
     memberIds: ["u-me", "u-sarah", "u-jpop", "u-luna"],
     inviteCode: "VAPOR-88",
+    visibility: "private",
   },
   {
     id: "lg-bassline",
@@ -47,6 +49,7 @@ export const leagues: League[] = [
     settings: DEFAULT_LEAGUE_SETTINGS,
     memberIds: ["u-me", "u-james", "u-mia", "u-jpop", "u-sarah", "u-luna"],
     inviteCode: "BASS-42",
+    visibility: "private",
   },
   // A league the current user is NOT in yet — joinable via invite code below.
   {
@@ -57,6 +60,7 @@ export const leagues: League[] = [
     settings: DEFAULT_LEAGUE_SETTINGS,
     memberIds: ["u-luna", "u-mia", "u-jpop"],
     inviteCode: "INDIE-25",
+    visibility: "private",
   },
 ];
 
@@ -126,11 +130,16 @@ let createdLeagueSeq = 0;
 export interface CreateLeagueInput {
   name: string;
   musicProvider: MusicProviderId;
+  /** Defaults to "private" when omitted. */
+  visibility?: LeagueVisibility;
+  /** Required (and only meaningful) when visibility is "public". */
+  maxMembers?: number;
 }
 
 /** Create a league owned by the current user and return it. */
 export function createLeague(input: CreateLeagueInput): League {
   createdLeagueSeq += 1;
+  const visibility: LeagueVisibility = input.visibility === "public" ? "public" : "private";
   const league: League = {
     id: `lg-new-${createdLeagueSeq}`,
     name: input.name.trim(),
@@ -140,6 +149,8 @@ export function createLeague(input: CreateLeagueInput): League {
     memberIds: [currentUser.id],
     // Mint a shareable invite code so the new league is joinable too.
     inviteCode: `NEW-${100 + createdLeagueSeq}`,
+    visibility,
+    maxMembers: visibility === "public" ? input.maxMembers : undefined,
   };
   leagues.push(league);
   inviteCodes[league.inviteCode] = league.id;
