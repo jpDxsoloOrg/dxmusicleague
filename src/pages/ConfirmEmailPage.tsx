@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { AuthBrand } from "./AuthBrand";
@@ -7,15 +7,33 @@ import "./AuthPage.css";
 export function ConfirmEmailPage() {
   const { confirmSignUp, resendCode, signIn } = useAuth();
   const navigate = useNavigate();
-  const location = useLocation() as { state?: { email?: string; password?: string; from?: string } };
+  const location = useLocation() as {
+    state?: { email?: string; password?: string; from?: string; reconfirm?: boolean };
+  };
   const email = location.state?.email;
   const password = location.state?.password;
   const redirectTo = location.state?.from ?? "/";
+  // Arrived here because an unconfirmed user tried to sign in (vs. a fresh sign-up).
+  const reconfirm = location.state?.reconfirm ?? false;
 
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // In the reconfirm path the sign-up code is likely stale (or never arrived), so
+  // send a fresh one automatically on arrival — once.
+  const autoSent = useRef(false);
+  useEffect(() => {
+    if (reconfirm && email && !autoSent.current) {
+      autoSent.current = true;
+      resendCode(email).then(
+        () => setInfo("Your email isn't verified yet — we sent a fresh code."),
+        (err) => setError(err instanceof Error ? err.message : "Couldn't send a new code."),
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reconfirm, email]);
 
   // Reached directly without a pending sign-up — nothing to confirm.
   if (!email) return <Navigate to="/signup" replace />;
@@ -58,7 +76,11 @@ export function ConfirmEmailPage() {
         <div className="auth-badge" aria-hidden>✉️</div>
         <h1 className="auth-title">Verify your email</h1>
         <p className="auth-subtitle">
-          We sent a 6-digit code to <strong>{email}</strong>. Enter it below to finish creating your account.
+          {reconfirm ? (
+            <>Your account still needs verifying. Enter the 6-digit code sent to <strong>{email}</strong> to finish setting it up.</>
+          ) : (
+            <>We sent a 6-digit code to <strong>{email}</strong>. Enter it below to finish creating your account.</>
+          )}
         </p>
 
         <form className="auth-form" onSubmit={onSubmit}>

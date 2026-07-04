@@ -113,8 +113,10 @@ function userFromSession(session: CognitoUserSession): AuthUser {
   };
 }
 
-/** Surface Cognito's message as a clean AuthError the pages can render. */
+/** Surface Cognito's message + error code as a clean AuthError the pages render.
+ *  The SDK puts the exception name on `.code` (older) or `.name` (newer). */
 function toAuthError(err: unknown): AuthError {
-  const message = (err as { message?: string })?.message ?? "Something went wrong. Please try again.";
-  return new AuthError(message);
+  const e = err as { message?: string; code?: string; name?: string };
+  const message = e?.message ?? "Something went wrong. Please try again.";
+  return new AuthError(message, e?.code ?? e?.name);
 }

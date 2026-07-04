@@ -41,10 +41,17 @@ export interface AuthBackend {
   signOut(): Promise<void>;
 }
 
-/** Thrown by backends with a user-facing message the pages render verbatim. */
+/** Thrown by backends with a user-facing message the pages render verbatim.
+ *  `code` carries the backend's error code (e.g. Cognito's exception name) so
+ *  pages can branch on the cause, not just show the message. */
 export class AuthError extends Error {
-  constructor(message: string) {
+  readonly code?: string;
+  constructor(message: string, code?: string) {
     super(message);
     this.name = "AuthError";
+    this.code = code;
   }
 }
+
+/** Cognito's code for an account that signed up but never verified its email. */
+export const UNCONFIRMED_USER = "UserNotConfirmedException";

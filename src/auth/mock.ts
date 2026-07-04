@@ -5,12 +5,31 @@
 // reloads. Selected automatically when no Cognito config is present.
 
 import type { AuthBackend, AuthUser, SignUpInput, SignUpResult } from "./types.ts";
-import { AuthError } from "./types.ts";
+import { AuthError, UNCONFIRMED_USER } from "./types.ts";
 
 const STORAGE_KEY = "dxml.mockAuth.user";
+const PENDING_KEY = "dxml.mockAuth.unconfirmed"; // emails awaiting verification
 
 // The seed identity the mock data store (src/data/mock.ts) treats as "me".
 const SEED_USER: AuthUser = { id: "u-me", displayName: "Curator Max", email: "you@dxleague.dev" };
+
+// Test affordance: any email containing "unconfirmed" simulates the Cognito
+// needs-verification flow (sign-up leaves it pending; sign-in throws
+// UserNotConfirmedException until confirmed), so the confirm + reconfirm screens
+// are exercisable locally with no AWS. Every other email confirms instantly.
+function simulatesUnconfirmed(email: string): boolean {
+  return email.toLowerCase().includes("unconfirmed");
+}
+function pendingEmails(): Set<string> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(PENDING_KEY) ?? "[]") as string[]);
+  } catch {
+    return new Set();
+  }
+}
+function savePending(set: Set<string>): void {
+  localStorage.setItem(PENDING_KEY, JSON.stringify([...set]));
+}
 
 export class MockAuth implements AuthBackend {
   readonly requiresConfirmation = false;
@@ -28,22 +47,37 @@ export class MockAuth implements AuthBackend {
 
   async signUp(input: SignUpInput): Promise<SignUpResult> {
     if (!input.email.trim() || !input.password) throw new AuthError("Email and password are required.");
+    const email = input.email.trim();
+    if (simulatesUnconfirmed(email)) {
+      // Leave it pending confirmation; don't sign in yet.
+      const pending = pendingEmails();
+      pending.add(email.toLowerCase());
+      savePending(pending);
+      return { needsConfirmation: true };
+    }
     // Pretend the account was created as the seed user; no confirmation needed.
-    this.persist({ ...SEED_USER, displayName: input.displayName.trim() || SEED_USER.displayName, email: input.email.trim() });
+    this.persist({ ...SEED_USER, displayName: input.displayName.trim() || SEED_USER.displayName, email });
     return { needsConfirmation: false };
   }
 
-  async confirmSignUp(): Promise<void> {
-    /* no-op: mock never requires confirmation */
+  async confirmSignUp(email: string): Promise<void> {
+    // Any code works in the mock — just mark the account verified.
+    const pending = pendingEmails();
+    pending.delete(email.trim().toLowerCase());
+    savePending(pending);
   }
 
   async resendCode(): Promise<void> {
-    /* no-op */
+    /* no-op: nothing to email in the mock */
   }
 
   async signIn(email: string, password: string): Promise<AuthUser> {
     if (!email.trim() || !password) throw new AuthError("Enter your email and password.");
-    const user: AuthUser = { ...SEED_USER, email: email.trim() };
+    const trimmed = email.trim();
+    if (pendingEmails().has(trimmed.toLowerCase())) {
+      throw new AuthError("Please confirm your email to continue.", UNCONFIRMED_USER);
+    }
+    const user: AuthUser = { ...SEED_USER, email: trimmed };
     this.persist(user);
     return user;
   }

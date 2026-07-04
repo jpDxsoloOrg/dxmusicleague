@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { AuthError, UNCONFIRMED_USER } from "../auth/types";
 import { AuthBrand } from "./AuthBrand";
 import "./AuthPage.css";
 
@@ -26,6 +27,12 @@ export function SignInPage() {
       await signIn(email, password);
       navigate(redirectTo, { replace: true });
     } catch (err) {
+      // Signed up but never verified their email — send them back to the confirm
+      // screen (which auto-sends a fresh code) instead of a dead-end error.
+      if (err instanceof AuthError && err.code === UNCONFIRMED_USER) {
+        navigate("/confirm", { state: { email, password, from: redirectTo, reconfirm: true } });
+        return;
+      }
       setError(err instanceof Error ? err.message : "Couldn't sign in.");
     } finally {
       setBusy(false);
