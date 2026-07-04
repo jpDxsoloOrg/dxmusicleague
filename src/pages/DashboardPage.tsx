@@ -63,7 +63,7 @@ export function DashboardPage() {
           </div>
           <div className="trending-grid">
             {trending.map((t) => (
-              <div key={t.id} className="trending-card">
+              <Link key={t.id} to={`/leagues/${t.id}/preview`} className="trending-card">
                 <div className="trending-art" aria-hidden />
                 <div className="trending-info">
                   <strong>{t.name}</strong>
@@ -72,7 +72,7 @@ export function DashboardPage() {
                     {t.memberCount}/{t.maxMembers} players · {t.openSlots} open
                   </span>
                 </div>
-              </div>
+              </Link>
             ))}
           </div>
         </section>

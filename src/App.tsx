@@ -12,6 +12,7 @@ import { ProfilePage } from "./pages/ProfilePage";
 import { CreateLeaguePage } from "./pages/CreateLeaguePage";
 import { LeagueSettingsPage } from "./pages/LeagueSettingsPage";
 import { JoinLeaguePage } from "./pages/JoinLeaguePage";
+import { PreviewLeaguePage } from "./pages/PreviewLeaguePage";
 import { LeaguesPage } from "./pages/LeaguesPage";
 import { Placeholder } from "./pages/Placeholder";
 import { SignInPage } from "./pages/SignInPage";
@@ -61,6 +62,7 @@ export default function App() {
               <Route path="/leagues/:leagueId/settings" element={<LeagueSettingsPage />} />
               <Route path="/leagues/new" element={<CreateLeaguePage />} />
               <Route path="/leagues/join" element={<JoinLeaguePage />} />
+              <Route path="/leagues/:leagueId/preview" element={<PreviewLeaguePage />} />
               <Route path="/leagues" element={<LeaguesPage />} />
               <Route path="/rounds" element={<RoundsPage />} />
               <Route path="/leaderboard" element={<LeaderboardPage />} />

@@ -90,6 +90,13 @@
   border-radius: var(--radius);
   background: var(--panel);
   border: 1px solid var(--border);
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.trending-card:hover {
+  border-color: var(--accent, #7c5cff);
+  transform: translateY(-1px);
 }
 .trending-art {
   width: 48px; height: 48px; flex-shrink: 0;

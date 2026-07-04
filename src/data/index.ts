@@ -18,6 +18,7 @@ export type {
   JoinResult,
   LeagueDetail,
   LeagueSummary,
+  PublicLeaguePreview,
   PublicLeagueSummary,
   RoundResult,
   Standing,

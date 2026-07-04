@@ -156,6 +156,43 @@ export function getOpenPublicLeagues(limit = 12): PublicLeagueSummary[] {
   return open.slice(0, Math.max(0, limit));
 }
 
+/** A non-member's preview of a public league. Mirrors the backend
+ *  `PublicLeaguePreview` (handlers/leagues.ts). */
+export interface PublicLeaguePreview {
+  id: string;
+  name: string;
+  memberCount: number;
+  maxMembers: number;
+  openSlots: number;
+  firstRoundTheme?: string;
+  members: { id: string; displayName: string }[];
+  hasStarted: boolean;
+  isFull: boolean;
+  alreadyMember: boolean;
+}
+
+/** Preview a public league by id. Returns undefined for private/missing leagues
+ *  (mirrors the API's 404). */
+export function getPublicLeaguePreview(leagueId: string): PublicLeaguePreview | undefined {
+  const lg = leagues.find((l) => l.id === leagueId && l.visibility === "public");
+  if (!lg) return undefined;
+  const leagueRounds = rounds.filter((r) => r.leagueId === lg.id).sort((a, b) => a.index - b.index);
+  const cap = lg.maxMembers ?? 0;
+  const openSlots = Math.max(0, cap - lg.memberIds.length);
+  return {
+    id: lg.id,
+    name: lg.name,
+    memberCount: lg.memberIds.length,
+    maxMembers: cap,
+    openSlots,
+    firstRoundTheme: leagueRounds[0]?.theme,
+    members: lg.memberIds.map((id) => ({ id, displayName: users[id]?.displayName ?? id })),
+    hasStarted: leagueRounds.some((r) => r.status !== "draft"),
+    isFull: openSlots <= 0,
+    alreadyMember: lg.memberIds.includes(currentUser.id),
+  };
+}
+
 // ---- view-model helpers (computed in the data layer, not the components) ----
 
 export interface LeagueSummary {

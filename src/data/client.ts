@@ -15,6 +15,7 @@ import type {
   JoinResult,
   LeagueDetail,
   LeagueSummary,
+  PublicLeaguePreview,
   PublicLeagueSummary,
   RoundResult,
   Standing,
@@ -41,6 +42,8 @@ export interface DataClient {
   joinLeague(code: string): Promise<JoinResult>;
   /** Discover open public leagues to claim a spot in (not-yet-started, has slots). */
   getPublicLeagues(): Promise<PublicLeagueSummary[]>;
+  /** Non-member preview of one public league; undefined if private/missing. */
+  getPublicLeaguePreview(leagueId: string): Promise<PublicLeaguePreview | undefined>;
   getStandings(leagueId: string): Promise<Standing[]>;
   /** Owner-only: update the league's voting settings. */
   updateLeagueSettings(leagueId: string, settings: EditableLeagueSettings): Promise<League>;

@@ -13,6 +13,7 @@ import {
   getLeagueDetail,
   getMyLeagueSummaries,
   getOpenPublicLeagues,
+  getPublicLeaguePreview,
   getRoundResults,
   getStandings,
   getVotableSubmissions,
@@ -24,6 +25,7 @@ import {
   type JoinResult,
   type LeagueDetail,
   type LeagueSummary,
+  type PublicLeaguePreview,
   type PublicLeagueSummary,
   type RoundResult,
   type Standing,
@@ -47,6 +49,9 @@ export class MockClient implements DataClient {
   }
   async getPublicLeagues(): Promise<PublicLeagueSummary[]> {
     return getOpenPublicLeagues();
+  }
+  async getPublicLeaguePreview(leagueId: string): Promise<PublicLeaguePreview | undefined> {
+    return getPublicLeaguePreview(leagueId);
   }
   async updateLeagueSettings(leagueId: string, settings: EditableLeagueSettings): Promise<League> {
     return updateLeagueSettings(leagueId, settings);

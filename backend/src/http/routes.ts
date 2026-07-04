@@ -68,6 +68,14 @@ export function buildRoutes(deps: Deps): Route[] {
       handler: (req) => leagues.getLeagueDetail(deps, req.caller, req.params.leagueId!),
     },
     {
+      // Non-member preview of a public league (name, first-round theme, members,
+      // open slots). Private/missing leagues 404. Distinct GET shape from the
+      // member detail above.
+      method: "GET",
+      pattern: "/leagues/:leagueId/public",
+      handler: (req) => leagues.getPublicLeaguePreview(deps, req.caller, req.params.leagueId!),
+    },
+    {
       method: "PATCH",
       pattern: "/leagues/:leagueId/settings",
       handler: (req) => {

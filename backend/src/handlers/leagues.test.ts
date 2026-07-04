@@ -5,7 +5,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MemoryRepository, MemoryUserDirectory } from "../data/memory.ts";
 import type { Deps } from "./leagues.ts";
-import { listOpenPublicLeagues } from "./leagues.ts";
+import { getPublicLeaguePreview, listOpenPublicLeagues } from "./leagues.ts";
+import { ApiError } from "../domain/errors.ts";
 import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types.ts";
 import type { League, Round } from "../domain/types.ts";
 
@@ -66,4 +67,33 @@ test("respects the limit", async () => {
   ]);
   const out = await listOpenPublicLeagues(deps, "u-me", 2);
   assert.equal(out.length, 2);
+});
+
+test("preview returns theme, members, slots + flags for a public league", async () => {
+  const deps = await depsWith(
+    [league({ id: "p", name: "Preview", visibility: "public", memberIds: ["u-owner", "u-2"], maxMembers: 4 })],
+    [{ id: "p~1", leagueId: "p", index: 1, theme: "Opening night", status: "draft" }],
+  );
+  const preview = await getPublicLeaguePreview(deps, "u-me", "p");
+  assert.equal(preview.name, "Preview");
+  assert.equal(preview.firstRoundTheme, "Opening night");
+  assert.equal(preview.openSlots, 2);
+  assert.equal(preview.members.length, 2);
+  assert.equal(preview.hasStarted, false);
+  assert.equal(preview.isFull, false);
+  assert.equal(preview.alreadyMember, false);
+});
+
+test("preview flags alreadyMember for a caller who's in the league", async () => {
+  const deps = await depsWith([
+    league({ id: "p", name: "P", visibility: "public", memberIds: ["u-owner", "u-me"], maxMembers: 4 }),
+  ]);
+  const preview = await getPublicLeaguePreview(deps, "u-me", "p");
+  assert.equal(preview.alreadyMember, true);
+});
+
+test("preview 404s for a private or missing league", async () => {
+  const deps = await depsWith([league({ id: "priv", name: "Priv", visibility: "private" })]);
+  await assert.rejects(getPublicLeaguePreview(deps, "u-me", "priv"), (e) => e instanceof ApiError && e.statusCode === 404);
+  await assert.rejects(getPublicLeaguePreview(deps, "u-me", "nope"), (e) => e instanceof ApiError && e.statusCode === 404);
 });

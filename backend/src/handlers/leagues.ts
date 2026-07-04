@@ -181,6 +181,51 @@ export async function listOpenPublicLeagues(
   return open.slice(0, Math.max(0, limit));
 }
 
+/** A non-member's view of a public league: enough to decide whether to claim a
+ *  spot. Never exposes private-league data (those 404 here). */
+export interface PublicLeaguePreview {
+  id: string;
+  name: string;
+  memberCount: number;
+  maxMembers: number;
+  openSlots: number;
+  firstRoundTheme?: string;
+  members: UserView[];
+  /** True once a round has moved past draft — the league is no longer joinable. */
+  hasStarted: boolean;
+  isFull: boolean;
+  /** True when the caller already belongs (UI links them straight in instead). */
+  alreadyMember: boolean;
+}
+
+export async function getPublicLeaguePreview(
+  deps: Deps,
+  caller: string,
+  leagueId: string,
+): Promise<PublicLeaguePreview> {
+  const league = await deps.repo.getLeague(leagueId);
+  // 404 for missing OR non-public — a private league must not be discoverable.
+  if (!league || league.visibility !== "public") throw notFound("That public league doesn't exist.");
+
+  const rounds = await deps.repo.getRoundsForLeague(leagueId);
+  const firstRound = [...rounds].sort((a, b) => a.index - b.index)[0];
+  const cap = league.maxMembers ?? 0;
+  const openSlots = Math.max(0, cap - league.memberIds.length);
+
+  return {
+    id: league.id,
+    name: league.name,
+    memberCount: league.memberIds.length,
+    maxMembers: cap,
+    openSlots,
+    firstRoundTheme: firstRound?.theme,
+    members: await toUserViews(deps.users, league.memberIds),
+    hasStarted: rounds.some((r) => r.status !== "draft"),
+    isFull: openSlots <= 0,
+    alreadyMember: league.memberIds.includes(caller),
+  };
+}
+
 export async function listMyLeagues(deps: Deps, caller: string): Promise<LeagueSummary[]> {
   const leagues = await deps.repo.getLeaguesForUser(caller);
   return Promise.all(

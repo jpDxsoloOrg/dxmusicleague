@@ -11,6 +11,7 @@ import type {
   JoinResult,
   LeagueDetail,
   LeagueSummary,
+  PublicLeaguePreview,
   PublicLeagueSummary,
   RoundResult,
   Standing,
@@ -65,6 +66,15 @@ export class ApiClient implements DataClient {
 
   getPublicLeagues(): Promise<PublicLeagueSummary[]> {
     return request<PublicLeagueSummary[]>("/leagues/public");
+  }
+
+  async getPublicLeaguePreview(leagueId: string): Promise<PublicLeaguePreview | undefined> {
+    try {
+      return await request<PublicLeaguePreview>(`/leagues/${enc(leagueId)}/public`);
+    } catch (err) {
+      if (err instanceof ApiRequestError && err.status === 404) return undefined;
+      throw err;
+    }
   }
 
   async joinLeague(code: string): Promise<JoinResult> {
