@@ -1,0 +1,245 @@
+.help-page { max-width: 1120px; }
+
+/* ---- hero ---- */
+.help-hero {
+  padding: 8px 0 28px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 28px;
+}
+.help-eyebrow {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.help-hero h1 { margin: 10px 0 8px; font-size: 32px; }
+.help-hero p { margin: 0; color: var(--text-muted); font-size: 15px; max-width: 60ch; line-height: 1.6; }
+.help-hero a { color: var(--magenta); font-weight: 600; }
+
+/* ---- two-column wiki layout ---- */
+.help-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 40px;
+  align-items: start;
+}
+
+/* ---- table of contents ---- */
+.help-toc {
+  position: sticky;
+  top: 90px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.help-toc-group { display: flex; flex-direction: column; gap: 2px; }
+.help-toc-head {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 0 10px 4px;
+}
+.help-toc-link {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  border-left: 2px solid transparent;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.help-toc-link:hover { color: var(--text); background: var(--panel); }
+.help-toc-link.active {
+  color: var(--text);
+  background: var(--panel);
+  border-left-color: var(--magenta);
+  font-weight: 600;
+}
+
+/* ---- content ---- */
+.help-content { min-width: 0; }
+
+.help-section { scroll-margin-top: 90px; margin-bottom: 44px; }
+.help-section h2 {
+  font-size: 22px;
+  margin: 0 0 14px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.help-section h3 {
+  font-size: 15px;
+  margin: 22px 0 8px;
+  color: var(--text);
+}
+.help-anchor {
+  color: var(--text-dim);
+  font-weight: 700;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  margin-left: -20px;
+  width: 12px;
+}
+.help-section h2:hover .help-anchor { opacity: 1; }
+.help-anchor:hover { color: var(--magenta); }
+
+.help-content p { color: var(--text-muted); line-height: 1.7; font-size: 15px; margin: 0 0 14px; }
+.help-content p strong, .help-content li strong { color: var(--text); }
+.help-content a { color: var(--magenta); font-weight: 600; }
+.help-content em { color: var(--text); font-style: italic; }
+.help-content code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 6px;
+  color: var(--text);
+}
+.help-note { font-size: 14px; color: var(--text-dim); }
+
+/* lists */
+.help-list, .help-steps, .help-flow { margin: 0 0 14px; padding-left: 22px; }
+.help-list li, .help-steps li, .help-flow li {
+  color: var(--text-muted);
+  line-height: 1.7;
+  font-size: 15px;
+  margin-bottom: 8px;
+}
+.help-steps { counter-reset: step; }
+
+/* definition lists */
+.help-defs { margin: 0 0 14px; }
+.help-defs dt {
+  font-weight: 700;
+  color: var(--text);
+  font-size: 14px;
+  margin-top: 12px;
+}
+.help-defs dd {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  line-height: 1.6;
+  font-size: 14.5px;
+}
+.help-defs.glossary dt { margin-top: 14px; }
+.help-defs.glossary dt:first-child { margin-top: 0; }
+
+/* inline emphasis helpers */
+.help-term { color: var(--text); font-weight: 600; }
+.help-navref {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  font-size: 0.86em;
+  font-weight: 600;
+  color: var(--text);
+}
+.help-inline-pill { vertical-align: middle; transform: translateY(-1px); }
+
+/* ---- callouts ---- */
+.help-callout {
+  display: flex;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  margin: 4px 0 18px;
+}
+.help-callout strong { display: block; margin-bottom: 3px; color: var(--text); font-size: 14px; }
+.help-callout div > div { color: var(--text-muted); font-size: 14px; line-height: 1.6; }
+.help-callout-icon { font-size: 18px; line-height: 1.4; }
+.help-callout-tip  { border-left-color: var(--status-revealed); }
+.help-callout-note { border-left-color: var(--status-previewing); }
+.help-callout-warn { border-left-color: #ff8a8a; }
+
+/* ---- phase track ---- */
+.phase-track {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0 16px;
+  border-left: 2px solid var(--border);
+  padding-left: 20px;
+}
+.phase-item {
+  position: relative;
+  padding: 8px 0;
+}
+.phase-item::before {
+  content: "";
+  position: absolute;
+  left: -27px;
+  top: 14px;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--panel-2);
+  border: 2px solid var(--border);
+}
+.phase-item .pill { margin-bottom: 6px; }
+.phase-item p { margin: 0; font-size: 14px; }
+
+/* ---- faq ---- */
+.help-faq { display: flex; flex-direction: column; gap: 8px; }
+.help-faq details {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 16px;
+}
+.help-faq summary {
+  cursor: pointer;
+  padding: 12px 0;
+  font-weight: 600;
+  color: var(--text);
+  font-size: 15px;
+  list-style: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.help-faq summary::-webkit-details-marker { display: none; }
+.help-faq summary::after {
+  content: "+";
+  color: var(--text-dim);
+  font-size: 20px;
+  font-weight: 400;
+}
+.help-faq details[open] summary::after { content: "−"; }
+.help-faq details p { margin: 0 0 14px; font-size: 14.5px; }
+
+/* ---- footer ---- */
+.help-foot {
+  margin-top: 8px;
+  padding: 20px;
+  border-radius: var(--radius);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  text-align: center;
+}
+.help-foot p { margin: 0; color: var(--text-muted); }
+
+/* ---- responsive ---- */
+@media (max-width: 900px) {
+  .help-layout { grid-template-columns: 1fr; gap: 0; }
+  .help-toc {
+    position: static;
+    max-height: none;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 14px 24px;
+    padding: 0 0 20px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .help-toc-group { flex: 0 0 auto; }
+}

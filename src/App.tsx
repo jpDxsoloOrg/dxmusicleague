@@ -9,6 +9,7 @@ import { RevealPage } from "./pages/RevealPage";
 import { RoundsPage } from "./pages/RoundsPage";
 import { LeaderboardPage } from "./pages/LeaderboardPage";
 import { ProfilePage } from "./pages/ProfilePage";
+import { HelpPage } from "./pages/HelpPage";
 import { CreateLeaguePage } from "./pages/CreateLeaguePage";
 import { LeagueSettingsPage } from "./pages/LeagueSettingsPage";
 import { JoinLeaguePage } from "./pages/JoinLeaguePage";
@@ -69,6 +70,7 @@ export default function App() {
               <Route path="/rounds" element={<RoundsPage />} />
               <Route path="/leaderboard" element={<LeaderboardPage />} />
               <Route path="/profile" element={<ProfilePage />} />
+              <Route path="/help" element={<HelpPage />} />
               <Route path="*" element={<Placeholder title="Not Found" />} />
             </Route>
           </Route>

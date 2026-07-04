@@ -9,6 +9,7 @@ const NAV = [
   { to: "/rounds", label: "Rounds", icon: "rounds" },
   { to: "/leaderboard", label: "Leaderboard", icon: "leaderboard" },
   { to: "/profile", label: "Profile", icon: "profile" },
+  { to: "/help", label: "Help", icon: "help" },
 ];
 
 export function AppLayout() {
