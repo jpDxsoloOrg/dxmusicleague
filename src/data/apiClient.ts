@@ -87,6 +87,10 @@ export class ApiClient implements DataClient {
     }
   }
 
+  async leaveLeague(leagueId: string): Promise<void> {
+    await request(`/leagues/${enc(leagueId)}/members/me`, { method: "DELETE" });
+  }
+
   async joinLeague(code: string): Promise<JoinResult> {
     try {
       const { league } = await request<{ league: League }>("/leagues/join", {

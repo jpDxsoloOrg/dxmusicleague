@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { data } from "../data";
 import type { League, Round, RoundStatus } from "../domain/types";
 import { getProvider } from "../music";
@@ -47,6 +47,7 @@ function primaryAction(
 
 export function RoundOverviewPage() {
   const { leagueId = "" } = useParams();
+  const navigate = useNavigate();
   const { user } = useAuth();
   const { data: detail, loading, reload } = useAsync(() => data.getLeagueDetail(leagueId), [leagueId]);
   // The caller's own pick for the active round, so they can see it while waiting.
@@ -71,6 +72,19 @@ export function RoundOverviewPage() {
 
   const { league, rounds, currentRound, totalRounds, standings, activity } = detail;
   const providerName = getProvider(league.musicProvider).info.name;
+  const isOwner = league.ownerId === user?.id;
+  // A capped (public) league is full once every slot is taken; uncapped never is.
+  const isFull = Boolean(league.maxMembers && league.memberIds.length >= league.maxMembers);
+
+  async function handleLeave() {
+    if (!window.confirm(`Leave ${league.name}? You can rejoin later with the invite code.`)) return;
+    try {
+      await data.leaveLeague(league.id);
+      navigate("/");
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Couldn't leave the league.");
+    }
+  }
   const deadline = currentRound?.status === "voting"
     ? currentRound?.voteDeadline
     : currentRound?.submissionDeadline;
@@ -103,18 +117,21 @@ export function RoundOverviewPage() {
               <h1>{league.name}</h1>
             </div>
             <div className="ro-head-actions">
-              {league.ownerId === user?.id && (
+              {isOwner ? (
                 <Link to={`/leagues/${league.id}/settings`} className="ro-settings-link">⚙ Settings</Link>
+              ) : (
+                <button className="ro-leave-link" onClick={handleLeave}>Leave league</button>
               )}
               <span className="provider-badge">via {providerName}</span>
             </div>
           </header>
 
-          {league.ownerId === user?.id && (
+          {isOwner && (
             <OwnerRoundControl league={league} currentRound={currentRound} onChange={reload} />
           )}
 
-          {league.inviteCode && <InvitePanel code={league.inviteCode} />}
+          {/* Invite others — hidden once a capped league is full. */}
+          {league.inviteCode && !isFull && <InvitePanel code={league.inviteCode} />}
 
           {/* round stepper */}
           <div className="stepper">

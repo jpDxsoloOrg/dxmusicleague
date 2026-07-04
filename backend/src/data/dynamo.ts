@@ -17,6 +17,7 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
   BatchWriteCommand,
+  DeleteCommand,
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
@@ -140,6 +141,16 @@ export class DynamoRepository implements Repository {
     const lg = await this.getLeague(leagueId);
     if (!lg) throw new Error(`League not found after addMember: ${leagueId}`);
     return lg;
+  }
+
+  async removeMember(leagueId: string, userId: string): Promise<void> {
+    // Drop the membership row (and its GSI1 projection) plus the standing row.
+    await this.doc.send(
+      new DeleteCommand({ TableName: this.tableName, Key: { PK: `LEAGUE#${leagueId}`, SK: `MEMBER#${userId}` } }),
+    );
+    await this.doc.send(
+      new DeleteCommand({ TableName: this.tableName, Key: { PK: `LEAGUE#${leagueId}`, SK: `STANDING#${userId}` } }),
+    );
   }
 
   async updateLeagueSettings(leagueId: string, settings: LeagueSettings): Promise<League> {

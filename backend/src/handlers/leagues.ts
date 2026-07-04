@@ -331,6 +331,25 @@ export async function claimPublicSpot(
   return { league: updated };
 }
 
+/** Leave a league — removes the caller's own membership (and standing). The
+ *  owner can't leave (they delete the league instead). */
+export async function leaveLeague(
+  deps: Deps,
+  caller: string,
+  leagueId: string,
+  targetUserId: string,
+): Promise<{ ok: true }> {
+  if (targetUserId !== caller) throw forbidden("You can only remove yourself from a league.");
+  const league = await deps.repo.getLeague(leagueId);
+  if (!league) throw notFound("That league doesn't exist.");
+  if (!league.memberIds.includes(caller)) throw badRequest("You're not a member of this league.");
+  if (league.ownerId === caller) {
+    throw badRequest("You own this league — delete it instead of leaving.");
+  }
+  await deps.repo.removeMember(leagueId, caller);
+  return { ok: true };
+}
+
 /** Load a league and assert the caller owns it. */
 async function ownedLeague(deps: Deps, caller: string, leagueId: string): Promise<League> {
   const league = await deps.repo.getLeague(leagueId);

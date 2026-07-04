@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MemoryRepository, MemoryUserDirectory } from "../data/memory.ts";
 import type { Deps } from "./leagues.ts";
-import { claimPublicSpot, getPublicLeaguePreview, listOpenPublicLeagues } from "./leagues.ts";
+import { claimPublicSpot, getPublicLeaguePreview, leaveLeague, listOpenPublicLeagues } from "./leagues.ts";
 import { ApiError } from "../domain/errors.ts";
 import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types.ts";
 import type { League, Round } from "../domain/types.ts";
@@ -109,6 +109,23 @@ test("claim adds the caller to an open public league", async () => {
   // standing seeded so the new member shows up on the board
   const standings = await deps.repo.getStandings("p");
   assert.ok(standings.some((s) => s.userId === "u-me" && s.points === 0));
+});
+
+test("leave removes the caller's membership; owner can't leave; only self", async () => {
+  const deps = await depsWith([
+    league({ id: "lg", name: "L", visibility: "public", ownerId: "u-owner", memberIds: ["u-owner", "u-me"], maxMembers: 8 }),
+  ]);
+  const is = (code: number) => (e: unknown) => e instanceof ApiError && e.statusCode === code;
+  // owner can't leave their own league
+  await assert.rejects(leaveLeague(deps, "u-owner", "lg", "u-owner"), is(400));
+  // can only remove yourself
+  await assert.rejects(leaveLeague(deps, "u-me", "lg", "u-owner"), is(403));
+  // a member leaves successfully
+  await leaveLeague(deps, "u-me", "lg", "u-me");
+  const after = await deps.repo.getLeague("lg");
+  assert.deepEqual(after?.memberIds, ["u-owner"]);
+  // leaving again (not a member) is a 400
+  await assert.rejects(leaveLeague(deps, "u-me", "lg", "u-me"), is(400));
 });
 
 test("claim rejects full / started / already-member / private-or-missing", async () => {

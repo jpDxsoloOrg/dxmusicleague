@@ -17,6 +17,8 @@ export interface Repository {
   getPublicLeagues(): Promise<League[]>;
   /** Add a member to a league (idempotent). Returns the updated league. */
   addMember(leagueId: string, userId: string): Promise<League>;
+  /** Remove a member and their standing from a league (idempotent). */
+  removeMember(leagueId: string, userId: string): Promise<void>;
   /** Replace a league's settings. Returns the updated league. */
   updateLeagueSettings(leagueId: string, settings: LeagueSettings): Promise<League>;
   /** Delete a league and every record scoped to it (members, rounds, their

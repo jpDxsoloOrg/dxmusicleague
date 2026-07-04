@@ -83,6 +83,15 @@ export function buildRoutes(deps: Deps): Route[] {
       handler: (req) => leagues.claimPublicSpot(deps, req.caller, req.params.leagueId!),
     },
     {
+      // Leave a league = delete your own membership. ":userId" may be "me".
+      method: "DELETE",
+      pattern: "/leagues/:leagueId/members/:userId",
+      handler: (req) => {
+        const target = req.params.userId === "me" ? req.caller : req.params.userId!;
+        return leagues.leaveLeague(deps, req.caller, req.params.leagueId!, target);
+      },
+    },
+    {
       method: "PATCH",
       pattern: "/leagues/:leagueId/settings",
       handler: (req) => {

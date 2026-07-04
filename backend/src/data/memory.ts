@@ -58,6 +58,11 @@ export class MemoryRepository implements Repository {
     if (!lg.memberIds.includes(userId)) lg.memberIds.push(userId);
     return structuredClone(lg);
   }
+  async removeMember(leagueId: string, userId: string): Promise<void> {
+    const lg = this.leagues.get(leagueId);
+    if (lg) lg.memberIds = lg.memberIds.filter((id) => id !== userId);
+    this.standings.delete(`${leagueId}/${userId}`);
+  }
   async updateLeagueSettings(leagueId: string, settings: LeagueSettings): Promise<League> {
     const lg = this.leagues.get(leagueId);
     if (!lg) throw new Error(`League not found: ${leagueId}`);

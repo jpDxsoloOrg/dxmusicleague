@@ -308,6 +308,14 @@ export function claimPublicSpot(leagueId: string): JoinResult {
   return { ok: true, league };
 }
 
+/** Leave a league (mock: drop the current user from memberIds). */
+export function leaveLeague(leagueId: string): void {
+  const league = leagues.find((lg) => lg.id === leagueId);
+  if (!league) throw new Error("That league doesn't exist.");
+  if (league.ownerId === currentUser.id) throw new Error("You own this league — delete it instead of leaving.");
+  league.memberIds = league.memberIds.filter((id) => id !== currentUser.id);
+}
+
 /** Owner edits a league's voting settings (mock: mutate in place). */
 export function updateLeagueSettings(
   leagueId: string,
