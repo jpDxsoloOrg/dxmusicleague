@@ -102,6 +102,18 @@ export async function submitSong(
   return submission;
 }
 
+/** The caller's own submission for a round (or null if they haven't picked yet),
+ *  so they can see what they chose while waiting for everyone else. Available in
+ *  any round status; only requires league membership. */
+export async function getMySubmission(
+  deps: Deps,
+  caller: string,
+  roundId: string,
+): Promise<Submission | null> {
+  await roundForMember(deps, caller, roundId);
+  return (await deps.repo.getSubmission(roundId, caller)) ?? null;
+}
+
 /** The anonymized song list — every submission except the caller's own, with no
  *  submitter identity. Available once submissions close: during `previewing`
  *  (listen to the playlist) and `voting`. */

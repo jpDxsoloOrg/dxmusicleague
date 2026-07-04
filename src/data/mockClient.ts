@@ -93,12 +93,20 @@ export class MockClient implements DataClient {
     return getRoundResults(roundId);
   }
 
+  // Remembers the current user's pick per round so the round page can show it
+  // back (the real backend persists this; the mock keeps it in memory).
+  private mySubs = new Map<string, Submission>();
+
   async submitSong(roundId: string, track: Track, comment?: string): Promise<Submission> {
-    // The mock vote screen uses canned submissions; just echo a stub back.
-    return { id: "sub-mock", roundId, userId: currentUser.id, track, comment };
+    const sub: Submission = { id: `sub-mock-${roundId}`, roundId, userId: currentUser.id, track, comment };
+    this.mySubs.set(roundId, sub);
+    return sub;
   }
   async getVotableSubmissions(roundId: string): Promise<VotableSubmission[]> {
     return getVotableSubmissions(roundId);
+  }
+  async getMySubmission(roundId: string): Promise<Submission | null> {
+    return this.mySubs.get(roundId) ?? null;
   }
 
   async castBallot(roundId: string, _allocations: Record<string, number>, comments?: Record<string, string>): Promise<void> {

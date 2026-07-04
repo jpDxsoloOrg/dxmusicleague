@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MemoryRepository, MemoryUserDirectory } from "../data/memory.ts";
 import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types.ts";
-import { submitSong } from "./submissions.ts";
+import { getMySubmission, submitSong } from "./submissions.ts";
 import type { Deps } from "./leagues.ts";
 
 const ROUND = "r-test"; // an open round with no deadline (created fresh per test)
@@ -37,6 +37,16 @@ test("blocks a second player submitting the same song", async () => {
     () => submitSong(d, "u-james", ROUND, { track: track() }),
     /already been submitted/,
   );
+});
+
+test("getMySubmission returns the caller's own pick, or null before submitting", async () => {
+  const d = await deps();
+  assert.equal(await getMySubmission(d, "u-sarah", ROUND), null);
+  await submitSong(d, "u-sarah", ROUND, { track: track({ title: "Outro" }) });
+  const mine = await getMySubmission(d, "u-sarah", ROUND);
+  assert.equal(mine?.track.title, "Outro");
+  // Another member who hasn't submitted still sees null (only their own).
+  assert.equal(await getMySubmission(d, "u-james", ROUND), null);
 });
 
 test("blocks a second player submitting a different song by the same artist", async () => {

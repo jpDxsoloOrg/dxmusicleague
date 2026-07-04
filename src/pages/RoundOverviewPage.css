@@ -207,3 +207,27 @@
 }
 .owner-input:focus { outline: none; border-color: var(--magenta); }
 .owner-hint { font-size: 13px; color: var(--text-muted); }
+
+/* the player's own pick, shown on the round hero while a round is live */
+.my-pick { margin: 14px 0 4px; }
+.my-pick-label {
+  display: block;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+.my-pick-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  max-width: 360px;
+}
+.my-pick-info { display: flex; flex-direction: column; min-width: 0; }
+.my-pick-info strong { font-size: 14px; }
+.my-pick-info span { font-size: 12px; color: var(--text-muted); }

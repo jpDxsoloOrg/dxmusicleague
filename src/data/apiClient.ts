@@ -139,6 +139,9 @@ export class ApiClient implements DataClient {
   getVotableSubmissions(roundId: string): Promise<VotableSubmission[]> {
     return request<VotableSubmission[]>(`/rounds/${enc(roundId)}/submissions`);
   }
+  getMySubmission(roundId: string): Promise<Submission | null> {
+    return request<Submission | null>(`/rounds/${enc(roundId)}/submission`);
+  }
 
   // ---- Voting + results ----
   async castBallot(roundId: string, allocations: Record<string, number>, comments?: Record<string, string>): Promise<void> {

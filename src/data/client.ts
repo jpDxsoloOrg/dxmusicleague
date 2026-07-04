@@ -60,6 +60,8 @@ export interface DataClient {
   // ---- Submissions ----
   submitSong(roundId: string, track: Track, comment?: string): Promise<Submission>;
   getVotableSubmissions(roundId: string): Promise<VotableSubmission[]>;
+  /** The caller's own pick for a round, or null — shown while awaiting others. */
+  getMySubmission(roundId: string): Promise<Submission | null>;
 
   // ---- Voting + results ----
   castBallot(roundId: string, allocations: Record<string, number>, comments?: Record<string, string>): Promise<void>;

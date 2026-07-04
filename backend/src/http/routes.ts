@@ -143,6 +143,12 @@ export function buildRoutes(deps: Deps): Route[] {
       handler: (req) => submissions.listVotableSubmissions(deps, req.caller, req.params.roundId!),
     },
     {
+      // The caller's own pick for a round (singular) — shown while they wait.
+      method: "GET",
+      pattern: "/rounds/:roundId/submission",
+      handler: (req) => submissions.getMySubmission(deps, req.caller, req.params.roundId!),
+    },
+    {
       method: "POST",
       pattern: "/rounds/:roundId/ballot",
       handler: (req) => {

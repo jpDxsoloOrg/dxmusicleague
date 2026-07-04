@@ -7,6 +7,7 @@ import { useAsync } from "../lib/useAsync";
 import { useAuth } from "../auth/AuthContext";
 import { formatCountdown } from "../lib/time";
 import { Avatar } from "../components/Avatar";
+import { TrackArt } from "../components/TrackArt";
 import "./RoundOverviewPage.css";
 
 const STATUS_LABEL: Record<RoundStatus, string> = {
@@ -20,10 +21,17 @@ const STATUS_LABEL: Record<RoundStatus, string> = {
 
 // What the active round's primary button does, by status. `previewing` has no
 // action — players just listen until voting opens.
-function primaryAction(leagueId: string, round: Round): { label: string; to: string } | undefined {
+function primaryAction(
+  leagueId: string,
+  round: Round,
+  hasSubmission: boolean,
+): { label: string; to: string } | undefined {
   switch (round.status) {
     case "submitting":
-      return { label: "Submit your song", to: `/leagues/${leagueId}/submit` };
+      return {
+        label: hasSubmission ? "Change your song" : "Submit your song",
+        to: `/leagues/${leagueId}/submit`,
+      };
     case "previewing":
       return undefined;
     case "voting":
@@ -40,6 +48,12 @@ export function RoundOverviewPage() {
   const { leagueId = "" } = useParams();
   const { user } = useAuth();
   const { data: detail, loading, reload } = useAsync(() => data.getLeagueDetail(leagueId), [leagueId]);
+  // The caller's own pick for the active round, so they can see it while waiting.
+  const activeRoundId = detail?.currentRound?.id;
+  const { data: mySubmission } = useAsync(
+    () => (activeRoundId ? data.getMySubmission(activeRoundId) : Promise.resolve(null)),
+    [activeRoundId],
+  );
 
   if (loading) {
     return <div className="round-overview"><p className="page-loading">Loading league…</p></div>;
@@ -60,7 +74,13 @@ export function RoundOverviewPage() {
     ? currentRound?.voteDeadline
     : currentRound?.submissionDeadline;
   const countdown = formatCountdown(deadline);
-  const action = currentRound ? primaryAction(league.id, currentRound) : undefined;
+  const action = currentRound ? primaryAction(league.id, currentRound, Boolean(mySubmission)) : undefined;
+  // Show the player's own pick while a round is live (submitting → voting).
+  const showMyPick =
+    mySubmission &&
+    (currentRound?.status === "submitting" ||
+      currentRound?.status === "previewing" ||
+      currentRound?.status === "voting");
 
   // Build the stepper: one node per round index up to totalRounds.
   const steps = Array.from({ length: totalRounds }, (_, i) => {
@@ -121,6 +141,21 @@ export function RoundOverviewPage() {
 
               {currentRound.status === "previewing" && (
                 <p className="hero-desc">🎧 Submissions are in — give the songs a listen. Voting opens shortly.</p>
+              )}
+
+              {showMyPick && mySubmission && (
+                <div className="my-pick">
+                  <span className="my-pick-label">
+                    Your pick{currentRound.status === "submitting" ? " — waiting for the other players" : ""}
+                  </span>
+                  <div className="my-pick-card">
+                    <TrackArt track={mySubmission.track} size={48} />
+                    <div className="my-pick-info">
+                      <strong>{mySubmission.track.title}</strong>
+                      <span>{mySubmission.track.artists.join(", ")}</span>
+                    </div>
+                  </div>
+                </div>
               )}
 
               <div className="hero-footer">
