@@ -14,8 +14,8 @@ export function CreateLeaguePage() {
   // Default to Spotify per the product decision (musicLeagueClone.md §8).
   const [provider, setProvider] = useState<MusicProviderId>("spotify");
   const [visibility, setVisibility] = useState<LeagueVisibility>("private");
-  const [maxMembers, setMaxMembers] = useState(8);
-  const [roundCount, setRoundCount] = useState(8);
+  const [maxMembers, setMaxMembers] = useState(5);
+  const [roundCount, setRoundCount] = useState(3);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
