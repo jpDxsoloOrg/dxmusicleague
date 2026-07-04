@@ -18,6 +18,7 @@ import { Placeholder } from "./pages/Placeholder";
 import { SignInPage } from "./pages/SignInPage";
 import { SignUpPage } from "./pages/SignUpPage";
 import { ConfirmEmailPage } from "./pages/ConfirmEmailPage";
+import { ForgotPasswordPage } from "./pages/ForgotPasswordPage";
 
 /** Gate for the authenticated app. Sends signed-out users to /signin,
  *  remembering where they were headed so sign-in can return them. */
@@ -47,6 +48,7 @@ export default function App() {
           <Route element={<RedirectIfAuthed />}>
             <Route path="/signin" element={<SignInPage />} />
             <Route path="/signup" element={<SignUpPage />} />
+            <Route path="/forgot" element={<ForgotPasswordPage />} />
           </Route>
           {/* /confirm needs the pending-signup state even before a session exists */}
           <Route path="/confirm" element={<ConfirmEmailPage />} />

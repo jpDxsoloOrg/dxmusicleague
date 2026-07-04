@@ -71,6 +71,17 @@ export class MockAuth implements AuthBackend {
     /* no-op: nothing to email in the mock */
   }
 
+  async forgotPassword(email: string): Promise<void> {
+    if (!email.trim()) throw new AuthError("Enter your email to reset your password.");
+    /* no-op: pretend a reset code was emailed */
+  }
+
+  async confirmForgotPassword(_email: string, code: string, newPassword: string): Promise<void> {
+    if (!code.trim()) throw new AuthError("Enter the reset code from your email.");
+    if (newPassword.length < 8) throw new AuthError("Password must be at least 8 characters.");
+    /* no-op: mock has no password store — any code resets successfully */
+  }
+
   async signIn(email: string, password: string): Promise<AuthUser> {
     if (!email.trim() || !password) throw new AuthError("Enter your email and password.");
     const trimmed = email.trim();

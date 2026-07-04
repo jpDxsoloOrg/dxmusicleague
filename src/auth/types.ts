@@ -37,6 +37,11 @@ export interface AuthBackend {
   confirmSignUp(email: string, code: string): Promise<void>;
   resendCode(email: string): Promise<void>;
 
+  /** Start a password reset — emails the user a reset code. */
+  forgotPassword(email: string): Promise<void>;
+  /** Finish a password reset with the emailed code and a new password. */
+  confirmForgotPassword(email: string, code: string, newPassword: string): Promise<void>;
+
   signIn(email: string, password: string): Promise<AuthUser>;
   signOut(): Promise<void>;
 }

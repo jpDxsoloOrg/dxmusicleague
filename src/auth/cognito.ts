@@ -78,6 +78,24 @@ export class CognitoAuth implements AuthBackend {
     });
   }
 
+  forgotPassword(email: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.user(email).forgotPassword({
+        onSuccess: () => resolve(),
+        onFailure: (err) => reject(toAuthError(err)),
+      });
+    });
+  }
+
+  confirmForgotPassword(email: string, code: string, newPassword: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.user(email).confirmPassword(code.trim(), newPassword, {
+        onSuccess: () => resolve(),
+        onFailure: (err) => reject(toAuthError(err)),
+      });
+    });
+  }
+
   signIn(email: string, password: string): Promise<AuthUser> {
     const cognitoUser = this.user(email);
     const details = new AuthenticationDetails({ Username: email.trim(), Password: password });

@@ -16,6 +16,8 @@ interface AuthContextValue {
   signUp(input: SignUpInput): Promise<SignUpResult>;
   confirmSignUp(email: string, code: string): Promise<void>;
   resendCode(email: string): Promise<void>;
+  forgotPassword(email: string): Promise<void>;
+  confirmForgotPassword(email: string, code: string, newPassword: string): Promise<void>;
   signIn(email: string, password: string): Promise<void>;
   signOut(): Promise<void>;
 }
@@ -41,6 +43,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     signUp: (input) => auth.signUp(input),
     confirmSignUp: (email, code) => auth.confirmSignUp(email, code),
     resendCode: (email) => auth.resendCode(email),
+    forgotPassword: (email) => auth.forgotPassword(email),
+    confirmForgotPassword: (email, code, newPassword) => auth.confirmForgotPassword(email, code, newPassword),
     signIn: async (email, password) => {
       setUser(await auth.signIn(email, password));
     },
