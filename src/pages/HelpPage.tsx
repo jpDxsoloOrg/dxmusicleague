@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { Tutorial } from "../components/Tutorial";
 import "./HelpPage.css";
 
 // Wiki-style help centre. The left rail is a table of contents with scroll-spy;
@@ -64,6 +65,7 @@ const ALL_IDS = TOC.flatMap((g) => g.items.map((i) => i.id));
 
 export function HelpPage() {
   const [active, setActive] = useState<string>(ALL_IDS[0]);
+  const [showTour, setShowTour] = useState(false);
 
   // Scroll-spy: highlight the TOC entry for whichever section is nearest the top.
   useEffect(() => {
@@ -93,6 +95,11 @@ export function HelpPage() {
           A friendly guide to the whole game — from creating your first league to
           casting your votes. New here? Start with <a href="#overview">How the game works</a>.
         </p>
+        <div className="help-hero-actions">
+          <button type="button" className="btn btn-primary" onClick={() => setShowTour(true)}>
+            Replay the guided tour
+          </button>
+        </div>
       </header>
 
       <div className="help-layout">
@@ -472,6 +479,8 @@ export function HelpPage() {
           </footer>
         </div>
       </div>
+
+      {showTour && <Tutorial onClose={() => setShowTour(false)} />}
     </div>
   );
 }

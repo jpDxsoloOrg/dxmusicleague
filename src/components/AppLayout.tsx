@@ -1,8 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { Avatar } from "./Avatar";
+import { Tutorial } from "./Tutorial";
 import "./AppLayout.css";
+
+/** Per-user flag so the tutorial only auto-opens on a first sign-in. */
+const tutorialSeenKey = (userId: string) => `dxml.tutorial.seen.${userId}`;
 
 const NAV = [
   { to: "/", label: "Home", icon: "home", end: true },
@@ -21,6 +25,19 @@ export function AppLayout() {
   const { user, signOut } = useAuth();
   const displayName = user?.displayName ?? "Player";
   const [menuOpen, setMenuOpen] = useState(false);
+  const [showTutorial, setShowTutorial] = useState(false);
+
+  // First sign-in on this browser: pop the guided tour automatically.
+  useEffect(() => {
+    if (user && !localStorage.getItem(tutorialSeenKey(user.id))) {
+      setShowTutorial(true);
+    }
+  }, [user]);
+
+  const closeTutorial = () => {
+    if (user) localStorage.setItem(tutorialSeenKey(user.id), "1");
+    setShowTutorial(false);
+  };
 
   return (
     <div className="layout">
@@ -126,6 +143,8 @@ export function AppLayout() {
           ))}
         </nav>
       </div>
+
+      {showTutorial && <Tutorial onClose={closeTutorial} />}
     </div>
   );
 }

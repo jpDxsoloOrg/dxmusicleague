@@ -15,6 +15,7 @@
 .help-hero h1 { margin: 10px 0 8px; font-size: 32px; }
 .help-hero p { margin: 0; color: var(--text-muted); font-size: 15px; max-width: 60ch; line-height: 1.6; }
 .help-hero a { color: var(--magenta); font-weight: 600; }
+.help-hero-actions { margin-top: 16px; }
 
 /* ---- two-column wiki layout ---- */
 .help-layout {
