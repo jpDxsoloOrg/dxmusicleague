@@ -29,18 +29,13 @@ export function listAvailableProviders(): MusicProviderInfo[] {
 }
 
 /**
- * Options for the create-league music-service picker. Unlike
- * `listAvailableProviders`, this lists the full roadmap — services not yet wired
- * up appear with `available: false` so the form can show them disabled
- * ("coming soon"). Choosing a provider is a league-config decision, kept
- * independent of whether its backend proxy happens to be running right now.
+ * Options for the create-league music-service picker. Spotify only for now —
+ * YouTube Music and the demo catalog are hidden from new leagues until they're
+ * ready to promote (existing leagues on those providers keep working via the
+ * registry above; add them back here to re-enable them for new leagues).
  */
 export function listProviderOptions(): MusicProviderInfo[] {
-  return [
-    { id: "spotify", name: "Spotify", available: true },
-    { id: "youtube-music", name: "YouTube Music", available: true },
-    { id: "mock", name: "Demo Catalog", available: true },
-  ];
+  return [{ id: "spotify", name: "Spotify", available: true }];
 }
 
 export * from "./types";
