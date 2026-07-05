@@ -202,20 +202,6 @@
 }
 .mobile-menu-item:hover { background: var(--panel-2); color: var(--text); }
 .mobile-menu-signout:hover { color: var(--magenta); }
-.icon-btn {
-  width: 38px; height: 38px;
-  display: grid; place-items: center;
-  border-radius: 50%;
-  background: var(--panel);
-  border: 1px solid var(--border);
-}
-.bell {
-  width: 18px; height: 18px;
-  background: var(--text-muted);
-  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'><path d='M12 2a6 6 0 00-6 6v4l-2 3v1h16v-1l-2-3V8a6 6 0 00-6-6zm0 20a3 3 0 003-3H9a3 3 0 003 3z'/></svg>") center / contain no-repeat;
-  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'><path d='M12 2a6 6 0 00-6 6v4l-2 3v1h16v-1l-2-3V8a6 6 0 00-6-6zm0 20a3 3 0 003-3H9a3 3 0 003 3z'/></svg>") center / contain no-repeat;
-}
-
 .content { padding: 32px; max-width: 1180px; width: 100%; margin: 0 auto; }
 
 /* ---- bottom tab bar (phones / small tablets only) ---- */

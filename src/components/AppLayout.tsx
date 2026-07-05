@@ -68,9 +68,6 @@ export function AppLayout() {
             <input placeholder="Search leagues, players, or tracks…" />
           </div>
           <div className="topbar-right">
-            <button className="icon-btn" aria-label="Notifications">
-              <span className="bell" aria-hidden />
-            </button>
             <span className="topbar-avatar">
               <Avatar name={displayName} size={36} />
             </span>
