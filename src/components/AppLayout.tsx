@@ -80,10 +80,6 @@ export function AppLayout() {
             <span className="brand-mark grad-text">DX</span>
             <strong>Music League</strong>
           </div>
-          <div className="search">
-            <span className="search-icon" aria-hidden />
-            <input placeholder="Search leagues, players, or tracks…" />
-          </div>
           <div className="topbar-right">
             <span className="topbar-avatar">
               <Avatar name={displayName} size={36} />

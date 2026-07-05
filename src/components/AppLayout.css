@@ -113,28 +113,7 @@
   backdrop-filter: blur(10px);
   z-index: 10;
 }
-.search {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 9px 16px;
-  width: min(420px, 40vw);
-}
-.search input {
-  border: none; outline: none; background: transparent;
-  color: var(--text); width: 100%; font-size: 14px;
-}
-.search input::placeholder { color: var(--text-dim); }
-.search-icon {
-  width: 16px; height: 16px; opacity: 0.6;
-  background: var(--text-muted);
-  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'><path d='M10 2a8 8 0 105.3 14l5.4 5.4 1.4-1.4-5.4-5.4A8 8 0 0010 2zm0 2a6 6 0 110 12 6 6 0 010-12z'/></svg>") center / contain no-repeat;
-  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'><path d='M10 2a8 8 0 105.3 14l5.4 5.4 1.4-1.4-5.4-5.4A8 8 0 0010 2zm0 2a6 6 0 110 12 6 6 0 010-12z'/></svg>") center / contain no-repeat;
-}
-.topbar-right { display: flex; align-items: center; gap: 16px; }
+.topbar-right { display: flex; align-items: center; gap: 16px; margin-left: auto; }
 
 .topbar-avatar { display: grid; place-items: center; }
 
@@ -218,9 +197,7 @@
     padding-right: max(16px, env(safe-area-inset-right));
   }
   .topbar-brand { display: flex; }
-  /* the global search is a desktop affordance — the topbar stays compact on phones */
-  .search { display: none; }
-  .topbar-right { gap: 12px; margin-left: auto; }
+  .topbar-right { gap: 12px; }
   .topbar-avatar { display: none; }
   .menu-wrap { display: block; }
 

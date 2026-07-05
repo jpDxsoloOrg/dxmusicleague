@@ -124,7 +124,6 @@ button { font-family: inherit; cursor: pointer; }
   textarea.field-input,
   textarea.vote-comment,
   textarea.comment-input,
-  .search input,
   .track-search input {
     font-size: 16px;
   }
