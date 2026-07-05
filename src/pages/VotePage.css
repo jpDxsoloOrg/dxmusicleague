@@ -68,3 +68,33 @@
 }
 .vote-done h2 { margin: 0; }
 .vote-done p { margin: 0; color: var(--text-muted); }
+
+/* ---- mobile ---- */
+@media (max-width: 820px) {
+  /* keep the sticky footer above the bottom tab bar */
+  .vote-footer { bottom: var(--mobilenav-h); padding: 14px 0 10px; }
+}
+@media (max-width: 700px) {
+  .vote-head { flex-direction: column; gap: 14px; }
+  .vote-head h1 { font-size: 24px; }
+  /* remaining-points becomes a compact sticky strip under the topbar */
+  .points-left {
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: center;
+    gap: 8px;
+    align-self: stretch;
+    padding: 10px 16px;
+    top: 68px;
+    z-index: 5;
+  }
+  .points-num { font-size: 22px; }
+  .points-label { margin-top: 0; }
+}
+@media (max-width: 640px) {
+  .vote-card-top { flex-wrap: wrap; gap: 10px 12px; }
+  .vote-info { flex: 1 1 140px; }
+  .vote-dur { display: none; }
+  .stepper-control { margin-left: auto; }
+  .step-btn { width: 40px; height: 40px; }
+}

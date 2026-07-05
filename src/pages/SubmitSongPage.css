@@ -104,3 +104,13 @@
   .submit-grid { grid-template-columns: 1fr; }
   .submission-col { position: static; }
 }
+
+@media (max-width: 640px) {
+  .submit-head { flex-wrap: wrap; gap: 8px 12px; margin-bottom: 14px; }
+  .theme-title { font-size: 23px; margin-bottom: 16px; }
+  .result-row { gap: 10px; }
+  .result-dur { display: none; }
+  .select-btn { padding: 8px 12px; }
+  /* keep the cover art a sensible size on narrow screens */
+  .submission-card .track-art { max-width: 220px; margin: 0 auto; }
+}

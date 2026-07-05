@@ -243,3 +243,12 @@
   }
   .help-toc-group { flex: 0 0 auto; }
 }
+
+@media (max-width: 640px) {
+  .help-hero { padding-bottom: 20px; margin-bottom: 20px; }
+  .help-hero h1 { font-size: 25px; }
+  .help-section { margin-bottom: 34px; }
+  .help-section h2 { font-size: 19px; }
+  /* the hover-revealed heading anchors are pointless on touch — keep them out of the way */
+  .help-anchor { display: none; }
+}

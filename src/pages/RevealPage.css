@@ -103,6 +103,18 @@
   .rank-by { display: none; }
 }
 
+@media (max-width: 640px) {
+  .reveal-head h1 { font-size: 24px; }
+  .winner-card { padding: 20px 18px; }
+  .winner-top { gap: 14px; }
+  .winner-info strong { font-size: 20px; }
+  .winner-badge { top: 10px; right: 12px; font-size: 11px; }
+  .result-rank-row { padding: 12px; gap: 10px; }
+  .rank-pts { width: auto; }
+  .result-item .comments { padding: 12px 14px; }
+  .reveal-standings { padding: 16px; }
+}
+
 /* round-not-yet-revealed state (owner reveal / waiting) */
 .reveal-pending {
   margin-top: 28px;

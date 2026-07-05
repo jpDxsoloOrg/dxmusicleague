@@ -3,6 +3,7 @@
 
 .auth-screen {
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -158,3 +159,9 @@
   font-size: 20px;
 }
 .auth-resend { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 20px; }
+
+@media (max-width: 480px) {
+  .auth-screen { padding: 20px 14px; gap: 16px; }
+  .auth-card { padding: 28px 20px 26px; border-radius: 20px; }
+  .auth-code { font-size: 22px; letter-spacing: 0.4em; text-indent: 0.4em; }
+}

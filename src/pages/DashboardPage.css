@@ -110,4 +110,7 @@
 
 @media (max-width: 640px) {
   .action-row { grid-template-columns: 1fr; }
+  .dashboard { gap: 28px; }
+  .section-head { flex-wrap: wrap; gap: 8px 14px; }
+  .league-grid, .trending-grid { grid-template-columns: 1fr; }
 }

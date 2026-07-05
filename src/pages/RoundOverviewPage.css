@@ -187,6 +187,29 @@
   .standings { position: static; }
 }
 
+@media (max-width: 640px) {
+  .ro-head { flex-direction: column; gap: 12px; }
+  .ro-head h1 { font-size: 23px; }
+  .ro-head-actions { flex-wrap: wrap; }
+
+  .invite-panel { padding: 12px 14px; }
+  .invite-code { font-size: 16px; }
+  .invite-actions { width: 100%; }
+  .invite-btn { flex: 1; }
+
+  .hero-round { padding: 20px 18px; }
+  .hero-theme { font-size: 24px; }
+  .hero-footer { gap: 12px; }
+  .hero-cta { width: 100%; text-align: center; }
+  .countdown { width: 100%; justify-content: center; }
+
+  .activity li { flex-wrap: wrap; gap: 8px 12px; }
+  .activity-text { flex: 1 1 200px; }
+
+  .owner-create { flex-wrap: wrap; }
+  .standings { padding: 16px; }
+}
+
 /* owner-only round lifecycle controls */
 .owner-control {
   display: flex;

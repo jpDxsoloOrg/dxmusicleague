@@ -37,7 +37,13 @@
 .profile-league-row .standing-pts { margin-left: auto; }
 
 @media (max-width: 640px) {
-  .stat-grid { grid-template-columns: 1fr; }
+  .stat-grid { grid-template-columns: 1fr; gap: 12px; }
+  .stat-card { padding: 16px; flex-direction: row; justify-content: space-between; align-items: baseline; }
+  .profile-header { flex-wrap: wrap; padding: 20px 18px; gap: 14px; }
+  .profile-id h1 { font-size: 23px; }
+  .profile-edit { margin-left: 0; width: 100%; }
+  .profile-league-row { padding: 14px 16px; gap: 12px; }
+  .profile-name-input { max-width: 100%; font-size: 20px; }
 }
 
 /* inline display-name editor */
