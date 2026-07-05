@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { data } from "../data";
-import type { LeagueSummary } from "../data";
+import type { LeagueSummary, PublicLeagueSummary } from "../data";
 import type { RoundStatus } from "../domain/types";
 import { useAsync } from "../lib/useAsync";
 import { Avatar } from "../components/Avatar";
@@ -63,21 +63,29 @@ export function DashboardPage() {
           </div>
           <div className="trending-grid">
             {trending.map((t) => (
-              <Link key={t.id} to={`/leagues/${t.id}/preview`} className="trending-card">
-                <div className="trending-art" aria-hidden />
-                <div className="trending-info">
-                  <strong>{t.name}</strong>
-                  <span>{t.firstRoundTheme ?? "Round 1 coming soon"}</span>
-                  <span className="trending-slots">
-                    {t.memberCount}/{t.maxMembers} players · {t.openSlots} open
-                  </span>
-                </div>
-              </Link>
+              <PublicLeagueCard key={t.id} league={t} />
             ))}
           </div>
         </section>
       )}
     </div>
+  );
+}
+
+/** Card for an open public league — links to its non-member preview. Shared
+ *  by the dashboard's trending strip and the Leagues page's discover section. */
+export function PublicLeagueCard({ league }: { league: PublicLeagueSummary }) {
+  return (
+    <Link to={`/leagues/${league.id}/preview`} className="trending-card">
+      <div className="trending-art" aria-hidden />
+      <div className="trending-info">
+        <strong>{league.name}</strong>
+        <span>{league.firstRoundTheme ?? "Round 1 coming soon"}</span>
+        <span className="trending-slots">
+          {league.memberCount}/{league.maxMembers} players · {league.openSlots} open
+        </span>
+      </div>
+    </Link>
   );
 }
 
