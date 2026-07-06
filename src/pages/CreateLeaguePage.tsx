@@ -6,6 +6,10 @@ import type { MusicProviderId } from "../music";
 import type { LeagueVisibility, RoundProgression } from "../domain/types";
 import "./CreateLeaguePage.css";
 
+/** Beta gate: timed rounds exist end-to-end but haven't been tested in prod
+ *  yet, so new leagues can't pick them. Flip to true to offer them again. */
+const TIMED_ROUNDS_ENABLED = false;
+
 export function CreateLeaguePage() {
   const navigate = useNavigate();
   const providers = listProviderOptions();
@@ -114,7 +118,9 @@ export function CreateLeaguePage() {
             onChange={(e) => setProgression(e.target.value as RoundProgression)}
           >
             <option value="manual">Manual — you open each phase yourself</option>
-            <option value="timed">Timed — phases auto-advance on a schedule</option>
+            {TIMED_ROUNDS_ENABLED && (
+              <option value="timed">Timed — phases auto-advance on a schedule</option>
+            )}
           </select>
           <span className="field-hint">
             {isTimed
