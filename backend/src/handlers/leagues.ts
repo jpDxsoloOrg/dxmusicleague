@@ -36,9 +36,9 @@ interface Standing {
   points: number;
 }
 
-/** Who's in / who's pending for a submitting round. Names only — tracks stay
- *  hidden until the reveal, so this leaks nothing about anyone's pick. */
-interface SubmissionProgress {
+/** Who's done vs. pending for the current phase. Names only — no tracks, no
+ *  point allocations — so this leaks nothing about anyone's pick or vote. */
+interface RoundParticipation {
   submitted: UserView[];
   waiting: UserView[];
 }
@@ -50,7 +50,9 @@ interface LeagueDetail {
   totalRounds: number;
   standings: Standing[];
   /** Present only while the current round is submitting. */
-  submissionProgress?: SubmissionProgress;
+  submissionProgress?: RoundParticipation;
+  /** Present only while the current round is voting ("submitted" = ballot cast). */
+  votingProgress?: RoundParticipation;
   activity: never[]; // activity feed is not backed by data yet — empty for now.
 }
 
@@ -58,6 +60,14 @@ interface LeagueDetail {
 
 async function toUserViews(users: UserDirectory, ids: string[]): Promise<UserView[]> {
   return Promise.all(ids.map(async (id) => ({ id, displayName: await users.getDisplayName(id) })));
+}
+
+/** Split a league's members into done / pending given the ids that finished. */
+async function splitByDone(users: UserDirectory, memberIds: string[], doneIds: Set<string>): Promise<RoundParticipation> {
+  return {
+    submitted: await toUserViews(users, memberIds.filter((id) => doneIds.has(id))),
+    waiting: await toUserViews(users, memberIds.filter((id) => !doneIds.has(id))),
+  };
 }
 
 function latestRound(rounds: Round[]): Round | undefined {
@@ -315,15 +325,16 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
     )
   );
 
-  // While submitting, expose who's in vs. pending (identities only, no tracks).
-  let submissionProgress: SubmissionProgress | undefined;
+  // Who's done vs. pending for the live phase (identities only): submissions
+  // while submitting, ballots while voting.
+  let submissionProgress: RoundParticipation | undefined;
+  let votingProgress: RoundParticipation | undefined;
   if (currentRound?.status === "submitting") {
     const subs = await deps.repo.getSubmissionsForRound(currentRound.id);
-    const submittedIds = new Set(subs.map((s) => s.userId));
-    submissionProgress = {
-      submitted: await toUserViews(deps.users, league.memberIds.filter((id) => submittedIds.has(id))),
-      waiting: await toUserViews(deps.users, league.memberIds.filter((id) => !submittedIds.has(id))),
-    };
+    submissionProgress = await splitByDone(deps.users, league.memberIds, new Set(subs.map((s) => s.userId)));
+  } else if (currentRound?.status === "voting") {
+    const ballots = await deps.repo.getBallotsForRound(currentRound.id);
+    votingProgress = await splitByDone(deps.users, league.memberIds, new Set(ballots.map((b) => b.voterId)));
   }
 
   return {
@@ -334,6 +345,7 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
     totalRounds: league.roundCount || rounds.length,
     standings,
     submissionProgress,
+    votingProgress,
     activity: [],
   };
 }

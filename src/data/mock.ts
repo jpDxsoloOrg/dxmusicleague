@@ -423,9 +423,9 @@ export function getStandings(leagueId: string): Standing[] {
     .filter((s) => s.user);
 }
 
-/** Who's submitted vs. still pending for a submitting round. Identities only —
- *  tracks stay hidden until the reveal. */
-export interface SubmissionProgress {
+/** Who's done vs. still pending for the live phase. Identities only — no
+ *  tracks, no point allocations. */
+export interface RoundParticipation {
   submitted: User[];
   waiting: User[];
 }
@@ -437,7 +437,9 @@ export interface LeagueDetail {
   totalRounds: number;
   standings: Standing[];
   /** Present only while the current round is submitting. */
-  submissionProgress?: SubmissionProgress;
+  submissionProgress?: RoundParticipation;
+  /** Present only while the current round is voting ("submitted" = ballot cast). */
+  votingProgress?: RoundParticipation;
   activity: ActivityItem[];
 }
 
@@ -558,15 +560,21 @@ export function getLeagueDetail(leagueId: string): LeagueDetail | undefined {
     .sort((a, b) => a.index - b.index);
   const currentRound = summary?.currentRound;
 
-  // While submitting: who's in vs. pending, derived from the canonical picks.
-  let submissionProgress: SubmissionProgress | undefined;
+  // Who's done vs. pending for the live phase, derived from the canonical
+  // picks (submitting) or the seeded voter ids (voting).
+  const members = league.memberIds.map((id) => users[id]).filter(Boolean);
+  const splitByDone = (doneIds: Set<string>): RoundParticipation => ({
+    submitted: members.filter((m) => doneIds.has(m.id)),
+    waiting: members.filter((m) => !doneIds.has(m.id)),
+  });
+  let submissionProgress: RoundParticipation | undefined;
+  let votingProgress: RoundParticipation | undefined;
   if (currentRound?.status === "submitting") {
-    const submittedIds = new Set(CANON_SUBMISSIONS.map((s) => s.submitterId));
-    const members = league.memberIds.map((id) => users[id]).filter(Boolean);
-    submissionProgress = {
-      submitted: members.filter((m) => submittedIds.has(m.id)),
-      waiting: members.filter((m) => !submittedIds.has(m.id)),
-    };
+    submissionProgress = splitByDone(new Set(CANON_SUBMISSIONS.map((s) => s.submitterId)));
+  } else if (currentRound?.status === "voting") {
+    const voterIds = new Set(CANON_SUBMISSIONS.flatMap((s) => s.seedComments.map((c) => c.voterId)));
+    if (myVoteComments[leagueId]) voterIds.add(currentUser.id);
+    votingProgress = splitByDone(voterIds);
   }
 
   return {
@@ -576,6 +584,7 @@ export function getLeagueDetail(leagueId: string): LeagueDetail | undefined {
     totalRounds: summary?.totalRounds ?? leagueRounds.length,
     standings: getStandings(leagueId),
     submissionProgress,
+    votingProgress,
     activity: ACTIVITY[leagueId] ?? [],
   };
 }

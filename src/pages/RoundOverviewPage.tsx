@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { data } from "../data";
+import type { RoundParticipation } from "../data";
 import type { League, Round, RoundStatus } from "../domain/types";
 import { getProvider } from "../music";
 import { useAsync } from "../lib/useAsync";
@@ -70,7 +71,7 @@ export function RoundOverviewPage() {
     );
   }
 
-  const { league, rounds, currentRound, totalRounds, standings, submissionProgress, activity } = detail;
+  const { league, rounds, currentRound, totalRounds, standings, submissionProgress, votingProgress, activity } = detail;
   const providerName = getProvider(league.musicProvider).info.name;
   const isOwner = league.ownerId === user?.id;
   // A capped (public) league is full once every slot is taken; uncapped never is.
@@ -182,40 +183,12 @@ export function RoundOverviewPage() {
                 </div>
               )}
 
-              {/* Who's submitted vs. pending — names only, picks stay secret. */}
+              {/* Who's done vs. pending — names only; picks and votes stay secret. */}
               {currentRound.status === "submitting" && submissionProgress && (
-                <div className="sub-progress">
-                  <span className="sub-progress-count">
-                    🎵 {submissionProgress.submitted.length} of{" "}
-                    {submissionProgress.submitted.length + submissionProgress.waiting.length} songs in
-                  </span>
-                  {submissionProgress.submitted.length > 0 && (
-                    <div className="sub-progress-row">
-                      <span className="sub-progress-label">Submitted</span>
-                      <span className="sub-progress-names">
-                        {submissionProgress.submitted.map((m) => (
-                          <span key={m.id} className="sub-chip sub-chip-in">
-                            <Avatar name={m.displayName} size={18} />
-                            {m.displayName}
-                          </span>
-                        ))}
-                      </span>
-                    </div>
-                  )}
-                  {submissionProgress.waiting.length > 0 && (
-                    <div className="sub-progress-row">
-                      <span className="sub-progress-label">Waiting on</span>
-                      <span className="sub-progress-names">
-                        {submissionProgress.waiting.map((m) => (
-                          <span key={m.id} className="sub-chip">
-                            <Avatar name={m.displayName} size={18} />
-                            {m.displayName}
-                          </span>
-                        ))}
-                      </span>
-                    </div>
-                  )}
-                </div>
+                <ParticipationPanel icon="🎵" noun="songs" doneLabel="Submitted" progress={submissionProgress} />
+              )}
+              {currentRound.status === "voting" && votingProgress && (
+                <ParticipationPanel icon="🗳️" noun="ballots" doneLabel="Voted" progress={votingProgress} />
               )}
 
               <div className="hero-footer">
@@ -419,6 +392,55 @@ function OwnerRoundControl({
         <span className="owner-hint">⏱ Auto-advances when the timer ends or everyone's done — or move it on now.</span>
       )}
       {error && <span className="page-error">{error}</span>}
+    </div>
+  );
+}
+
+/** "X of N in" panel showing who's finished the live phase vs. who's pending.
+ *  Names only — never shows what anyone submitted or how they voted. */
+function ParticipationPanel({
+  icon,
+  noun,
+  doneLabel,
+  progress,
+}: {
+  icon: string;
+  noun: string;
+  doneLabel: string;
+  progress: RoundParticipation;
+}) {
+  const total = progress.submitted.length + progress.waiting.length;
+  return (
+    <div className="sub-progress">
+      <span className="sub-progress-count">
+        {icon} {progress.submitted.length} of {total} {noun} in
+      </span>
+      {progress.submitted.length > 0 && (
+        <div className="sub-progress-row">
+          <span className="sub-progress-label">{doneLabel}</span>
+          <span className="sub-progress-names">
+            {progress.submitted.map((m) => (
+              <span key={m.id} className="sub-chip sub-chip-in">
+                <Avatar name={m.displayName} size={18} />
+                {m.displayName}
+              </span>
+            ))}
+          </span>
+        </div>
+      )}
+      {progress.waiting.length > 0 && (
+        <div className="sub-progress-row">
+          <span className="sub-progress-label">Waiting on</span>
+          <span className="sub-progress-names">
+            {progress.waiting.map((m) => (
+              <span key={m.id} className="sub-chip">
+                <Avatar name={m.displayName} size={18} />
+                {m.displayName}
+              </span>
+            ))}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

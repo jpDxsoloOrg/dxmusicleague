@@ -20,6 +20,7 @@ export type {
   LeagueSummary,
   PublicLeaguePreview,
   PublicLeagueSummary,
+  RoundParticipation,
   RoundResult,
   Standing,
   VotableSubmission,

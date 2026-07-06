@@ -174,3 +174,23 @@ test("detail omits submission progress outside the submitting phase", async () =
   const detail = await getLeagueDetail(deps, "u-owner", "lg");
   assert.equal(detail.submissionProgress, undefined);
 });
+
+test("detail exposes who voted vs waiting during voting — no allocations leaked", async () => {
+  const deps = await depsWith(
+    [league({ id: "lg", name: "League", visibility: "private", memberIds: ["u-owner", "u-2", "u-3"] })],
+    [{ id: "lg~1", leagueId: "lg", index: 1, theme: "Go", status: "voting" }],
+  );
+  await deps.repo.putBallot({
+    roundId: "lg~1",
+    voterId: "u-3",
+    allocations: { "sub-1": 10 },
+    castAt: "2026-07-06T00:00:00.000Z",
+  });
+
+  const detail = await getLeagueDetail(deps, "u-owner", "lg");
+  assert.deepEqual(detail.votingProgress?.submitted.map((u) => u.id), ["u-3"]);
+  assert.deepEqual(detail.votingProgress?.waiting.map((u) => u.id), ["u-owner", "u-2"]);
+  assert.equal(detail.submissionProgress, undefined);
+  // Identities only — the ballot's allocations must not ride along.
+  assert.equal(JSON.stringify(detail.votingProgress).includes("sub-1"), false);
+});
