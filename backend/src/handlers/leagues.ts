@@ -36,12 +36,21 @@ interface Standing {
   points: number;
 }
 
+/** Who's in / who's pending for a submitting round. Names only — tracks stay
+ *  hidden until the reveal, so this leaks nothing about anyone's pick. */
+interface SubmissionProgress {
+  submitted: UserView[];
+  waiting: UserView[];
+}
+
 interface LeagueDetail {
   league: League;
   rounds: Round[];
   currentRound?: Round;
   totalRounds: number;
   standings: Standing[];
+  /** Present only while the current round is submitting. */
+  submissionProgress?: SubmissionProgress;
   activity: never[]; // activity feed is not backed by data yet — empty for now.
 }
 
@@ -306,6 +315,17 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
     )
   );
 
+  // While submitting, expose who's in vs. pending (identities only, no tracks).
+  let submissionProgress: SubmissionProgress | undefined;
+  if (currentRound?.status === "submitting") {
+    const subs = await deps.repo.getSubmissionsForRound(currentRound.id);
+    const submittedIds = new Set(subs.map((s) => s.userId));
+    submissionProgress = {
+      submitted: await toUserViews(deps.users, league.memberIds.filter((id) => submittedIds.has(id))),
+      waiting: await toUserViews(deps.users, league.memberIds.filter((id) => !submittedIds.has(id))),
+    };
+  }
+
   return {
     league,
     rounds,
@@ -313,6 +333,7 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
     // The owner's planned count; fall back to created rounds for legacy leagues.
     totalRounds: league.roundCount || rounds.length,
     standings,
+    submissionProgress,
     activity: [],
   };
 }

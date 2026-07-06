@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MemoryRepository, MemoryUserDirectory } from "../data/memory.ts";
 import type { Deps } from "./leagues.ts";
-import { claimPublicSpot, getPublicLeaguePreview, leaveLeague, listOpenPublicLeagues } from "./leagues.ts";
+import { claimPublicSpot, getLeagueDetail, getPublicLeaguePreview, leaveLeague, listOpenPublicLeagues } from "./leagues.ts";
 import { ApiError } from "../domain/errors.ts";
 import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types.ts";
 import type { League, Round } from "../domain/types.ts";
@@ -145,4 +145,32 @@ test("claim rejects full / started / already-member / private-or-missing", async
   await assert.rejects(claimPublicSpot(deps, "u-me", "mine"), is(409));
   await assert.rejects(claimPublicSpot(deps, "u-me", "priv"), is(404));
   await assert.rejects(claimPublicSpot(deps, "u-me", "nope"), is(404));
+});
+
+test("detail exposes who submitted vs waiting during submitting — names only, no tracks", async () => {
+  const deps = await depsWith(
+    [league({ id: "lg", name: "League", visibility: "private", memberIds: ["u-owner", "u-2", "u-3"] })],
+    [{ id: "lg~1", leagueId: "lg", index: 1, theme: "Go", status: "submitting" }],
+  );
+  await deps.repo.putSubmission({
+    id: "s1",
+    roundId: "lg~1",
+    userId: "u-2",
+    track: { id: "t1", provider: "spotify", providerTrackId: "sp1", title: "Song", artists: ["Artist"] },
+  });
+
+  const detail = await getLeagueDetail(deps, "u-owner", "lg");
+  assert.deepEqual(detail.submissionProgress?.submitted.map((u) => u.id), ["u-2"]);
+  assert.deepEqual(detail.submissionProgress?.waiting.map((u) => u.id), ["u-owner", "u-3"]);
+  // Identities only — make sure no track data rides along.
+  assert.equal(JSON.stringify(detail.submissionProgress).includes("Song"), false);
+});
+
+test("detail omits submission progress outside the submitting phase", async () => {
+  const deps = await depsWith(
+    [league({ id: "lg", name: "League", visibility: "private" })],
+    [{ id: "lg~1", leagueId: "lg", index: 1, theme: "Go", status: "voting" }],
+  );
+  const detail = await getLeagueDetail(deps, "u-owner", "lg");
+  assert.equal(detail.submissionProgress, undefined);
 });

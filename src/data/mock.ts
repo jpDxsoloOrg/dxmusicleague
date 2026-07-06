@@ -423,12 +423,21 @@ export function getStandings(leagueId: string): Standing[] {
     .filter((s) => s.user);
 }
 
+/** Who's submitted vs. still pending for a submitting round. Identities only —
+ *  tracks stay hidden until the reveal. */
+export interface SubmissionProgress {
+  submitted: User[];
+  waiting: User[];
+}
+
 export interface LeagueDetail {
   league: League;
   rounds: Round[]; // ascending by index
   currentRound?: Round;
   totalRounds: number;
   standings: Standing[];
+  /** Present only while the current round is submitting. */
+  submissionProgress?: SubmissionProgress;
   activity: ActivityItem[];
 }
 
@@ -547,12 +556,26 @@ export function getLeagueDetail(leagueId: string): LeagueDetail | undefined {
   const leagueRounds = rounds
     .filter((r) => r.leagueId === leagueId)
     .sort((a, b) => a.index - b.index);
+  const currentRound = summary?.currentRound;
+
+  // While submitting: who's in vs. pending, derived from the canonical picks.
+  let submissionProgress: SubmissionProgress | undefined;
+  if (currentRound?.status === "submitting") {
+    const submittedIds = new Set(CANON_SUBMISSIONS.map((s) => s.submitterId));
+    const members = league.memberIds.map((id) => users[id]).filter(Boolean);
+    submissionProgress = {
+      submitted: members.filter((m) => submittedIds.has(m.id)),
+      waiting: members.filter((m) => !submittedIds.has(m.id)),
+    };
+  }
+
   return {
     league,
     rounds: leagueRounds,
-    currentRound: summary?.currentRound,
+    currentRound,
     totalRounds: summary?.totalRounds ?? leagueRounds.length,
     standings: getStandings(leagueId),
+    submissionProgress,
     activity: ACTIVITY[leagueId] ?? [],
   };
 }

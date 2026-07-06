@@ -70,7 +70,7 @@ export function RoundOverviewPage() {
     );
   }
 
-  const { league, rounds, currentRound, totalRounds, standings, activity } = detail;
+  const { league, rounds, currentRound, totalRounds, standings, submissionProgress, activity } = detail;
   const providerName = getProvider(league.musicProvider).info.name;
   const isOwner = league.ownerId === user?.id;
   // A capped (public) league is full once every slot is taken; uncapped never is.
@@ -179,6 +179,42 @@ export function RoundOverviewPage() {
                       <span>{mySubmission.track.artists.join(", ")}</span>
                     </div>
                   </div>
+                </div>
+              )}
+
+              {/* Who's submitted vs. pending — names only, picks stay secret. */}
+              {currentRound.status === "submitting" && submissionProgress && (
+                <div className="sub-progress">
+                  <span className="sub-progress-count">
+                    🎵 {submissionProgress.submitted.length} of{" "}
+                    {submissionProgress.submitted.length + submissionProgress.waiting.length} songs in
+                  </span>
+                  {submissionProgress.submitted.length > 0 && (
+                    <div className="sub-progress-row">
+                      <span className="sub-progress-label">Submitted</span>
+                      <span className="sub-progress-names">
+                        {submissionProgress.submitted.map((m) => (
+                          <span key={m.id} className="sub-chip sub-chip-in">
+                            <Avatar name={m.displayName} size={18} />
+                            {m.displayName}
+                          </span>
+                        ))}
+                      </span>
+                    </div>
+                  )}
+                  {submissionProgress.waiting.length > 0 && (
+                    <div className="sub-progress-row">
+                      <span className="sub-progress-label">Waiting on</span>
+                      <span className="sub-progress-names">
+                        {submissionProgress.waiting.map((m) => (
+                          <span key={m.id} className="sub-chip">
+                            <Avatar name={m.displayName} size={18} />
+                            {m.displayName}
+                          </span>
+                        ))}
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
 
