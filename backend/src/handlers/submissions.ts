@@ -1,10 +1,12 @@
-// Submission handlers — submit one song per player per round, and read the
-// anonymized list voters choose from. Same shape as the other handlers:
-// (deps, caller, ...) over the Repository port, throwing ApiError.
+// Submission handlers — submit songs (up to the league's submissionsPerPlayer,
+// default 1), remove a pick, and read the anonymized list voters choose from.
+// Same shape as the other handlers: (deps, caller, ...) over the Repository
+// port, throwing ApiError.
 //
-// One submission per player is enforced by the storage key (SUB#<userId>), so a
-// re-submit overwrites; we keep the original submission id stable so it stays
-// opaque and doesn't change underneath a ballot once voting starts.
+// With an allowance of 1 a re-submit REPLACES the existing pick (the original
+// UX), keeping the submission id stable so it stays opaque and doesn't change
+// underneath a ballot. With a larger allowance each submit ADDS a pick until
+// the allowance is full; players remove a pick to change their mind.
 
 import { randomUUID } from "node:crypto";
 import type { MusicProviderId, Submission, Track } from "../domain/types.ts";
@@ -86,35 +88,63 @@ export async function submitSong(
   if (deadlinePassed(round.submissionDeadline)) throw badRequest("The submission deadline has passed.");
 
   const track = normalizeTrack(input?.track);
-  const existing = await deps.repo.getSubmission(roundId, caller); // stable id across re-submits
+  const allowance = league.settings.submissionsPerPlayer || 1;
+  const mine = await deps.repo.getSubmissionsForUser(roundId, caller);
 
-  // Reject duplicate songs/artists across the round (ignoring the caller's own pick).
-  const others = (await deps.repo.getSubmissionsForRound(roundId)).filter((s) => s.userId !== caller);
-  assertNoDuplicate(track, others);
+  // Allowance of 1 → a re-submit replaces the pick (stable id). Larger
+  // allowance → each submit adds a pick; at the cap, ask them to remove one.
+  const replacing = allowance === 1 ? mine[0] : undefined;
+  if (!replacing && mine.length >= allowance) {
+    throw badRequest(
+      `You've already submitted ${allowance} songs for this round — remove one to change your picks.`,
+    );
+  }
+
+  // Reject duplicate songs/artists across the round. The caller's other picks
+  // count too (no self-duplicates); only the pick being replaced is exempt.
+  const all = await deps.repo.getSubmissionsForRound(roundId);
+  assertNoDuplicate(track, all.filter((s) => s.id !== replacing?.id));
 
   const submission: Submission = {
-    id: existing?.id ?? `sub-${randomUUID()}`,
+    id: replacing?.id ?? `sub-${randomUUID()}`,
     roundId,
     userId: caller,
     track,
     comment: optStr(input?.comment?.trim()),
   };
   await deps.repo.putSubmission(submission);
-  // Timed leagues: if that was the last member to submit, close submissions now.
+  // Timed leagues: if that filled the last open slot, close submissions now.
   await autoAdvanceRound(deps, league, round);
   return submission;
 }
 
-/** The caller's own submission for a round (or null if they haven't picked yet),
- *  so they can see what they chose while waiting for everyone else. Available in
- *  any round status; only requires league membership. */
-export async function getMySubmission(
+/** Remove one of the caller's own picks while the round is still submitting. */
+export async function removeSubmission(
   deps: Deps,
   caller: string,
   roundId: string,
-): Promise<Submission | null> {
+  submissionId: string,
+): Promise<{ ok: true }> {
+  const { round } = await roundForMember(deps, caller, roundId);
+  if (round.status !== "submitting") throw badRequest("Picks are locked once submissions close.");
+  if (deadlinePassed(round.submissionDeadline)) throw badRequest("The submission deadline has passed.");
+
+  const mine = await deps.repo.getSubmissionsForUser(roundId, caller);
+  if (!mine.some((s) => s.id === submissionId)) throw notFound("That submission isn't yours to remove.");
+  await deps.repo.deleteSubmission(roundId, caller, submissionId);
+  return { ok: true };
+}
+
+/** The caller's own submissions for a round (empty if they haven't picked yet),
+ *  so they can see what they chose while waiting for everyone else. Available in
+ *  any round status; only requires league membership. */
+export async function getMySubmissions(
+  deps: Deps,
+  caller: string,
+  roundId: string,
+): Promise<Submission[]> {
   await roundForMember(deps, caller, roundId);
-  return (await deps.repo.getSubmission(roundId, caller)) ?? null;
+  return deps.repo.getSubmissionsForUser(roundId, caller);
 }
 
 /** The anonymized song list — every submission except the caller's own, with no

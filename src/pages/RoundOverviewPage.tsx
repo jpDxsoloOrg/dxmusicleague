@@ -25,14 +25,21 @@ const STATUS_LABEL: Record<RoundStatus, string> = {
 function primaryAction(
   leagueId: string,
   round: Round,
-  hasSubmission: boolean,
+  submittedCount: number,
+  allowance: number,
 ): { label: string; to: string } | undefined {
   switch (round.status) {
-    case "submitting":
-      return {
-        label: hasSubmission ? "Change your song" : "Submit your song",
-        to: `/leagues/${leagueId}/submit`,
-      };
+    case "submitting": {
+      let label: string;
+      if (allowance > 1) {
+        label = submittedCount >= allowance
+          ? "Change your picks"
+          : `Add a song (${submittedCount} of ${allowance})`;
+      } else {
+        label = submittedCount > 0 ? "Change your song" : "Submit your song";
+      }
+      return { label, to: `/leagues/${leagueId}/submit` };
+    }
     case "previewing":
       return undefined;
     case "voting":
@@ -51,10 +58,10 @@ export function RoundOverviewPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { data: detail, loading, reload } = useAsync(() => data.getLeagueDetail(leagueId), [leagueId]);
-  // The caller's own pick for the active round, so they can see it while waiting.
+  // The caller's own picks for the active round, so they can see them while waiting.
   const activeRoundId = detail?.currentRound?.id;
-  const { data: mySubmission } = useAsync(
-    () => (activeRoundId ? data.getMySubmission(activeRoundId) : Promise.resolve(null)),
+  const { data: mySubmissions } = useAsync(
+    () => (activeRoundId ? data.getMySubmissions(activeRoundId) : Promise.resolve([])),
     [activeRoundId],
   );
 
@@ -92,10 +99,14 @@ export function RoundOverviewPage() {
       ? currentRound?.previewDeadline
       : currentRound?.submissionDeadline;
   const countdown = formatCountdown(deadline);
-  const action = currentRound ? primaryAction(league.id, currentRound, Boolean(mySubmission)) : undefined;
-  // Show the player's own pick while a round is live (submitting → voting).
-  const showMyPick =
-    mySubmission &&
+  const allowance = league.settings.submissionsPerPlayer || 1;
+  const myPicks = mySubmissions ?? [];
+  const action = currentRound
+    ? primaryAction(league.id, currentRound, myPicks.length, allowance)
+    : undefined;
+  // Show the player's own picks while a round is live (submitting → voting).
+  const showMyPicks =
+    myPicks.length > 0 &&
     (currentRound?.status === "submitting" ||
       currentRound?.status === "previewing" ||
       currentRound?.status === "voting");
@@ -168,18 +179,21 @@ export function RoundOverviewPage() {
                 <p className="hero-desc">⏳ Waiting on the league owner to start this round.</p>
               )}
 
-              {showMyPick && mySubmission && (
+              {showMyPicks && (
                 <div className="my-pick">
                   <span className="my-pick-label">
-                    Your pick{currentRound.status === "submitting" ? " — waiting for the other players" : ""}
+                    Your pick{myPicks.length > 1 ? "s" : ""}
+                    {currentRound.status === "submitting" ? " — waiting for the other players" : ""}
                   </span>
-                  <div className="my-pick-card">
-                    <TrackArt track={mySubmission.track} size={48} />
-                    <div className="my-pick-info">
-                      <strong>{mySubmission.track.title}</strong>
-                      <span>{mySubmission.track.artists.join(", ")}</span>
+                  {myPicks.map((pick) => (
+                    <div key={pick.id} className="my-pick-card">
+                      <TrackArt track={pick.track} size={48} />
+                      <div className="my-pick-info">
+                        <strong>{pick.track.title}</strong>
+                        <span>{pick.track.artists.join(", ")}</span>
+                      </div>
                     </div>
-                  </div>
+                  ))}
                 </div>
               )}
 
@@ -311,6 +325,7 @@ function OwnerRoundControl({
   onChange: () => void;
 }) {
   const [theme, setTheme] = useState("");
+  const [description, setDescription] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -336,17 +351,29 @@ function OwnerRoundControl({
     <div className="owner-control">
       <span className="owner-tag">Owner controls</span>
       {needsNewRound ? (
-        <div className="owner-create">
+        <div className="owner-create owner-create-stacked">
           <input
             className="owner-input"
             placeholder="Theme for the next round…"
             value={theme}
             onChange={(e) => setTheme(e.target.value)}
           />
+          <input
+            className="owner-input"
+            placeholder="Subtitle (optional) — shown under the theme, e.g. rules or inspiration"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
           <button
             className="btn btn-primary"
             disabled={busy || theme.trim().length < 2}
-            onClick={() => run(async () => { await data.createRound(league.id, { theme }); setTheme(""); })}
+            onClick={() =>
+              run(async () => {
+                await data.createRound(league.id, { theme, description: description.trim() || undefined });
+                setTheme("");
+                setDescription("");
+              })
+            }
           >
             {busy ? "Creating…" : "Create round"}
           </button>

@@ -309,13 +309,16 @@ export class DynamoRepository implements Repository {
   }
 
   // ---- Submissions ----
+  // Keyed SUB#<userId>#<submissionId> so a player can hold several per round.
+  // Rows written before multi-submission used SK = SUB#<userId> (no id); reads
+  // filter on the userId attribute rather than the key, so both shapes work.
   async putSubmission(submission: Submission): Promise<void> {
     await this.doc.send(
       new PutCommand({
         TableName: this.tableName,
         Item: {
           PK: `ROUND#${submission.roundId}`,
-          SK: `SUB#${submission.userId}`,
+          SK: `SUB#${submission.userId}#${submission.id}`,
           entity: "submission",
           id: submission.id,
           roundId: submission.roundId,
@@ -327,11 +330,8 @@ export class DynamoRepository implements Repository {
       }),
     );
   }
-  async getSubmission(roundId: string, userId: string): Promise<Submission | undefined> {
-    const res = await this.doc.send(
-      new GetCommand({ TableName: this.tableName, Key: { PK: `ROUND#${roundId}`, SK: `SUB#${userId}` } }),
-    );
-    return res.Item ? this.toSubmission(res.Item) : undefined;
+  async getSubmissionsForUser(roundId: string, userId: string): Promise<Submission[]> {
+    return (await this.rawSubmissionItems(roundId, userId)).map((it) => this.toSubmission(it));
   }
   async getSubmissionsForRound(roundId: string): Promise<Submission[]> {
     const res = await this.doc.send(
@@ -342,6 +342,27 @@ export class DynamoRepository implements Repository {
       }),
     );
     return (res.Items ?? []).map((it) => this.toSubmission(it));
+  }
+  async deleteSubmission(roundId: string, userId: string, submissionId: string): Promise<void> {
+    // Look the row up first so legacy keys (no id suffix) delete correctly.
+    const item = (await this.rawSubmissionItems(roundId, userId)).find((it) => it.id === submissionId);
+    if (!item) return;
+    await this.doc.send(
+      new DeleteCommand({ TableName: this.tableName, Key: { PK: item.PK, SK: item.SK } }),
+    );
+  }
+  /** One player's raw submission rows (keys included). The key prefix
+   *  SUB#<userId> would also match users whose id extends this one, so filter
+   *  on the userId attribute. */
+  private async rawSubmissionItems(roundId: string, userId: string): Promise<Array<Record<string, unknown>>> {
+    const res = await this.doc.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        KeyConditionExpression: "PK = :pk AND begins_with(SK, :s)",
+        ExpressionAttributeValues: { ":pk": `ROUND#${roundId}`, ":s": `SUB#${userId}` },
+      }),
+    );
+    return (res.Items ?? []).filter((it) => it.userId === userId);
   }
   private toSubmission(it: Record<string, unknown>): Submission {
     return {

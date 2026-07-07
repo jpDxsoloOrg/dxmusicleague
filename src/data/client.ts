@@ -27,11 +27,10 @@ export interface CreateRoundInput {
   description?: string;
 }
 
-/** The league settings an owner can edit. `submissionsPerPlayer` is intentionally
- *  excluded — it's locked to 1 by the one-song-per-player storage model. */
+/** The league settings an owner can edit. */
 export type EditableLeagueSettings = Pick<
   LeagueSettings,
-  "votePoolSize" | "maxPointsPerSong" | "allowSelfVote"
+  "votePoolSize" | "maxPointsPerSong" | "allowSelfVote" | "submissionsPerPlayer"
 >;
 
 export interface DataClient {
@@ -60,10 +59,14 @@ export interface DataClient {
   revealRound(roundId: string): Promise<RoundResult[]>;
 
   // ---- Submissions ----
+  /** Submit a pick. Allowance 1 → replaces the existing pick; larger → adds
+   *  one until the league's submissionsPerPlayer cap is reached. */
   submitSong(roundId: string, track: Track, comment?: string): Promise<Submission>;
   getVotableSubmissions(roundId: string): Promise<VotableSubmission[]>;
-  /** The caller's own pick for a round, or null — shown while awaiting others. */
-  getMySubmission(roundId: string): Promise<Submission | null>;
+  /** The caller's own picks for a round (empty if none) — shown while awaiting others. */
+  getMySubmissions(roundId: string): Promise<Submission[]>;
+  /** Remove one of the caller's own picks while the round is still submitting. */
+  removeSubmission(roundId: string, submissionId: string): Promise<void>;
 
   // ---- Voting + results ----
   castBallot(roundId: string, allocations: Record<string, number>, comments?: Record<string, string>): Promise<void>;

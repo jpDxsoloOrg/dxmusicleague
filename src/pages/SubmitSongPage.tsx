@@ -11,6 +11,13 @@ export function SubmitSongPage() {
   const { leagueId = "" } = useParams();
   const { data: detail, loading: detailLoading } = useAsync(() => data.getLeagueDetail(leagueId), [leagueId]);
 
+  // The caller's existing picks — drives the slot count and the remove list.
+  const activeRoundId = detail?.currentRound?.id;
+  const { data: mySubs, reload: reloadMySubs } = useAsync(
+    () => (activeRoundId ? data.getMySubmissions(activeRoundId) : Promise.resolve([])),
+    [activeRoundId],
+  );
+
   // Resolve the league's chosen music service. The page never names Spotify.
   const provider = useMemo(
     () => (detail ? getProvider(detail.league.musicProvider) : undefined),
@@ -60,8 +67,15 @@ export function SubmitSongPage() {
 
   const { league, currentRound } = detail;
   const theme = currentRound?.theme ?? "Current round";
+  const allowance = league.settings.submissionsPerPlayer || 1;
+  const picks = mySubs ?? [];
+  const multi = allowance > 1;
+  // With one slot a re-submit replaces the pick, so the form never locks;
+  // with several, the form locks once every slot is used.
+  const slotsFull = multi && picks.length >= allowance;
 
   if (submitted && selected) {
+    const remaining = allowance - picks.length;
     return (
       <div className="submit-page">
         <div className="submitted-card">
@@ -71,7 +85,26 @@ export function SubmitSongPage() {
             <strong>{selected.title}</strong> by {selected.artists.join(", ")} is locked in for
             “{theme}”.
           </p>
-          <Link to={`/leagues/${league.id}`} className="btn btn-primary">Back to league</Link>
+          {multi && remaining > 0 && (
+            <p className="field-hint">
+              {picks.length} of {allowance} picks in — you can add {remaining} more.
+            </p>
+          )}
+          <div className="submitted-actions">
+            {multi && remaining > 0 && (
+              <button
+                className="btn"
+                onClick={() => {
+                  setSelected(null);
+                  setComment("");
+                  setSubmitted(false);
+                }}
+              >
+                Add another song
+              </button>
+            )}
+            <Link to={`/leagues/${league.id}`} className="btn btn-primary">Back to league</Link>
+          </div>
         </div>
       </div>
     );
@@ -127,8 +160,47 @@ export function SubmitSongPage() {
 
         {/* submission column */}
         <aside className="submission-col">
-          <h3>Your submission</h3>
-          {selected ? (
+          {/* Existing picks — only interesting once a league allows several. */}
+          {multi && picks.length > 0 && (
+            <div className="my-picks">
+              <h3>Your picks ({picks.length} of {allowance})</h3>
+              {picks.map((pick) => (
+                <div key={pick.id} className="my-picks-row">
+                  <TrackArt track={pick.track} size={40} />
+                  <div className="my-picks-info">
+                    <strong>{pick.track.title}</strong>
+                    <span>{pick.track.artists.join(", ")}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="my-picks-remove"
+                    aria-label={`Remove ${pick.track.title}`}
+                    onClick={async () => {
+                      if (!currentRound) return;
+                      try {
+                        await data.removeSubmission(currentRound.id, pick.id);
+                        reloadMySubs();
+                      } catch (err) {
+                        setSubmitError(err instanceof Error ? err.message : "Couldn't remove that pick.");
+                      }
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <h3>{multi ? "Add a song" : "Your submission"}</h3>
+          {slotsFull ? (
+            <div className="submission-empty">
+              <p>
+                All {allowance} of your picks are in for this round. Remove one above if you want
+                to swap it for something else.
+              </p>
+            </div>
+          ) : selected ? (
             <div className="submission-card">
               <TrackArt track={selected} size={220} />
               <div className="submission-meta">
@@ -155,6 +227,7 @@ export function SubmitSongPage() {
                   setSubmitError(null);
                   try {
                     await data.submitSong(currentRound.id, selected, comment.trim() || undefined);
+                    reloadMySubs();
                     setSubmitted(true);
                   } catch (err) {
                     setSubmitError(err instanceof Error ? err.message : "Couldn't submit your song.");
@@ -165,7 +238,11 @@ export function SubmitSongPage() {
                 {busy ? "Submitting…" : "Submit song →"}
               </button>
               {submitError && <p className="page-error">{submitError}</p>}
-              <p className="submit-note">You can change your pick until the round closes.</p>
+              <p className="submit-note">
+                {multi
+                  ? `You can submit up to ${allowance} songs and swap them until the round closes.`
+                  : "You can change your pick until the round closes."}
+              </p>
             </div>
           ) : (
             <div className="submission-empty">

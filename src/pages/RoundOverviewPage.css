@@ -230,6 +230,9 @@
   color: var(--text-dim);
 }
 .owner-create { display: flex; gap: 8px; flex: 1; min-width: 220px; }
+/* theme + optional subtitle stack; the button sits under them */
+.owner-create-stacked { flex-direction: column; align-items: stretch; }
+.owner-create-stacked .btn { align-self: flex-start; }
 .owner-input {
   flex: 1;
   background: var(--bg-2);
@@ -262,6 +265,7 @@
   border: 1px solid var(--border);
   max-width: 360px;
 }
+.my-pick-card + .my-pick-card { margin-top: 8px; }
 .my-pick-info { display: flex; flex-direction: column; min-width: 0; }
 .my-pick-info strong { font-size: 14px; }
 .my-pick-info span { font-size: 12px; color: var(--text-muted); }

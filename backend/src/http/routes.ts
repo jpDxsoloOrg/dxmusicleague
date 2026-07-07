@@ -155,10 +155,24 @@ export function buildRoutes(deps: Deps): Route[] {
       handler: (req) => submissions.listVotableSubmissions(deps, req.caller, req.params.roundId!),
     },
     {
-      // The caller's own pick for a round (singular) — shown while they wait.
+      // The caller's own picks for a round — shown while they wait.
+      method: "GET",
+      pattern: "/rounds/:roundId/my-submissions",
+      handler: (req) => submissions.getMySubmissions(deps, req.caller, req.params.roundId!),
+    },
+    {
+      // Legacy singular shape (kept for cached frontends): first pick or null.
       method: "GET",
       pattern: "/rounds/:roundId/submission",
-      handler: (req) => submissions.getMySubmission(deps, req.caller, req.params.roundId!),
+      handler: async (req) =>
+        (await submissions.getMySubmissions(deps, req.caller, req.params.roundId!))[0] ?? null,
+    },
+    {
+      // Remove one of the caller's own picks while the round is submitting.
+      method: "DELETE",
+      pattern: "/rounds/:roundId/submissions/:submissionId",
+      handler: (req) =>
+        submissions.removeSubmission(deps, req.caller, req.params.roundId!, req.params.submissionId!),
     },
     {
       method: "POST",

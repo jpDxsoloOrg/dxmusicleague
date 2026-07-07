@@ -32,10 +32,12 @@ export async function autoAdvanceRound(
   const memberCount = league.memberIds.length;
   let advanced = false;
 
-  // submitting → previewing: deadline passed OR every member has submitted.
+  // submitting → previewing: deadline passed OR every member has used every
+  // submission slot (submissionsPerPlayer picks each).
   if (round.status === "submitting") {
     const subs = await deps.repo.getSubmissionsForRound(round.id);
-    const everyoneSubmitted = memberCount > 0 && subs.length >= memberCount;
+    const allowance = league.settings.submissionsPerPlayer || 1;
+    const everyoneSubmitted = memberCount > 0 && subs.length >= memberCount * allowance;
     const deadlineHit = past(round.submissionDeadline);
     if (deadlineHit || everyoneSubmitted) {
       round.status = "previewing";

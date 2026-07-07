@@ -97,20 +97,43 @@ export class MockClient implements DataClient {
     return getRoundResults(roundId);
   }
 
-  // Remembers the current user's pick per round so the round page can show it
-  // back (the real backend persists this; the mock keeps it in memory).
-  private mySubs = new Map<string, Submission>();
+  // Remembers the current user's picks per round so the round page can show
+  // them back (the real backend persists these; the mock keeps them in memory).
+  // Mirrors the backend rules: allowance 1 replaces, larger allowances add
+  // until the cap, and a pick can be removed while submitting.
+  private mySubs = new Map<string, Submission[]>();
+
+  private allowanceForRound(roundId: string): number {
+    const leagueId = rounds.find((r) => r.id === roundId)?.leagueId;
+    const league = leagueId ? getLeagueDetail(leagueId)?.league : undefined;
+    return league?.settings.submissionsPerPlayer || 1;
+  }
 
   async submitSong(roundId: string, track: Track, comment?: string): Promise<Submission> {
-    const sub: Submission = { id: `sub-mock-${roundId}`, roundId, userId: currentUser.id, track, comment };
-    this.mySubs.set(roundId, sub);
+    const mine = this.mySubs.get(roundId) ?? [];
+    const allowance = this.allowanceForRound(roundId);
+    if (allowance > 1 && mine.length >= allowance) {
+      throw new Error(`You've already submitted ${allowance} songs for this round — remove one to change your picks.`);
+    }
+    const sub: Submission = {
+      id: `sub-mock-${roundId}-${mine.length + 1}`,
+      roundId,
+      userId: currentUser.id,
+      track,
+      comment,
+    };
+    this.mySubs.set(roundId, allowance === 1 ? [{ ...sub, id: mine[0]?.id ?? sub.id }] : [...mine, sub]);
     return sub;
   }
   async getVotableSubmissions(roundId: string): Promise<VotableSubmission[]> {
     return getVotableSubmissions(roundId);
   }
-  async getMySubmission(roundId: string): Promise<Submission | null> {
-    return this.mySubs.get(roundId) ?? null;
+  async getMySubmissions(roundId: string): Promise<Submission[]> {
+    return this.mySubs.get(roundId) ?? [];
+  }
+  async removeSubmission(roundId: string, submissionId: string): Promise<void> {
+    const mine = this.mySubs.get(roundId) ?? [];
+    this.mySubs.set(roundId, mine.filter((s) => s.id !== submissionId));
   }
 
   async castBallot(roundId: string, _allocations: Record<string, number>, comments?: Record<string, string>): Promise<void> {

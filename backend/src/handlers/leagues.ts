@@ -75,13 +75,14 @@ function latestRound(rounds: Round[]): Round | undefined {
 }
 
 /** Real completion %: for a voting round, ballots-cast / members; for a
- *  submitting round, submissions / members; otherwise 0/100 by status. */
+ *  submitting round, submissions / total slots; otherwise 0/100 by status. */
 async function completionPct(repo: Repository, league: League, round: Round | undefined): Promise<number> {
   if (!round) return 0;
   const members = league.memberIds.length || 1;
   if (round.status === "submitting") {
     const subs = await repo.getSubmissionsForRound(round.id);
-    return Math.round((subs.length / members) * 100);
+    const slots = members * (league.settings.submissionsPerPlayer || 1);
+    return Math.min(100, Math.round((subs.length / slots) * 100));
   }
   if (round.status === "voting") {
     const ballots = await repo.getBallotsForRound(round.id);
@@ -326,12 +327,17 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
   );
 
   // Who's done vs. pending for the live phase (identities only): submissions
-  // while submitting, ballots while voting.
+  // while submitting, ballots while voting. With a multi-song allowance a
+  // member counts as done once they've used every slot.
   let submissionProgress: RoundParticipation | undefined;
   let votingProgress: RoundParticipation | undefined;
   if (currentRound?.status === "submitting") {
     const subs = await deps.repo.getSubmissionsForRound(currentRound.id);
-    submissionProgress = await splitByDone(deps.users, league.memberIds, new Set(subs.map((s) => s.userId)));
+    const allowance = league.settings.submissionsPerPlayer || 1;
+    const countByUser = new Map<string, number>();
+    for (const s of subs) countByUser.set(s.userId, (countByUser.get(s.userId) ?? 0) + 1);
+    const doneIds = new Set(league.memberIds.filter((id) => (countByUser.get(id) ?? 0) >= allowance));
+    submissionProgress = await splitByDone(deps.users, league.memberIds, doneIds);
   } else if (currentRound?.status === "voting") {
     const ballots = await deps.repo.getBallotsForRound(currentRound.id);
     votingProgress = await splitByDone(deps.users, league.memberIds, new Set(ballots.map((b) => b.voterId)));
@@ -423,6 +429,7 @@ export interface UpdateSettingsInput {
   votePoolSize: unknown;
   maxPointsPerSong: unknown;
   allowSelfVote: unknown;
+  submissionsPerPlayer?: unknown;
 }
 
 export async function updateLeagueSettings(
@@ -441,12 +448,21 @@ export async function updateLeagueSettings(
     throw badRequest("Max points per song can't exceed the vote pool.");
   }
 
-  // submissionsPerPlayer stays fixed (one song per player) — see LeagueSettings.
+  // Songs per player: 1 (classic) up to 5 — more helps small leagues fill a
+  // round out. Absent in the payload → keep the league's current value.
+  const submissionsPerPlayer =
+    input?.submissionsPerPlayer === undefined
+      ? league.settings.submissionsPerPlayer || 1
+      : asInt(input.submissionsPerPlayer);
+  if (!(submissionsPerPlayer >= 1 && submissionsPerPlayer <= 5)) {
+    throw badRequest("Songs per player must be between 1 and 5.");
+  }
+
   const settings: LeagueSettings = {
     votePoolSize,
     maxPointsPerSong,
     allowSelfVote: Boolean(input?.allowSelfVote),
-    submissionsPerPlayer: league.settings.submissionsPerPlayer,
+    submissionsPerPlayer,
   };
   return deps.repo.updateLeagueSettings(leagueId, settings);
 }

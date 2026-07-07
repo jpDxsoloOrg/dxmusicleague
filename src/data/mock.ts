@@ -335,7 +335,7 @@ export function leaveLeague(leagueId: string): void {
 /** Owner edits a league's voting settings (mock: mutate in place). */
 export function updateLeagueSettings(
   leagueId: string,
-  settings: Pick<LeagueSettings, "votePoolSize" | "maxPointsPerSong" | "allowSelfVote">,
+  settings: Pick<LeagueSettings, "votePoolSize" | "maxPointsPerSong" | "allowSelfVote" | "submissionsPerPlayer">,
 ): League {
   const league = leagues.find((lg) => lg.id === leagueId);
   if (!league) throw new Error("That league doesn't exist.");

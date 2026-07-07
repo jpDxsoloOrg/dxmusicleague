@@ -118,16 +118,20 @@ export class MemoryRepository implements Repository {
 
   // ---- Submissions ----
   async putSubmission(submission: Submission): Promise<void> {
-    this.submissions.set(`${submission.roundId}/${submission.userId}`, structuredClone(submission));
+    this.submissions.set(`${submission.roundId}/${submission.userId}/${submission.id}`, structuredClone(submission));
   }
-  async getSubmission(roundId: string, userId: string): Promise<Submission | undefined> {
-    const s = this.submissions.get(`${roundId}/${userId}`);
-    return s ? structuredClone(s) : undefined;
+  async getSubmissionsForUser(roundId: string, userId: string): Promise<Submission[]> {
+    return [...this.submissions.values()]
+      .filter((s) => s.roundId === roundId && s.userId === userId)
+      .map((s) => structuredClone(s));
   }
   async getSubmissionsForRound(roundId: string): Promise<Submission[]> {
     return [...this.submissions.values()]
       .filter((s) => s.roundId === roundId)
       .map((s) => structuredClone(s));
+  }
+  async deleteSubmission(roundId: string, userId: string, submissionId: string): Promise<void> {
+    this.submissions.delete(`${roundId}/${userId}/${submissionId}`);
   }
 
   // ---- Ballots ----

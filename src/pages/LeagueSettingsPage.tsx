@@ -17,6 +17,7 @@ export function LeagueSettingsPage() {
   const [votePoolSize, setVotePoolSize] = useState(10);
   const [maxPointsPerSong, setMaxPointsPerSong] = useState(5);
   const [allowSelfVote, setAllowSelfVote] = useState(false);
+  const [submissionsPerPlayer, setSubmissionsPerPlayer] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -28,6 +29,7 @@ export function LeagueSettingsPage() {
       setVotePoolSize(detail.league.settings.votePoolSize);
       setMaxPointsPerSong(detail.league.settings.maxPointsPerSong);
       setAllowSelfVote(detail.league.settings.allowSelfVote);
+      setSubmissionsPerPlayer(detail.league.settings.submissionsPerPlayer || 1);
     }
   }, [detail]);
 
@@ -64,7 +66,7 @@ export function LeagueSettingsPage() {
     setError(null);
     setSaved(false);
     try {
-      await data.updateLeagueSettings(league.id, { votePoolSize, maxPointsPerSong, allowSelfVote });
+      await data.updateLeagueSettings(league.id, { votePoolSize, maxPointsPerSong, allowSelfVote, submissionsPerPlayer });
       setSaved(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't save settings.");
@@ -89,6 +91,18 @@ export function LeagueSettingsPage() {
     <div className="settings-page">
       <Link to={`/leagues/${league.id}`} className="link-muted">← {league.name}</Link>
       <h1 className="settings-title">League settings</h1>
+
+      <section className="settings-card">
+        <h3 className="settings-card-title">Submissions</h3>
+        <Stepper
+          label="Songs per player"
+          hint="How many songs each player submits per round. More than one helps small leagues fill a playlist out."
+          value={submissionsPerPlayer}
+          min={1}
+          max={5}
+          onChange={setSubmissionsPerPlayer}
+        />
+      </section>
 
       <section className="settings-card">
         <h3 className="settings-card-title">Voting rules</h3>

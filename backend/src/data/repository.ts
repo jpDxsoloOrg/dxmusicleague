@@ -36,10 +36,14 @@ export interface Repository {
   updateRound(round: Round): Promise<void>;
 
   // ---- Submissions ----
-  /** Upsert (one per user per round — re-submit overwrites). */
+  /** Upsert by submission id — a player may hold several per round (the
+   *  league's submissionsPerPlayer cap is enforced by the handler, not here). */
   putSubmission(submission: Submission): Promise<void>;
-  getSubmission(roundId: string, userId: string): Promise<Submission | undefined>;
+  /** All of one player's submissions for a round (empty if none yet). */
+  getSubmissionsForUser(roundId: string, userId: string): Promise<Submission[]>;
   getSubmissionsForRound(roundId: string): Promise<Submission[]>;
+  /** Delete one of a player's submissions; no-op if the id isn't theirs. */
+  deleteSubmission(roundId: string, userId: string, submissionId: string): Promise<void>;
 
   // ---- Ballots ----
   putBallot(ballot: Ballot): Promise<void>;

@@ -143,8 +143,11 @@ export class ApiClient implements DataClient {
   getVotableSubmissions(roundId: string): Promise<VotableSubmission[]> {
     return request<VotableSubmission[]>(`/rounds/${enc(roundId)}/submissions`);
   }
-  getMySubmission(roundId: string): Promise<Submission | null> {
-    return request<Submission | null>(`/rounds/${enc(roundId)}/submission`);
+  getMySubmissions(roundId: string): Promise<Submission[]> {
+    return request<Submission[]>(`/rounds/${enc(roundId)}/my-submissions`);
+  }
+  async removeSubmission(roundId: string, submissionId: string): Promise<void> {
+    await request(`/rounds/${enc(roundId)}/submissions/${enc(submissionId)}`, { method: "DELETE" });
   }
 
   // ---- Voting + results ----
