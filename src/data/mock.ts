@@ -144,14 +144,23 @@ export interface PublicLeagueSummary {
   firstRoundTheme?: string;
 }
 
-/** Discover open public leagues: public, not started (no round past draft), with
- *  open slots, that the current user isn't already in. Ranked fullest-first. */
+/** The join window: a league takes new members until round 1 moves past the
+ *  submitting phase (mirrors the backend rule). */
+function joinWindowClosed(leagueId: string): boolean {
+  return rounds.some(
+    (r) => r.leagueId === leagueId && !(r.status === "draft" || (r.index === 1 && r.status === "submitting")),
+  );
+}
+
+/** Discover open public leagues: public, join window still open (round 1 at
+ *  most submitting), with open slots, that the current user isn't already in.
+ *  Ranked fullest-first. */
 export function getOpenPublicLeagues(limit = 12): PublicLeagueSummary[] {
   const open = leagues
     .filter((lg) => lg.visibility === "public")
     .filter((lg) => !lg.memberIds.includes(currentUser.id))
     .filter((lg) => (lg.maxMembers ?? 0) - lg.memberIds.length > 0)
-    .filter((lg) => !rounds.some((r) => r.leagueId === lg.id && r.status !== "draft"))
+    .filter((lg) => !joinWindowClosed(lg.id))
     .map((lg) => {
       const firstRound = rounds
         .filter((r) => r.leagueId === lg.id)
@@ -201,7 +210,7 @@ export function getPublicLeaguePreview(leagueId: string): PublicLeaguePreview | 
     openSlots,
     firstRoundTheme: leagueRounds[0]?.theme,
     members: lg.memberIds.map((id) => ({ id, displayName: users[id]?.displayName ?? id })),
-    hasStarted: leagueRounds.some((r) => r.status !== "draft"),
+    hasStarted: joinWindowClosed(lg.id),
     isFull: openSlots <= 0,
     alreadyMember: lg.memberIds.includes(currentUser.id),
   };
@@ -314,8 +323,8 @@ export function claimPublicSpot(leagueId: string): JoinResult {
   if (league.memberIds.includes(currentUser.id)) {
     return { ok: false, error: `You're already a member of ${league.name}.` };
   }
-  if (rounds.some((r) => r.leagueId === league.id && r.status !== "draft")) {
-    return { ok: false, error: "This league has already started." };
+  if (joinWindowClosed(league.id)) {
+    return { ok: false, error: "It's too late to join — round 1 has closed submissions." };
   }
   if (league.memberIds.length >= (league.maxMembers ?? 0)) {
     return { ok: false, error: "This league is full." };

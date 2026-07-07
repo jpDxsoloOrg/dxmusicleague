@@ -203,10 +203,17 @@ export interface PublicLeagueSummary {
   firstRoundTheme?: string;
 }
 
-/** Discover open public leagues: public, not yet started (no round past draft),
- *  with open slots, that the caller isn't already in. Ranked fullest-first
- *  (momentum), tie-broken by name. Caller trims to the top N (e.g. 3) for the
- *  dashboard. */
+/** The join window: a league takes new members until round 1 moves past the
+ *  submitting phase — late joiners can still submit a song and play the whole
+ *  league. Closed once any round is beyond submitting (or a later round exists). */
+function joinWindowClosed(rounds: Round[]): boolean {
+  return rounds.some((r) => !(r.status === "draft" || (r.index === 1 && r.status === "submitting")));
+}
+
+/** Discover open public leagues: public, join window still open (round 1 at
+ *  most submitting), with open slots, that the caller isn't already in. Ranked
+ *  fullest-first (momentum), tie-broken by name. Caller trims to the top N
+ *  (e.g. 3) for the dashboard. */
 export async function listOpenPublicLeagues(
   deps: Deps,
   caller: string,
@@ -223,7 +230,7 @@ export async function listOpenPublicLeagues(
     if (openSlots <= 0) continue; // full
 
     const rounds = await deps.repo.getRoundsForLeague(league.id);
-    if (rounds.some((r) => r.status !== "draft")) continue; // already started
+    if (joinWindowClosed(rounds)) continue; // past round 1's submitting phase
 
     const firstRound = [...rounds].sort((a, b) => a.index - b.index)[0];
     open.push({
@@ -250,7 +257,7 @@ export interface PublicLeaguePreview {
   openSlots: number;
   firstRoundTheme?: string;
   members: UserView[];
-  /** True once a round has moved past draft — the league is no longer joinable. */
+  /** True once the join window closed (round 1 past submitting) — no longer joinable. */
   hasStarted: boolean;
   isFull: boolean;
   /** True when the caller already belongs (UI links them straight in instead). */
@@ -279,7 +286,7 @@ export async function getPublicLeaguePreview(
     openSlots,
     firstRoundTheme: firstRound?.theme,
     members: await toUserViews(deps.users, league.memberIds),
-    hasStarted: rounds.some((r) => r.status !== "draft"),
+    hasStarted: joinWindowClosed(rounds),
     isFull: openSlots <= 0,
     alreadyMember: league.memberIds.includes(caller),
   };
@@ -384,7 +391,9 @@ export async function claimPublicSpot(
   if (league.memberIds.includes(caller)) throw conflict(`You're already a member of ${league.name}.`);
 
   const rounds = await deps.repo.getRoundsForLeague(leagueId);
-  if (rounds.some((r) => r.status !== "draft")) throw conflict("This league has already started.");
+  if (joinWindowClosed(rounds)) {
+    throw conflict("It's too late to join — round 1 has closed submissions.");
+  }
 
   // Best-effort capacity check. Not atomic under concurrent claims — acceptable
   // at this scale; promote to a conditional write if contention ever matters.

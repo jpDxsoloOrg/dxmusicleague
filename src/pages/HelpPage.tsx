@@ -232,12 +232,12 @@ export function HelpPage() {
               Public leagues show up in the <strong>Trending Leagues</strong> section
               on your Home page. Click one to open its <strong>preview</strong>, where
               you can see the theme, how many players have joined, and how many slots
-              are open. If there's room and it hasn't started, hit{" "}
-              <strong>Claim a spot</strong> to join.
+              are open. If there's room, hit <strong>Claim a spot</strong> to join — you
+              can still hop in while round 1 is accepting submissions.
             </p>
-            <Callout kind="note" title="If a league is full or already started">
-              You can't claim a spot once a public league hits its player cap or its
-              first round is underway. Ask the owner whether they can make room.
+            <Callout kind="note" title="If a league is full or underway">
+              You can't claim a spot once a public league hits its player cap or once
+              round 1 has closed submissions. Ask the owner whether they can make room.
             </Callout>
           </Section>
 

@@ -71,7 +71,7 @@ export function PreviewLeaguePage() {
                 You're already in — open league →
               </Link>
             ) : preview.hasStarted ? (
-              <p className="preview-status">This league has already started and isn't taking new members.</p>
+              <p className="preview-status">Round 1 has closed submissions — this league isn't taking new members.</p>
             ) : preview.isFull ? (
               <p className="preview-status">This league is full.</p>
             ) : (

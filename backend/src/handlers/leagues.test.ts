@@ -46,19 +46,24 @@ test("returns open public leagues, ranked fullest-first, with open slots + theme
   assert.equal(alpha.firstRoundTheme, "Road trip");
 });
 
-test("excludes private, full, started, and already-joined leagues", async () => {
+test("excludes private, full, past-submitting, and already-joined leagues", async () => {
   const deps = await depsWith(
     [
       league({ id: "priv", name: "Priv", visibility: "private" }),
       league({ id: "full", name: "Full", visibility: "public", memberIds: ["u-owner", "u-2"], maxMembers: 2 }),
-      league({ id: "started", name: "Started", visibility: "public", maxMembers: 8 }),
+      league({ id: "closed", name: "Closed", visibility: "public", maxMembers: 8 }),
       league({ id: "mine", name: "Mine", visibility: "public", memberIds: ["u-owner", "u-me"], maxMembers: 8 }),
       league({ id: "ok", name: "Ok", visibility: "public", maxMembers: 8 }),
+      // Round 1 still submitting → the join window is open, so it's listed.
+      league({ id: "sub", name: "Sub", visibility: "public", maxMembers: 8 }),
     ],
-    [{ id: "started~1", leagueId: "started", index: 1, theme: "Go", status: "submitting" }],
+    [
+      { id: "closed~1", leagueId: "closed", index: 1, theme: "Go", status: "voting" },
+      { id: "sub~1", leagueId: "sub", index: 1, theme: "Go", status: "submitting" },
+    ],
   );
   const out = await listOpenPublicLeagues(deps, "u-me");
-  assert.deepEqual(out.map((l) => l.id), ["ok"]);
+  assert.deepEqual(out.map((l) => l.id).sort(), ["ok", "sub"]);
 });
 
 test("respects the limit", async () => {
@@ -129,22 +134,31 @@ test("leave removes the caller's membership; owner can't leave; only self", asyn
   await assert.rejects(leaveLeague(deps, "u-me", "lg", "u-me"), is(400));
 });
 
-test("claim rejects full / started / already-member / private-or-missing", async () => {
+test("claim rejects full / past-submitting / already-member / private-or-missing", async () => {
   const deps = await depsWith(
     [
       league({ id: "full", name: "Full", visibility: "public", memberIds: ["u-owner", "u-2"], maxMembers: 2 }),
-      league({ id: "started", name: "Started", visibility: "public", memberIds: ["u-owner"], maxMembers: 4 }),
+      league({ id: "closed", name: "Closed", visibility: "public", memberIds: ["u-owner"], maxMembers: 4 }),
       league({ id: "mine", name: "Mine", visibility: "public", memberIds: ["u-owner", "u-me"], maxMembers: 4 }),
       league({ id: "priv", name: "Priv", visibility: "private", maxMembers: 4 }),
     ],
-    [{ id: "started~1", leagueId: "started", index: 1, theme: "Go", status: "submitting" }],
+    [{ id: "closed~1", leagueId: "closed", index: 1, theme: "Go", status: "previewing" }],
   );
   const is = (code: number) => (e: unknown) => e instanceof ApiError && e.statusCode === code;
   await assert.rejects(claimPublicSpot(deps, "u-me", "full"), is(409));
-  await assert.rejects(claimPublicSpot(deps, "u-me", "started"), is(409));
+  await assert.rejects(claimPublicSpot(deps, "u-me", "closed"), is(409));
   await assert.rejects(claimPublicSpot(deps, "u-me", "mine"), is(409));
   await assert.rejects(claimPublicSpot(deps, "u-me", "priv"), is(404));
   await assert.rejects(claimPublicSpot(deps, "u-me", "nope"), is(404));
+});
+
+test("claim succeeds while round 1 is still submitting (late join window)", async () => {
+  const deps = await depsWith(
+    [league({ id: "sub", name: "Sub", visibility: "public", memberIds: ["u-owner"], maxMembers: 4 })],
+    [{ id: "sub~1", leagueId: "sub", index: 1, theme: "Go", status: "submitting" }],
+  );
+  const { league: joined } = await claimPublicSpot(deps, "u-me", "sub");
+  assert.ok(joined.memberIds.includes("u-me"));
 });
 
 test("detail exposes who submitted vs waiting during submitting — names only, no tracks", async () => {
