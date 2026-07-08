@@ -401,6 +401,7 @@ export class DynamoRepository implements Repository {
           roundId: ballot.roundId,
           voterId: ballot.voterId,
           allocations: ballot.allocations,
+          downvotes: ballot.downvotes,
           comments: ballot.comments,
           castAt: ballot.castAt,
         },
@@ -417,6 +418,7 @@ export class DynamoRepository implements Repository {
       roundId: it.roundId as string,
       voterId: it.voterId as string,
       allocations: (it.allocations ?? {}) as Record<string, number>,
+      downvotes: it.downvotes as Record<string, number> | undefined,
       comments: it.comments as Record<string, string> | undefined,
       castAt: it.castAt as string,
     };
@@ -433,6 +435,7 @@ export class DynamoRepository implements Repository {
       roundId: it.roundId as string,
       voterId: it.voterId as string,
       allocations: (it.allocations ?? {}) as Record<string, number>,
+      downvotes: it.downvotes as Record<string, number> | undefined,
       comments: it.comments as Record<string, string> | undefined,
       castAt: it.castAt as string,
     }));

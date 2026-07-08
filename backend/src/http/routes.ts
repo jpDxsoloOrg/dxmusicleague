@@ -109,6 +109,8 @@ export function buildRoutes(deps: Deps): Route[] {
           votePoolSize: body.votePoolSize,
           maxPointsPerSong: body.maxPointsPerSong,
           allowSelfVote: body.allowSelfVote,
+          submissionsPerPlayer: body.submissionsPerPlayer,
+          downvotePoolSize: body.downvotePoolSize,
         });
       },
     },
@@ -187,6 +189,7 @@ export function buildRoutes(deps: Deps): Route[] {
         const body = asRecord(req.body);
         return voting.castBallot(deps, req.caller, req.params.roundId!, {
           allocations: body.allocations as Record<string, number>,
+          downvotes: body.downvotes as Record<string, number> | undefined,
           comments: body.comments as Record<string, string> | undefined,
         });
       },

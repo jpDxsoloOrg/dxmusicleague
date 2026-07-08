@@ -30,7 +30,7 @@ export interface CreateRoundInput {
 /** The league settings an owner can edit. */
 export type EditableLeagueSettings = Pick<
   LeagueSettings,
-  "votePoolSize" | "maxPointsPerSong" | "allowSelfVote" | "submissionsPerPlayer"
+  "votePoolSize" | "maxPointsPerSong" | "allowSelfVote" | "submissionsPerPlayer" | "downvotePoolSize"
 >;
 
 export interface DataClient {
@@ -73,9 +73,18 @@ export interface DataClient {
   removeSubmission(roundId: string, submissionId: string): Promise<void>;
 
   // ---- Voting + results ----
-  castBallot(roundId: string, allocations: Record<string, number>, comments?: Record<string, string>): Promise<void>;
+  castBallot(
+    roundId: string,
+    allocations: Record<string, number>,
+    comments?: Record<string, string>,
+    downvotes?: Record<string, number>,
+  ): Promise<void>;
   /** The caller's cast ballot for a round (null before voting) — pre-fills the
    *  vote page so an edit doesn't silently wipe earlier points/comments. */
-  getMyBallot(roundId: string): Promise<{ allocations: Record<string, number>; comments: Record<string, string> } | null>;
+  getMyBallot(roundId: string): Promise<{
+    allocations: Record<string, number>;
+    downvotes: Record<string, number>;
+    comments: Record<string, string>;
+  } | null>;
   getResults(roundId: string): Promise<RoundResult[]>;
 }

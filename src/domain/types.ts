@@ -26,6 +26,9 @@ export interface LeagueSettings {
   /** Submissions allowed per player per round. Locked to 1 today; kept as a
    *  field so multiple-per-player can be enabled later without a migration. */
   submissionsPerPlayer: number;
+  /** Anti-votes each voter may place per round (0 disables; each subtracts
+   *  a point at tally — totals can go negative). Optional to spend. */
+  downvotePoolSize: number;
 }
 
 /** Private = joinable by invite code only. Public = discoverable + claimable. */
@@ -99,4 +102,5 @@ export const DEFAULT_LEAGUE_SETTINGS: LeagueSettings = {
   maxPointsPerSong: 5,
   allowSelfVote: false,
   submissionsPerPlayer: 1,
+  downvotePoolSize: 0,
 };

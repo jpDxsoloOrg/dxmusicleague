@@ -303,6 +303,7 @@ export function HelpPage() {
               <li>There's a <strong>cap per song</strong> (5 by default) so you have to spread your points around rather than dumping them all on one favourite.</li>
               <li>You must spend <strong>every point</strong> in your pool before you can submit — the counter shows how many you have left.</li>
               <li>You can add an optional <strong>comment</strong> to any song; it's shown next to that song when the round is revealed.</li>
+              <li>Some leagues also give you <strong>anti-votes</strong> (💔): each subtracts a point from a song. Spending them is optional, and totals can go negative.</li>
             </ul>
             <p>
               Submitters stay anonymous the whole time. Hit <strong>Submit votes</strong>{" "}
@@ -406,6 +407,10 @@ export function HelpPage() {
               <dd>The most points a voter can place on any single song.</dd>
               <dt>Allow self-voting</dt>
               <dd>Whether players may put points on their own submission.</dd>
+              <dt>Songs per player</dt>
+              <dd>How many songs each player submits per round (1–5). Handy for small leagues.</dd>
+              <dt>Anti-votes per player</dt>
+              <dd>Optional negative votes (0–2). Each subtracts a point from a song at reveal; scores can go negative.</dd>
             </dl>
             <Callout kind="warn" title="Deleting a league">
               The settings page also has a <strong>delete league</strong> option. It's

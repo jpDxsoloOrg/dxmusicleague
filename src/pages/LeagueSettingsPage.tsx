@@ -19,6 +19,7 @@ export function LeagueSettingsPage() {
   const [maxPointsPerSong, setMaxPointsPerSong] = useState(5);
   const [allowSelfVote, setAllowSelfVote] = useState(false);
   const [submissionsPerPlayer, setSubmissionsPerPlayer] = useState(1);
+  const [downvotePoolSize, setDownvotePoolSize] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -31,6 +32,7 @@ export function LeagueSettingsPage() {
       setMaxPointsPerSong(detail.league.settings.maxPointsPerSong);
       setAllowSelfVote(detail.league.settings.allowSelfVote);
       setSubmissionsPerPlayer(detail.league.settings.submissionsPerPlayer || 1);
+      setDownvotePoolSize(detail.league.settings.downvotePoolSize ?? 0);
     }
   }, [detail]);
 
@@ -67,7 +69,13 @@ export function LeagueSettingsPage() {
     setError(null);
     setSaved(false);
     try {
-      await data.updateLeagueSettings(league.id, { votePoolSize, maxPointsPerSong, allowSelfVote, submissionsPerPlayer });
+      await data.updateLeagueSettings(league.id, {
+        votePoolSize,
+        maxPointsPerSong,
+        allowSelfVote,
+        submissionsPerPlayer,
+        downvotePoolSize,
+      });
       setSaved(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't save settings.");
@@ -148,6 +156,15 @@ export function LeagueSettingsPage() {
         {capInvalid && (
           <span className="field-error">Max points per song must be between 1 and the vote pool ({votePoolSize}).</span>
         )}
+
+        <Stepper
+          label="Anti-votes per player"
+          hint="Each anti-vote subtracts a point from a song. 0 turns them off; spending them is optional. Scores can go negative."
+          value={downvotePoolSize}
+          min={0}
+          max={2}
+          onChange={setDownvotePoolSize}
+        />
 
         <div className="setting-row">
           <div className="setting-text">

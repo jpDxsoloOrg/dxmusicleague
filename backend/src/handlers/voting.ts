@@ -25,6 +25,7 @@ async function roundForMember(deps: Deps, caller: string, roundId: string) {
 
 export interface CastBallotInput {
   allocations: Record<string, number>;
+  downvotes?: Record<string, number>;
   comments?: Record<string, string>;
 }
 
@@ -45,16 +46,17 @@ export async function castBallot(
   const allocations = input?.allocations && typeof input.allocations === "object" ? input.allocations : {};
 
   // The rules engine throws ApiError(400) on any broken rule; returns the
-  // cleaned (positive-only) allocations on success.
+  // cleaned (positive-only) allocations and downvotes on success.
   const cleaned = validateBallot(
-    { allocations, comments: input?.comments },
+    { allocations, downvotes: input?.downvotes, comments: input?.comments },
     { settings: league.settings, validSubmissionIds, ownSubmissionId },
   );
 
   const ballot: Ballot = {
     roundId,
     voterId: caller,
-    allocations: cleaned,
+    allocations: cleaned.allocations,
+    downvotes: cleaned.downvotes,
     comments: cleanComments(input?.comments, validSubmissionIds),
     castAt: new Date().toISOString(),
   };
@@ -72,10 +74,16 @@ export async function getMyBallot(
   deps: Deps,
   caller: string,
   roundId: string,
-): Promise<{ allocations: Record<string, number>; comments: Record<string, string> } | null> {
+): Promise<{
+  allocations: Record<string, number>;
+  downvotes: Record<string, number>;
+  comments: Record<string, string>;
+} | null> {
   await roundForMember(deps, caller, roundId);
   const ballot = await deps.repo.getBallot(roundId, caller);
-  return ballot ? { allocations: ballot.allocations, comments: ballot.comments ?? {} } : null;
+  return ballot
+    ? { allocations: ballot.allocations, downvotes: ballot.downvotes ?? {}, comments: ballot.comments ?? {} }
+    : null;
 }
 
 /** Keep only comments on real submissions, trimmed and non-empty. */

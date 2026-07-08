@@ -5,13 +5,19 @@
 .vote-head h1 { margin: 6px 0 0; font-size: 28px; }
 .vote-sub { margin: 8px 0 0; color: var(--text-muted); max-width: 60ch; font-size: 14px; }
 
+.vote-pools {
+  flex-shrink: 0;
+  display: flex; gap: 10px;
+  position: sticky; top: 96px;
+}
 .points-left {
   flex-shrink: 0;
   display: flex; flex-direction: column; align-items: center;
   padding: 14px 22px;
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-  position: sticky; top: 96px;
 }
+/* anti-vote pool chip */
+.points-left.anti .points-num { color: #ff8a8a; }
 .points-left.spent { border-color: var(--status-revealed); }
 .points-num { font-size: 32px; font-weight: 800; line-height: 1; }
 .points-left.spent .points-num { color: var(--status-revealed); }
@@ -39,7 +45,15 @@
 .vote-info .anon { font-size: 11px; color: var(--text-dim); font-style: italic; }
 .vote-dur { margin-left: auto; font-size: 12px; color: var(--text-dim); }
 
+.vote-controls { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
 .stepper-control { display: flex; align-items: center; gap: 4px; }
+/* anti-vote stepper: smaller, red accents */
+.anti-control .step-btn { width: 28px; height: 28px; font-size: 15px; border-radius: 8px; }
+.anti-control .step-value { width: 30px; font-size: 13px; color: #ff8a8a; }
+.step-btn.anti-plus { font-size: 13px; }
+.step-btn.anti-plus:not(:disabled) { border-color: rgba(255, 138, 138, 0.5); }
+.vote-card.has-anti { border-color: rgba(255, 138, 138, 0.6); }
+.vote-card.has-points.has-anti { border-color: var(--magenta); }
 .step-btn {
   width: 36px; height: 36px; border-radius: 10px;
   background: var(--bg-2); border: 1px solid var(--border); color: var(--text);
@@ -78,15 +92,14 @@
   .vote-head { flex-direction: column; gap: 14px; }
   .vote-head h1 { font-size: 24px; }
   /* remaining-points becomes a compact sticky strip under the topbar */
+  .vote-pools { align-self: stretch; top: 68px; z-index: 5; }
   .points-left {
+    flex: 1;
     flex-direction: row;
     align-items: baseline;
     justify-content: center;
     gap: 8px;
-    align-self: stretch;
     padding: 10px 16px;
-    top: 68px;
-    z-index: 5;
   }
   .points-num { font-size: 22px; }
   .points-label { margin-top: 0; }
@@ -95,6 +108,7 @@
   .vote-card-top { flex-wrap: wrap; gap: 10px 12px; }
   .vote-info { flex: 1 1 140px; }
   .vote-dur { display: none; }
-  .stepper-control { margin-left: auto; }
+  .vote-controls { margin-left: auto; }
   .step-btn { width: 40px; height: 40px; }
+  .anti-control .step-btn { width: 34px; height: 34px; }
 }

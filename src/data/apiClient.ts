@@ -158,13 +158,27 @@ export class ApiClient implements DataClient {
   }
 
   // ---- Voting + results ----
-  async castBallot(roundId: string, allocations: Record<string, number>, comments?: Record<string, string>): Promise<void> {
-    await request(`/rounds/${enc(roundId)}/ballot`, { method: "POST", body: JSON.stringify({ allocations, comments }) });
+  async castBallot(
+    roundId: string,
+    allocations: Record<string, number>,
+    comments?: Record<string, string>,
+    downvotes?: Record<string, number>,
+  ): Promise<void> {
+    await request(`/rounds/${enc(roundId)}/ballot`, {
+      method: "POST",
+      body: JSON.stringify({ allocations, comments, downvotes }),
+    });
   }
-  getMyBallot(roundId: string): Promise<{ allocations: Record<string, number>; comments: Record<string, string> } | null> {
-    return request<{ allocations: Record<string, number>; comments: Record<string, string> } | null>(
-      `/rounds/${enc(roundId)}/my-ballot`,
-    );
+  getMyBallot(roundId: string): Promise<{
+    allocations: Record<string, number>;
+    downvotes: Record<string, number>;
+    comments: Record<string, string>;
+  } | null> {
+    return request<{
+      allocations: Record<string, number>;
+      downvotes: Record<string, number>;
+      comments: Record<string, string>;
+    } | null>(`/rounds/${enc(roundId)}/my-ballot`);
   }
   getResults(roundId: string): Promise<RoundResult[]> {
     return request<RoundResult[]>(`/rounds/${enc(roundId)}/results`);

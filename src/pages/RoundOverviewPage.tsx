@@ -466,11 +466,10 @@ function ParticipationPanel({
   doneLabel: string;
   progress: RoundParticipation;
 }) {
-  const total = progress.submitted.length + progress.waiting.length;
   return (
     <div className="sub-progress">
       <span className="sub-progress-count">
-        {icon} {progress.submitted.length} of {total} {noun} in
+        {icon} {progress.doneCount} of {progress.totalCount} {noun} in
       </span>
       {progress.submitted.length > 0 && (
         <div className="sub-progress-row">

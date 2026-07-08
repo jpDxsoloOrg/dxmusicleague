@@ -460,6 +460,10 @@ export function getStandings(leagueId: string): Standing[] {
 export interface RoundParticipation {
   submitted: User[];
   waiting: User[];
+  /** Units done vs. expected: songs (members × allowance) while submitting,
+   *  ballots (one per member) while voting. Drives the "X of N in" count. */
+  doneCount: number;
+  totalCount: number;
 }
 
 export interface LeagueDetail {
@@ -600,18 +604,24 @@ export function getLeagueDetail(leagueId: string): LeagueDetail | undefined {
   // Who's done vs. pending for the live phase, derived from the canonical
   // picks (submitting) or the seeded voter ids (voting).
   const members = league.memberIds.map((id) => users[id]).filter(Boolean);
-  const splitByDone = (doneIds: Set<string>): RoundParticipation => ({
+  const splitByDone = (doneIds: Set<string>, counts: { done: number; total: number }): RoundParticipation => ({
     submitted: members.filter((m) => doneIds.has(m.id)),
     waiting: members.filter((m) => !doneIds.has(m.id)),
+    doneCount: counts.done,
+    totalCount: counts.total,
   });
   let submissionProgress: RoundParticipation | undefined;
   let votingProgress: RoundParticipation | undefined;
   if (currentRound?.status === "submitting") {
-    submissionProgress = splitByDone(new Set(CANON_SUBMISSIONS.map((s) => s.submitterId)));
+    const allowance = league.settings.submissionsPerPlayer || 1;
+    submissionProgress = splitByDone(new Set(CANON_SUBMISSIONS.map((s) => s.submitterId)), {
+      done: CANON_SUBMISSIONS.length,
+      total: members.length * allowance,
+    });
   } else if (currentRound?.status === "voting") {
     const voterIds = new Set(CANON_SUBMISSIONS.flatMap((s) => s.seedComments.map((c) => c.voterId)));
     if (myVoteComments[leagueId]) voterIds.add(currentUser.id);
-    votingProgress = splitByDone(voterIds);
+    votingProgress = splitByDone(voterIds, { done: voterIds.size, total: members.length });
   }
 
   return {

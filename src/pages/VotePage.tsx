@@ -19,6 +19,8 @@ export function VotePage() {
 
   // points allocated per submission id
   const [allocations, setAllocations] = useState<Record<string, number>>({});
+  // anti-votes per submission id (only when the league enables them)
+  const [downvotes, setDownvotes] = useState<Record<string, number>>({});
   // optional voter comment per submission id (shown on reveal)
   const [comments, setComments] = useState<Record<string, string>>({});
   const [submitted, setSubmitted] = useState(false);
@@ -37,6 +39,7 @@ export function VotePage() {
     if (myBallot && !seeded.current) {
       seeded.current = true;
       setAllocations(myBallot.allocations);
+      setDownvotes(myBallot.downvotes ?? {});
       setComments(myBallot.comments);
     }
   }, [myBallot]);
@@ -57,8 +60,12 @@ export function VotePage() {
   const { league, currentRound } = detail;
   const pool = league.settings.votePoolSize;
   const perSongMax = league.settings.maxPointsPerSong;
+  const antiPool = league.settings.downvotePoolSize ?? 0;
   const spent = Object.values(allocations).reduce((a, b) => a + b, 0);
   const remaining = pool - spent;
+  const antiSpent = Object.values(downvotes).reduce((a, b) => a + b, 0);
+  const antiRemaining = antiPool - antiSpent;
+  // The vote pool must be spent exactly; anti-votes are optional.
   const canSubmit = remaining === 0;
 
   const setPoints = (id: string, next: number) => {
@@ -68,6 +75,14 @@ export function VotePage() {
       // never exceed the remaining pool, nor the per-song cap
       const capped = Math.min(clamped, pool - others, perSongMax);
       return { ...prev, [id]: capped };
+    });
+  };
+
+  const setAnti = (id: string, next: number) => {
+    const clamped = Math.max(0, next);
+    setDownvotes((prev) => {
+      const others = antiSpent - (prev[id] ?? 0);
+      return { ...prev, [id]: Math.min(clamped, antiPool - others) };
     });
   };
 
@@ -95,17 +110,26 @@ export function VotePage() {
           <h1>Vote{currentRound ? `: ${currentRound.theme}` : ""}</h1>
           <p className="vote-sub">Spread your points across the songs you want to win — up to {perSongMax} on any one song. Submitters stay hidden until reveal.</p>
         </div>
-        <div className={`points-left${remaining === 0 ? " spent" : ""}`}>
-          <span className="points-num">{remaining}</span>
-          <span className="points-label">points left</span>
+        <div className="vote-pools">
+          <div className={`points-left${remaining === 0 ? " spent" : ""}`}>
+            <span className="points-num">{remaining}</span>
+            <span className="points-label">points left</span>
+          </div>
+          {antiPool > 0 && (
+            <div className="points-left anti">
+              <span className="points-num">{antiRemaining}</span>
+              <span className="points-label">anti-votes left</span>
+            </div>
+          )}
         </div>
       </header>
 
       <div className="vote-list">
         {submissions.map((sub) => {
           const pts = allocations[sub.id] ?? 0;
+          const anti = downvotes[sub.id] ?? 0;
           return (
-            <div key={sub.id} className={`vote-card${pts > 0 ? " has-points" : ""}`}>
+            <div key={sub.id} className={`vote-card${pts > 0 ? " has-points" : ""}${anti > 0 ? " has-anti" : ""}`}>
               <div className="vote-card-top">
                 <TrackArt track={sub.track} size={56} />
                 <div className="vote-info">
@@ -114,20 +138,39 @@ export function VotePage() {
                   <span className="anon">Anonymous submitter</span>
                 </div>
                 <span className="vote-dur">{formatDuration(sub.track.durationMs)}</span>
-                <div className="stepper-control">
-                  <button
-                    className="step-btn"
-                    onClick={() => setPoints(sub.id, pts - 1)}
-                    disabled={pts <= 0}
-                    aria-label="Remove a point"
-                  >−</button>
-                  <span className="step-value">{pts}</span>
-                  <button
-                    className="step-btn plus"
-                    onClick={() => setPoints(sub.id, pts + 1)}
-                    disabled={remaining <= 0 || pts >= perSongMax}
-                    aria-label="Add a point"
-                  >+</button>
+                <div className="vote-controls">
+                  <div className="stepper-control">
+                    <button
+                      className="step-btn"
+                      onClick={() => setPoints(sub.id, pts - 1)}
+                      disabled={pts <= 0}
+                      aria-label="Remove a point"
+                    >−</button>
+                    <span className="step-value">{pts}</span>
+                    <button
+                      className="step-btn plus"
+                      onClick={() => setPoints(sub.id, pts + 1)}
+                      disabled={remaining <= 0 || pts >= perSongMax}
+                      aria-label="Add a point"
+                    >+</button>
+                  </div>
+                  {antiPool > 0 && (
+                    <div className="stepper-control anti-control">
+                      <button
+                        className="step-btn"
+                        onClick={() => setAnti(sub.id, anti - 1)}
+                        disabled={anti <= 0}
+                        aria-label="Remove an anti-vote"
+                      >−</button>
+                      <span className="step-value">{anti > 0 ? `−${anti}` : 0}</span>
+                      <button
+                        className="step-btn anti-plus"
+                        onClick={() => setAnti(sub.id, anti + 1)}
+                        disabled={antiRemaining <= 0}
+                        aria-label="Add an anti-vote"
+                      >💔</button>
+                    </div>
+                  )}
                 </div>
               </div>
               <textarea
@@ -150,7 +193,7 @@ export function VotePage() {
             setBusy(true);
             setError(null);
             try {
-              await data.castBallot(roundId, allocations, comments);
+              await data.castBallot(roundId, allocations, comments, antiPool > 0 ? downvotes : undefined);
               setSubmitted(true);
             } catch (err) {
               setError(err instanceof Error ? err.message : "Couldn't submit your votes.");

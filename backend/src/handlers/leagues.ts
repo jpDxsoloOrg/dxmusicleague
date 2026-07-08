@@ -41,6 +41,10 @@ interface Standing {
 interface RoundParticipation {
   submitted: UserView[];
   waiting: UserView[];
+  /** Units done vs. expected: songs (members × allowance) while submitting,
+   *  ballots (one per member) while voting. Drives the "X of N in" count. */
+  doneCount: number;
+  totalCount: number;
 }
 
 interface LeagueDetail {
@@ -63,10 +67,17 @@ async function toUserViews(users: UserDirectory, ids: string[]): Promise<UserVie
 }
 
 /** Split a league's members into done / pending given the ids that finished. */
-async function splitByDone(users: UserDirectory, memberIds: string[], doneIds: Set<string>): Promise<RoundParticipation> {
+async function splitByDone(
+  users: UserDirectory,
+  memberIds: string[],
+  doneIds: Set<string>,
+  counts: { done: number; total: number },
+): Promise<RoundParticipation> {
   return {
     submitted: await toUserViews(users, memberIds.filter((id) => doneIds.has(id))),
     waiting: await toUserViews(users, memberIds.filter((id) => !doneIds.has(id))),
+    doneCount: counts.done,
+    totalCount: counts.total,
   };
 }
 
@@ -344,10 +355,16 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
     const countByUser = new Map<string, number>();
     for (const s of subs) countByUser.set(s.userId, (countByUser.get(s.userId) ?? 0) + 1);
     const doneIds = new Set(league.memberIds.filter((id) => (countByUser.get(id) ?? 0) >= allowance));
-    submissionProgress = await splitByDone(deps.users, league.memberIds, doneIds);
+    submissionProgress = await splitByDone(deps.users, league.memberIds, doneIds, {
+      done: subs.length,
+      total: league.memberIds.length * allowance,
+    });
   } else if (currentRound?.status === "voting") {
     const ballots = await deps.repo.getBallotsForRound(currentRound.id);
-    votingProgress = await splitByDone(deps.users, league.memberIds, new Set(ballots.map((b) => b.voterId)));
+    votingProgress = await splitByDone(deps.users, league.memberIds, new Set(ballots.map((b) => b.voterId)), {
+      done: ballots.length,
+      total: league.memberIds.length,
+    });
   }
 
   return {
@@ -458,6 +475,7 @@ export interface UpdateSettingsInput {
   maxPointsPerSong: unknown;
   allowSelfVote: unknown;
   submissionsPerPlayer?: unknown;
+  downvotePoolSize?: unknown;
 }
 
 export async function updateLeagueSettings(
@@ -486,11 +504,21 @@ export async function updateLeagueSettings(
     throw badRequest("Songs per player must be between 1 and 5.");
   }
 
+  // Anti-votes: 0 (off, the default) up to 2 per voter per round.
+  const downvotePoolSize =
+    input?.downvotePoolSize === undefined
+      ? league.settings.downvotePoolSize ?? 0
+      : asInt(input.downvotePoolSize);
+  if (!(downvotePoolSize >= 0 && downvotePoolSize <= 2)) {
+    throw badRequest("Anti-votes per player must be between 0 and 2.");
+  }
+
   const settings: LeagueSettings = {
     votePoolSize,
     maxPointsPerSong,
     allowSelfVote: Boolean(input?.allowSelfVote),
     submissionsPerPlayer,
+    downvotePoolSize,
   };
   return deps.repo.updateLeagueSettings(leagueId, settings);
 }

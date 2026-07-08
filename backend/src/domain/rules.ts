@@ -7,6 +7,8 @@ import { badRequest } from "./errors.ts";
 
 export interface BallotInput {
   allocations: Record<string, number>;
+  /** submissionId -> anti-votes; each subtracts a point at tally. */
+  downvotes?: Record<string, number>;
   comments?: Record<string, string>;
 }
 
@@ -20,10 +22,14 @@ export interface BallotContext {
 
 /**
  * Validate a ballot as a complete unit. Throws ApiError(400) on the first
- * broken rule; returns the cleaned allocations (only positive entries) on pass.
- * Mirrors the 6 ballot rules in the design doc.
+ * broken rule; returns the cleaned allocations and downvotes (positive entries
+ * only) on pass. Mirrors the ballot rules in the design doc. The vote pool
+ * must be spent exactly; anti-votes are optional (0 up to downvotePoolSize).
  */
-export function validateBallot(input: BallotInput, ctx: BallotContext): Record<string, number> {
+export function validateBallot(
+  input: BallotInput,
+  ctx: BallotContext,
+): { allocations: Record<string, number>; downvotes: Record<string, number> } {
   const { settings, validSubmissionIds, ownSubmissionId } = ctx;
   const entries = Object.entries(input.allocations);
 
@@ -48,12 +54,39 @@ export function validateBallot(input: BallotInput, ctx: BallotContext): Record<s
     throw badRequest(`You must spend exactly ${settings.votePoolSize} points (you spent ${total}).`);
   }
 
-  // Keep only the songs that actually received points.
+  const downvotePool = settings.downvotePoolSize ?? 0;
+  const downEntries = Object.entries(input.downvotes ?? {});
+  let downTotal = 0;
+  for (const [submissionId, antiVotes] of downEntries) {
+    if (!validSubmissionIds.has(submissionId)) {
+      throw badRequest(`Unknown submission in ballot: ${submissionId}`);
+    }
+    if (!Number.isInteger(antiVotes) || antiVotes < 0) {
+      throw badRequest("Each anti-vote must be a whole number, 0 or more.");
+    }
+    if (!settings.allowSelfVote && submissionId === ownSubmissionId && antiVotes > 0) {
+      throw badRequest("You can't anti-vote your own submission.");
+    }
+    downTotal += antiVotes;
+  }
+  if (downTotal > downvotePool) {
+    throw badRequest(
+      downvotePool === 0
+        ? "This league doesn't use anti-votes."
+        : `You have at most ${downvotePool} anti-votes to spend (you spent ${downTotal}).`,
+    );
+  }
+
+  // Keep only the songs that actually received points / anti-votes.
   const cleaned: Record<string, number> = {};
   for (const [submissionId, points] of entries) {
     if (points > 0) cleaned[submissionId] = points;
   }
-  return cleaned;
+  const cleanedDown: Record<string, number> = {};
+  for (const [submissionId, antiVotes] of downEntries) {
+    if (antiVotes > 0) cleanedDown[submissionId] = antiVotes;
+  }
+  return { allocations: cleaned, downvotes: cleanedDown };
 }
 
 export interface Tallyable {
@@ -82,19 +115,25 @@ export function rankSubmissions<T extends Tallyable>(items: T[]): Array<T & { ra
 
 /**
  * Tally raw ballots into per-submission point totals + distinct-voter counts.
- * `ballots` is a list of allocation maps (submissionId -> points).
+ * Anti-votes subtract from the total (which may go negative); only positive
+ * votes count toward the distinct-voter tie-break.
  */
 export function tallyBallots(
-  ballots: Array<Record<string, number>>,
+  ballots: Array<{ allocations: Record<string, number>; downvotes?: Record<string, number> }>,
 ): Map<string, { points: number; distinctVoters: number }> {
   const tally = new Map<string, { points: number; distinctVoters: number }>();
-  for (const allocations of ballots) {
-    for (const [submissionId, points] of Object.entries(allocations)) {
-      if (points <= 0) continue;
-      const cur = tally.get(submissionId) ?? { points: 0, distinctVoters: 0 };
-      cur.points += points;
-      cur.distinctVoters += 1;
-      tally.set(submissionId, cur);
+  const bump = (submissionId: string, delta: number, countsAsVoter: boolean) => {
+    const cur = tally.get(submissionId) ?? { points: 0, distinctVoters: 0 };
+    cur.points += delta;
+    if (countsAsVoter) cur.distinctVoters += 1;
+    tally.set(submissionId, cur);
+  };
+  for (const ballot of ballots) {
+    for (const [submissionId, points] of Object.entries(ballot.allocations)) {
+      if (points > 0) bump(submissionId, points, true);
+    }
+    for (const [submissionId, antiVotes] of Object.entries(ballot.downvotes ?? {})) {
+      if (antiVotes > 0) bump(submissionId, -antiVotes, false);
     }
   }
   return tally;

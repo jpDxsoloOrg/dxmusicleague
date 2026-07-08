@@ -24,7 +24,7 @@ export interface RoundResult {
 export async function computeResults(deps: Deps, roundId: string): Promise<RoundResult[]> {
   const subs = await deps.repo.getSubmissionsForRound(roundId);
   const ballots = await deps.repo.getBallotsForRound(roundId);
-  const tally = tallyBallots(ballots.map((b) => b.allocations));
+  const tally = tallyBallots(ballots.map((b) => ({ allocations: b.allocations, downvotes: b.downvotes })));
 
   const ranked = rankSubmissions(
     subs.map((s) => ({
@@ -66,7 +66,8 @@ async function commentsFor(deps: Deps, submissionId: string, ballots: Ballot[]):
 export async function finalizeReveal(deps: Deps, round: Round): Promise<RoundResult[]> {
   const results = await computeResults(deps, round.id);
   for (const r of results) {
-    if (r.points > 0) await deps.repo.addStandingPoints(round.leagueId, r.submitter.id, r.points);
+    // Negative totals (anti-votes) bank too — the leaderboard can go below 0.
+    if (r.points !== 0) await deps.repo.addStandingPoints(round.leagueId, r.submitter.id, r.points);
   }
   round.status = "revealed";
   await deps.repo.updateRound(round);

@@ -30,6 +30,9 @@ export interface LeagueSettings {
   maxPointsPerSong: number;
   allowSelfVote: boolean;
   submissionsPerPlayer: number;
+  /** Anti-votes each voter may place per round (0 disables; each subtracts
+   *  a point at tally — totals can go negative). Optional to spend. */
+  downvotePoolSize: number;
 }
 
 /** Private = joinable by invite code only. Public = discoverable + claimable. */
@@ -94,6 +97,8 @@ export interface Ballot {
   voterId: string;
   /** submissionId -> points. Stored as one atomic item. */
   allocations: Record<string, number>;
+  /** submissionId -> anti-votes; each subtracts a point at tally. */
+  downvotes?: Record<string, number>;
   comments?: Record<string, string>;
   castAt: string;
 }
@@ -103,4 +108,5 @@ export const DEFAULT_LEAGUE_SETTINGS: LeagueSettings = {
   maxPointsPerSong: 5,
   allowSelfVote: false,
   submissionsPerPlayer: 1,
+  downvotePoolSize: 0,
 };

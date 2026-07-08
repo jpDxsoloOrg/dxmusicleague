@@ -145,13 +145,25 @@ export class MockClient implements DataClient {
   }
 
   // Last cast ballot per round, so the vote page can pre-fill on a revisit.
-  private myBallots = new Map<string, { allocations: Record<string, number>; comments: Record<string, string> }>();
+  private myBallots = new Map<
+    string,
+    { allocations: Record<string, number>; downvotes: Record<string, number>; comments: Record<string, string> }
+  >();
 
-  async castBallot(roundId: string, allocations: Record<string, number>, comments?: Record<string, string>): Promise<void> {
-    this.myBallots.set(roundId, { allocations, comments: comments ?? {} });
+  async castBallot(
+    roundId: string,
+    allocations: Record<string, number>,
+    comments?: Record<string, string>,
+    downvotes?: Record<string, number>,
+  ): Promise<void> {
+    this.myBallots.set(roundId, { allocations, downvotes: downvotes ?? {}, comments: comments ?? {} });
     saveVoteComments(roundId, comments ?? {});
   }
-  async getMyBallot(roundId: string): Promise<{ allocations: Record<string, number>; comments: Record<string, string> } | null> {
+  async getMyBallot(roundId: string): Promise<{
+    allocations: Record<string, number>;
+    downvotes: Record<string, number>;
+    comments: Record<string, string>;
+  } | null> {
     return this.myBallots.get(roundId) ?? null;
   }
   async getResults(roundId: string): Promise<RoundResult[]> {
