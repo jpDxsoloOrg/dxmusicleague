@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { data } from "../data";
 import type { VoterComment } from "../data";
 import { getProvider } from "../music";
@@ -11,15 +11,21 @@ import "./RevealPage.css";
 
 export function RevealPage() {
   const { leagueId = "" } = useParams();
+  // ?round=<id> shows a past round's results; without it, the current round.
+  const [params] = useSearchParams();
+  const requestedRoundId = params.get("round");
   const { user } = useAuth();
   const { data: detail, loading: detailLoading, reload: reloadDetail } = useAsync(
     () => data.getLeagueDetail(leagueId),
     [leagueId],
   );
 
-  const currentRound = detail?.currentRound;
-  const roundId = currentRound?.id ?? "";
-  const status = currentRound?.status;
+  const rounds = detail?.rounds ?? [];
+  const round =
+    (requestedRoundId ? rounds.find((r) => r.id === requestedRoundId) : undefined) ??
+    detail?.currentRound;
+  const roundId = round?.id ?? "";
+  const status = round?.status;
   const revealed = status === "revealed" || status === "complete";
 
   // Results only exist once a round is revealed.
@@ -68,8 +74,8 @@ export function RevealPage() {
       <div className="reveal-page">
         <header className="reveal-head">
           <Link to={`/leagues/${league.id}`} className="link-muted">← {league.name}</Link>
-          <h1>Round Results</h1>
-          {currentRound && <p className="reveal-theme">{currentRound.theme}</p>}
+          <h1>{round ? `Round ${round.index} Results` : "Round Results"}</h1>
+          {round && <p className="reveal-theme">{round.theme}</p>}
         </header>
         <div className="reveal-pending">
           {isOwner && status === "voting" ? (
@@ -90,7 +96,7 @@ export function RevealPage() {
 
   const winner = results[0];
   const rest = results.slice(1);
-  const playlistUrl = currentRound?.playlistUrl ?? "#";
+  const playlistUrl = round?.playlistUrl ?? "#";
 
   return (
     <div className="reveal-page">
@@ -98,8 +104,8 @@ export function RevealPage() {
         <div className="reveal-main">
           <header className="reveal-head">
             <Link to={`/leagues/${league.id}`} className="link-muted">← {league.name}</Link>
-            <h1>Round Results</h1>
-            {currentRound && <p className="reveal-theme">{currentRound.theme}</p>}
+            <h1>{round ? `Round ${round.index} Results` : "Round Results"}</h1>
+            {round && <p className="reveal-theme">{round.theme}</p>}
           </header>
 
           {/* winner */}

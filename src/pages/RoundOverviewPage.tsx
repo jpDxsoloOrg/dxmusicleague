@@ -111,13 +111,18 @@ export function RoundOverviewPage() {
       currentRound?.status === "previewing" ||
       currentRound?.status === "voting");
 
-  // Build the stepper: one node per round index up to totalRounds.
+  // Build the stepper: one node per round index up to totalRounds. Finished
+  // rounds link to their results so past reveals stay reachable.
   const steps = Array.from({ length: totalRounds }, (_, i) => {
     const idx = i + 1;
     const round = rounds.find((r) => r.index === idx);
     const status: RoundStatus | "upcoming" = round?.status ?? "upcoming";
     const isCurrent = currentRound?.index === idx;
-    return { idx, status, isCurrent };
+    const resultsTo =
+      round && (status === "revealed" || status === "complete")
+        ? `/leagues/${league.id}/reveal?round=${round.id}`
+        : undefined;
+    return { idx, status, isCurrent, resultsTo };
   });
 
   return (
@@ -147,16 +152,26 @@ export function RoundOverviewPage() {
           {/* Invite others — hidden once a capped league is full. */}
           {league.inviteCode && !isFull && <InvitePanel code={league.inviteCode} />}
 
-          {/* round stepper */}
+          {/* round stepper — finished rounds click through to their results */}
           <div className="stepper">
-            {steps.map((s) => (
-              <div key={s.idx} className={`step step-${s.status}${s.isCurrent ? " current" : ""}`}>
-                <span className="step-dot">
-                  {s.status === "complete" || s.status === "revealed" ? "✓" : s.idx}
-                </span>
-                <span className="step-label">R{s.idx}</span>
-              </div>
-            ))}
+            {steps.map((s) => {
+              const content = (
+                <>
+                  <span className="step-dot">
+                    {s.status === "complete" || s.status === "revealed" ? "✓" : s.idx}
+                  </span>
+                  <span className="step-label">R{s.idx}</span>
+                </>
+              );
+              const cls = `step step-${s.status}${s.isCurrent ? " current" : ""}`;
+              return s.resultsTo ? (
+                <Link key={s.idx} to={s.resultsTo} className={`${cls} step-clickable`} title={`Round ${s.idx} results`}>
+                  {content}
+                </Link>
+              ) : (
+                <div key={s.idx} className={cls}>{content}</div>
+              );
+            })}
           </div>
 
           {/* active round hero */}

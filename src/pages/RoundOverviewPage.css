@@ -114,6 +114,12 @@
 }
 .step.current .step-label { color: var(--text); }
 
+/* finished rounds are links to their results */
+.step-clickable { cursor: pointer; }
+.step-clickable:hover .step-dot { filter: brightness(1.25); transform: scale(1.08); }
+.step-clickable:hover .step-label { color: var(--text); text-decoration: underline; }
+.step-clickable .step-dot { transition: filter 0.15s ease, transform 0.15s ease; }
+
 /* active round hero */
 .hero-round {
   position: relative;
