@@ -48,3 +48,25 @@ test("results include the submitter's note and voter comments", async () => {
   assert.equal(b.submitterComment, undefined);
   assert.deepEqual(b.comments, []);
 });
+
+test("getMyBallot returns the cast ballot (points + comments), null before voting", async () => {
+  const { getMyBallot, castBallot } = await import("./voting.ts");
+  const d = await deps();
+  await d.repo.putSubmission({
+    id: "sub-a", roundId: ROUND, userId: "u-sarah",
+    track: { id: "t1", provider: "spotify", providerTrackId: "sp1", title: "Song A", artists: ["A"] },
+  });
+  await d.repo.putSubmission({
+    id: "sub-b", roundId: ROUND, userId: "u-owner",
+    track: { id: "t2", provider: "spotify", providerTrackId: "sp2", title: "Song B", artists: ["B"] },
+  });
+
+  assert.equal(await getMyBallot(d, "u-james", ROUND), null);
+  // Full 10-point pool, respecting the 5-per-song cap.
+  await castBallot(d, "u-james", ROUND, {
+    allocations: { "sub-a": 5, "sub-b": 5 },
+    comments: { "sub-a": "Banger." },
+  });
+  const mine = await getMyBallot(d, "u-james", ROUND);
+  assert.deepEqual(mine, { allocations: { "sub-a": 5, "sub-b": 5 }, comments: { "sub-a": "Banger." } });
+});

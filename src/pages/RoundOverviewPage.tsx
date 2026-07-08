@@ -27,6 +27,7 @@ function primaryAction(
   round: Round,
   submittedCount: number,
   allowance: number,
+  hasVoted: boolean,
 ): { label: string; to: string } | undefined {
   switch (round.status) {
     case "submitting": {
@@ -43,7 +44,7 @@ function primaryAction(
     case "previewing":
       return undefined;
     case "voting":
-      return { label: "Vote now", to: `/leagues/${leagueId}/vote` };
+      return { label: hasVoted ? "Edit your votes" : "Vote now", to: `/leagues/${leagueId}/vote` };
     case "revealed":
     case "complete":
       return { label: "View results", to: `/leagues/${leagueId}/reveal` };
@@ -101,8 +102,10 @@ export function RoundOverviewPage() {
   const countdown = formatCountdown(deadline);
   const allowance = league.settings.submissionsPerPlayer || 1;
   const myPicks = mySubmissions ?? [];
+  // The voting-progress panel already knows who voted — reuse it for the CTA.
+  const hasVoted = Boolean(user && votingProgress?.submitted.some((m) => m.id === user.id));
   const action = currentRound
-    ? primaryAction(league.id, currentRound, myPicks.length, allowance)
+    ? primaryAction(league.id, currentRound, myPicks.length, allowance, hasVoted)
     : undefined;
   // Show the player's own picks while a round is live (submitting → voting).
   const showMyPicks =

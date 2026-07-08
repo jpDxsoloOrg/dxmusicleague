@@ -70,5 +70,8 @@ export interface DataClient {
 
   // ---- Voting + results ----
   castBallot(roundId: string, allocations: Record<string, number>, comments?: Record<string, string>): Promise<void>;
+  /** The caller's cast ballot for a round (null before voting) — pre-fills the
+   *  vote page so an edit doesn't silently wipe earlier points/comments. */
+  getMyBallot(roundId: string): Promise<{ allocations: Record<string, number>; comments: Record<string, string> } | null>;
   getResults(roundId: string): Promise<RoundResult[]>;
 }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { data } from "../data";
 import { formatDuration } from "../music";
@@ -24,6 +24,22 @@ export function VotePage() {
   const [submitted, setSubmitted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // A ballot already cast for this round: pre-fill it so editing votes doesn't
+  // silently wipe the earlier points and comments (which a blank re-cast did).
+  const { data: myBallot } = useAsync(
+    () => (roundId ? data.getMyBallot(roundId) : Promise.resolve(null)),
+    [roundId],
+  );
+  const hasVoted = Boolean(myBallot);
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (myBallot && !seeded.current) {
+      seeded.current = true;
+      setAllocations(myBallot.allocations);
+      setComments(myBallot.comments);
+    }
+  }, [myBallot]);
 
   if (detailLoading) {
     return <div className="vote-page"><p className="page-loading">Loading…</p></div>;
@@ -61,7 +77,10 @@ export function VotePage() {
         <div className="vote-done">
           <div className="submitted-check">✓</div>
           <h2>Votes locked in</h2>
-          <p>You spent all {pool} points. Results appear when the round is revealed.</p>
+          <p>
+            You spent all {pool} points. You can come back and adjust your votes until voting
+            closes; results appear when the round is revealed.
+          </p>
           <Link to={`/leagues/${league.id}`} className="btn btn-primary">Back to league</Link>
         </div>
       </div>
@@ -139,7 +158,7 @@ export function VotePage() {
             }
           }}
         >
-          {busy ? "Submitting…" : "Submit votes"}
+          {busy ? "Submitting…" : hasVoted ? "Update votes" : "Submit votes"}
         </button>
         {error && <span className="vote-hint" style={{ color: "#ff8a8a" }}>{error}</span>}
         {!canSubmit && !error && (

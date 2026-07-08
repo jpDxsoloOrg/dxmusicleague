@@ -138,6 +138,10 @@ export class MemoryRepository implements Repository {
   async putBallot(ballot: Ballot): Promise<void> {
     this.ballots.set(`${ballot.roundId}/${ballot.voterId}`, structuredClone(ballot));
   }
+  async getBallot(roundId: string, voterId: string): Promise<Ballot | undefined> {
+    const b = this.ballots.get(`${roundId}/${voterId}`);
+    return b ? structuredClone(b) : undefined;
+  }
   async getBallotsForRound(roundId: string): Promise<Ballot[]> {
     return [...this.ballots.values()]
       .filter((b) => b.roundId === roundId)

@@ -65,6 +65,19 @@ export async function castBallot(
   return { ok: true };
 }
 
+/** The caller's own cast ballot for a round (or null before they vote), so the
+ *  vote page can pre-fill points + comments instead of starting blank — a blind
+ *  re-cast used to silently wipe the earlier ballot's comments. */
+export async function getMyBallot(
+  deps: Deps,
+  caller: string,
+  roundId: string,
+): Promise<{ allocations: Record<string, number>; comments: Record<string, string> } | null> {
+  await roundForMember(deps, caller, roundId);
+  const ballot = await deps.repo.getBallot(roundId, caller);
+  return ballot ? { allocations: ballot.allocations, comments: ballot.comments ?? {} } : null;
+}
+
 /** Keep only comments on real submissions, trimmed and non-empty. */
 function cleanComments(raw: unknown, validIds: Set<string>): Record<string, string> {
   const out: Record<string, string> = {};

@@ -392,6 +392,20 @@ export class DynamoRepository implements Repository {
       }),
     );
   }
+  async getBallot(roundId: string, voterId: string): Promise<Ballot | undefined> {
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.tableName, Key: { PK: `ROUND#${roundId}`, SK: `BALLOT#${voterId}` } }),
+    );
+    if (!res.Item) return undefined;
+    const it = res.Item;
+    return {
+      roundId: it.roundId as string,
+      voterId: it.voterId as string,
+      allocations: (it.allocations ?? {}) as Record<string, number>,
+      comments: it.comments as Record<string, string> | undefined,
+      castAt: it.castAt as string,
+    };
+  }
   async getBallotsForRound(roundId: string): Promise<Ballot[]> {
     const res = await this.doc.send(
       new QueryCommand({

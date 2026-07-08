@@ -191,6 +191,12 @@ export function buildRoutes(deps: Deps): Route[] {
       handler: (req) => voting.revealRound(deps, req.caller, req.params.roundId!),
     },
     {
+      // The caller's own cast ballot — pre-fills the vote page for edits.
+      method: "GET",
+      pattern: "/rounds/:roundId/my-ballot",
+      handler: (req) => voting.getMyBallot(deps, req.caller, req.params.roundId!),
+    },
+    {
       method: "GET",
       pattern: "/rounds/:roundId/results",
       handler: (req) => voting.getResults(deps, req.caller, req.params.roundId!),

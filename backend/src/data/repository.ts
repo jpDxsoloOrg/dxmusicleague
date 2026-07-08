@@ -47,6 +47,7 @@ export interface Repository {
 
   // ---- Ballots ----
   putBallot(ballot: Ballot): Promise<void>;
+  getBallot(roundId: string, voterId: string): Promise<Ballot | undefined>;
   getBallotsForRound(roundId: string): Promise<Ballot[]>;
 
   // ---- Standings (running season totals) ----
