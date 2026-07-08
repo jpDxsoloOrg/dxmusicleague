@@ -69,6 +69,7 @@
 }
 .invite-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .invite-btn { font-size: 13px; padding: 8px 14px; }
+.invite-note { flex-basis: 100%; margin: 0; font-size: 12px; color: var(--text-dim); line-height: 1.5; }
 
 /* stepper */
 .stepper {

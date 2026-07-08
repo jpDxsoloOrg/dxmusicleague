@@ -152,8 +152,19 @@ export function RoundOverviewPage() {
             <OwnerRoundControl league={league} currentRound={currentRound} onChange={reload} />
           )}
 
-          {/* Invite others — hidden once a capped league is full. */}
-          {league.inviteCode && !isFull && <InvitePanel code={league.inviteCode} />}
+          {/* Invite others. When a capped league is full it hides for members,
+              but the owner keeps it — the cap only limits public claiming;
+              invite-code joins still work. */}
+          {league.inviteCode && (isOwner || !isFull) && (
+            <InvitePanel
+              code={league.inviteCode}
+              note={
+                isOwner && isFull
+                  ? "Your league is at its player cap, so it's hidden from public discovery — but this code still lets invited friends join."
+                  : undefined
+              }
+            />
+          )}
 
           {/* round stepper — finished rounds click through to their results */}
           <div className="stepper">
@@ -299,7 +310,7 @@ export function RoundOverviewPage() {
 
 // Invite strip — shows the league's shareable code and a ready-to-send join
 // link, each with a copy button. Any member can invite a friend.
-function InvitePanel({ code }: { code: string }) {
+function InvitePanel({ code, note }: { code: string; note?: string }) {
   const joinUrl = `${window.location.origin}/leagues/join?code=${encodeURIComponent(code)}`;
   const [copied, setCopied] = useState<"code" | "link" | null>(null);
 
@@ -327,6 +338,7 @@ function InvitePanel({ code }: { code: string }) {
           {copied === "link" ? "Copied ✓" : "Copy invite link"}
         </button>
       </div>
+      {note && <p className="invite-note">{note}</p>}
     </div>
   );
 }
