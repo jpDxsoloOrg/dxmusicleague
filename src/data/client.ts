@@ -47,6 +47,10 @@ export interface DataClient {
   claimSpot(leagueId: string): Promise<JoinResult>;
   /** Leave a league — removes the caller's own membership. */
   leaveLeague(leagueId: string): Promise<void>;
+  /** Owner-only: remove another member from the league. */
+  kickMember(leagueId: string, userId: string): Promise<void>;
+  /** Owner-only: mint a fresh invite code — the old code/link stops working. */
+  regenerateInvite(leagueId: string): Promise<League>;
   getStandings(leagueId: string): Promise<Standing[]>;
   /** Owner-only: update the league's voting settings. */
   updateLeagueSettings(leagueId: string, settings: EditableLeagueSettings): Promise<League>;

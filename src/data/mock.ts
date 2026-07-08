@@ -341,6 +341,29 @@ export function leaveLeague(leagueId: string): void {
   league.memberIds = league.memberIds.filter((id) => id !== currentUser.id);
 }
 
+/** Owner kicks another member (mock: mutate in place). */
+export function kickMember(leagueId: string, userId: string): void {
+  const league = leagues.find((lg) => lg.id === leagueId);
+  if (!league) throw new Error("That league doesn't exist.");
+  if (league.ownerId !== currentUser.id) throw new Error("Only the league owner can remove other players.");
+  if (userId === league.ownerId) throw new Error("The owner can't be removed.");
+  league.memberIds = league.memberIds.filter((id) => id !== userId);
+}
+
+/** Owner mints a fresh invite code; the old one stops working (mock). */
+export function regenerateInvite(leagueId: string): League {
+  const league = leagues.find((lg) => lg.id === leagueId);
+  if (!league) throw new Error("That league doesn't exist.");
+  if (league.ownerId !== currentUser.id) throw new Error("Only the league owner can change the invite code.");
+  delete inviteCodes[league.inviteCode];
+  const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  let code = "DXL-";
+  for (let i = 0; i < 6; i++) code += alphabet[Math.floor(Math.random() * alphabet.length)];
+  league.inviteCode = code;
+  inviteCodes[code] = league.id;
+  return league;
+}
+
 /** Owner edits a league's voting settings (mock: mutate in place). */
 export function updateLeagueSettings(
   leagueId: string,

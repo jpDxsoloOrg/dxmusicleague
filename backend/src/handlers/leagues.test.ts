@@ -208,3 +208,38 @@ test("detail exposes who voted vs waiting during voting — no allocations leake
   // Identities only — the ballot's allocations must not ride along.
   assert.equal(JSON.stringify(detail.votingProgress).includes("sub-1"), false);
 });
+
+test("owner can kick a member; non-owners can't; the owner can't be kicked", async () => {
+  const deps = await depsWith([
+    league({ id: "lg", name: "L", visibility: "private", ownerId: "u-owner", memberIds: ["u-owner", "u-me", "u-2"] }),
+  ]);
+  const is = (code: number) => (e: unknown) => e instanceof ApiError && e.statusCode === code;
+  // a regular member can't kick someone else
+  await assert.rejects(leaveLeague(deps, "u-me", "lg", "u-2"), is(403));
+  // the owner can't be removed
+  await assert.rejects(leaveLeague(deps, "u-2", "lg", "u-owner"), is(403));
+  await assert.rejects(leaveLeague(deps, "u-owner", "lg", "u-owner"), is(400));
+  // the owner kicks u-2
+  await leaveLeague(deps, "u-owner", "lg", "u-2");
+  const after = await deps.repo.getLeague("lg");
+  assert.deepEqual(after?.memberIds, ["u-owner", "u-me"]);
+});
+
+test("regenerateInvite mints a new code, retires the old, and is owner-only", async () => {
+  const { regenerateInvite } = await import("./leagues.ts");
+  const deps = await depsWith([
+    league({ id: "lg", name: "L", visibility: "private", ownerId: "u-owner", memberIds: ["u-owner", "u-me"] }),
+  ]);
+  await deps.repo.putInvite("C-lg", "lg"); // the seed helper's code, registered
+
+  const is = (code: number) => (e: unknown) => e instanceof ApiError && e.statusCode === code;
+  await assert.rejects(regenerateInvite(deps, "u-me", "lg"), is(403));
+
+  const { league: updated } = await regenerateInvite(deps, "u-owner", "lg");
+  assert.notEqual(updated.inviteCode, "C-lg");
+  assert.match(updated.inviteCode, /^DXL-/);
+  assert.equal(await deps.repo.getLeagueIdForInvite("C-lg"), undefined); // old retired
+  assert.equal(await deps.repo.getLeagueIdForInvite(updated.inviteCode), "lg"); // new works
+  const stored = await deps.repo.getLeague("lg");
+  assert.equal(stored?.inviteCode, updated.inviteCode);
+});

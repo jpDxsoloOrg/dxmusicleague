@@ -90,6 +90,13 @@ export class ApiClient implements DataClient {
   async leaveLeague(leagueId: string): Promise<void> {
     await request(`/leagues/${enc(leagueId)}/members/me`, { method: "DELETE" });
   }
+  async kickMember(leagueId: string, userId: string): Promise<void> {
+    await request(`/leagues/${enc(leagueId)}/members/${enc(userId)}`, { method: "DELETE" });
+  }
+  async regenerateInvite(leagueId: string): Promise<League> {
+    const res = await request<{ league: League }>(`/leagues/${enc(leagueId)}/invite`, { method: "POST" });
+    return res.league;
+  }
 
   async joinLeague(code: string): Promise<JoinResult> {
     try {

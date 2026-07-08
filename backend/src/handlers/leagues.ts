@@ -413,15 +413,34 @@ export async function leaveLeague(
   leagueId: string,
   targetUserId: string,
 ): Promise<{ ok: true }> {
-  if (targetUserId !== caller) throw forbidden("You can only remove yourself from a league.");
   const league = await deps.repo.getLeague(leagueId);
   if (!league) throw notFound("That league doesn't exist.");
-  if (!league.memberIds.includes(caller)) throw badRequest("You're not a member of this league.");
-  if (league.ownerId === caller) {
+
+  // Removing someone else is an owner power (kick); anyone may remove themself.
+  const isSelf = targetUserId === caller;
+  if (!isSelf && league.ownerId !== caller) {
+    throw forbidden("Only the league owner can remove other players.");
+  }
+  if (!league.memberIds.includes(targetUserId)) {
+    throw badRequest(isSelf ? "You're not a member of this league." : "They're not a member of this league.");
+  }
+  if (league.ownerId === targetUserId) {
     throw badRequest("You own this league — delete it instead of leaving.");
   }
-  await deps.repo.removeMember(leagueId, caller);
+  await deps.repo.removeMember(leagueId, targetUserId);
   return { ok: true };
+}
+
+/** Owner-only: mint a fresh invite code and retire the old one — anyone still
+ *  holding the old code or link can no longer join. */
+export async function regenerateInvite(deps: Deps, caller: string, leagueId: string): Promise<{ league: League }> {
+  const league = await ownedLeague(deps, caller, leagueId);
+  const oldCode = league.inviteCode;
+  const code = newInviteCode();
+  await deps.repo.putInvite(code, league.id);
+  await deps.repo.updateInviteCode(league.id, code);
+  if (oldCode) await deps.repo.deleteInvite(oldCode);
+  return { league: { ...league, inviteCode: code } };
 }
 
 /** Load a league and assert the caller owns it. */

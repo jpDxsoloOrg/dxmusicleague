@@ -95,6 +95,12 @@ export function buildRoutes(deps: Deps): Route[] {
       },
     },
     {
+      // Owner-only: mint a fresh invite code (old code/links stop working).
+      method: "POST",
+      pattern: "/leagues/:leagueId/invite",
+      handler: (req) => leagues.regenerateInvite(deps, req.caller, req.params.leagueId!),
+    },
+    {
       method: "PATCH",
       pattern: "/leagues/:leagueId/settings",
       handler: (req) => {

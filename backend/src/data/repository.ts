@@ -27,6 +27,9 @@ export interface Repository {
 
   // ---- Invites ----
   putInvite(code: string, leagueId: string): Promise<void>;
+  deleteInvite(code: string): Promise<void>;
+  /** Point the league's record at a new invite code (lookup rows are separate). */
+  updateInviteCode(leagueId: string, code: string): Promise<void>;
   getLeagueIdForInvite(code: string): Promise<string | undefined>;
 
   // ---- Rounds ----

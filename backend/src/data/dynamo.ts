@@ -247,6 +247,21 @@ export class DynamoRepository implements Repository {
     );
     return res.Item?.leagueId as string | undefined;
   }
+  async deleteInvite(code: string): Promise<void> {
+    await this.doc.send(
+      new DeleteCommand({ TableName: this.tableName, Key: { PK: `INVITE#${code.toUpperCase()}`, SK: "META" } }),
+    );
+  }
+  async updateInviteCode(leagueId: string, code: string): Promise<void> {
+    await this.doc.send(
+      new UpdateCommand({
+        TableName: this.tableName,
+        Key: { PK: `LEAGUE#${leagueId}`, SK: "META" },
+        UpdateExpression: "SET inviteCode = :c",
+        ExpressionAttributeValues: { ":c": code },
+      }),
+    );
+  }
 
   // ---- Rounds ----
   async createRound(round: Round): Promise<void> {

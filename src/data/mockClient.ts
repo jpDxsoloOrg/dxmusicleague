@@ -19,7 +19,9 @@ import {
   getStandings,
   getVotableSubmissions,
   joinLeague,
+  kickMember,
   leaveLeague,
+  regenerateInvite,
   rounds,
   saveVoteComments,
   updateLeagueSettings,
@@ -60,6 +62,12 @@ export class MockClient implements DataClient {
   }
   async leaveLeague(leagueId: string): Promise<void> {
     leaveLeague(leagueId);
+  }
+  async kickMember(leagueId: string, userId: string): Promise<void> {
+    kickMember(leagueId, userId);
+  }
+  async regenerateInvite(leagueId: string): Promise<League> {
+    return regenerateInvite(leagueId);
   }
   async updateLeagueSettings(leagueId: string, settings: EditableLeagueSettings): Promise<League> {
     return updateLeagueSettings(leagueId, settings);

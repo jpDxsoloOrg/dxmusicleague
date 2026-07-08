@@ -98,6 +98,13 @@ export class MemoryRepository implements Repository {
   async getLeagueIdForInvite(code: string): Promise<string | undefined> {
     return this.invites.get(code.toUpperCase());
   }
+  async deleteInvite(code: string): Promise<void> {
+    this.invites.delete(code.toUpperCase());
+  }
+  async updateInviteCode(leagueId: string, code: string): Promise<void> {
+    const lg = this.leagues.get(leagueId);
+    if (lg) lg.inviteCode = code;
+  }
 
   // ---- Rounds ----
   async createRound(round: Round): Promise<void> {

@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { data } from "../data";
 import { useAsync } from "../lib/useAsync";
 import { useAuth } from "../auth/AuthContext";
+import { Avatar } from "../components/Avatar";
 import "./LeagueSettingsPage.css";
 
 // Owner-only screen to edit a league's voting rules and delete the league.
@@ -12,7 +13,7 @@ export function LeagueSettingsPage() {
   const { leagueId = "" } = useParams();
   const { user } = useAuth();
   const navigate = useNavigate();
-  const { data: detail, loading } = useAsync(() => data.getLeagueDetail(leagueId), [leagueId]);
+  const { data: detail, loading, reload } = useAsync(() => data.getLeagueDetail(leagueId), [leagueId]);
 
   const [votePoolSize, setVotePoolSize] = useState(10);
   const [maxPointsPerSong, setMaxPointsPerSong] = useState(5);
@@ -72,6 +73,28 @@ export function LeagueSettingsPage() {
       setError(err instanceof Error ? err.message : "Couldn't save settings.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleKick(userId: string, displayName: string) {
+    if (!window.confirm(`Remove ${displayName} from ${league.name}? They can rejoin with the invite code.`)) return;
+    setError(null);
+    try {
+      await data.kickMember(league.id, userId);
+      reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't remove that player.");
+    }
+  }
+
+  async function handleRegenerateInvite() {
+    if (!window.confirm("Generate a new invite code? The current code and any shared invite links will stop working.")) return;
+    setError(null);
+    try {
+      await data.regenerateInvite(league.id);
+      reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't regenerate the invite code.");
     }
   }
 
@@ -149,6 +172,48 @@ export function LeagueSettingsPage() {
       <button className="btn btn-primary settings-save" disabled={!canSave} onClick={handleSave}>
         {busy ? "Saving…" : "Save changes"}
       </button>
+
+      <section className="settings-card">
+        <h3 className="settings-card-title">Invite code</h3>
+        <div className="setting-row">
+          <div className="setting-text">
+            <span className="invite-code-value">{league.inviteCode}</span>
+            <span className="field-hint">Share this code (or the invite link) to bring players in.</span>
+          </div>
+          <button type="button" className="btn" onClick={handleRegenerateInvite}>
+            Generate new code
+          </button>
+        </div>
+        <p className="field-hint">
+          Generating a new code retires the old one — anyone holding the old code or link can no
+          longer join with it.
+        </p>
+      </section>
+
+      <section className="settings-card">
+        <h3 className="settings-card-title">Members</h3>
+        {detail.standings.map((s) => (
+          <div key={s.user.id} className="member-row">
+            <Avatar name={s.user.displayName} size={30} />
+            <span className="member-name">{s.user.displayName}</span>
+            {s.user.id === league.ownerId ? (
+              <span className="member-owner-tag">Owner</span>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-danger member-kick"
+                onClick={() => handleKick(s.user.id, s.user.displayName)}
+              >
+                Remove
+              </button>
+            )}
+          </div>
+        ))}
+        <p className="field-hint">
+          Removed players keep their name on past results but drop off the leaderboard. They can
+          rejoin with the invite code.
+        </p>
+      </section>
 
       <section className="settings-card danger">
         <h3 className="settings-card-title danger-title">⚠ Danger zone</h3>
