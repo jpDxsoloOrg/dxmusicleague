@@ -71,6 +71,6 @@ test("anti-votes: optional up to the pool, subtract at tally, negatives allowed"
     { allocations: { a: 5 }, downvotes: { b: 2 } },
     { allocations: {}, downvotes: { b: 1 } },
   ]);
-  assert.deepEqual(tally.get("b"), { points: -3, distinctVoters: 0 });
-  assert.deepEqual(tally.get("a"), { points: 5, distinctVoters: 1 });
+  assert.deepEqual(tally.get("b"), { points: -3, distinctVoters: 0, pointsFor: 0, pointsAgainst: 3 });
+  assert.deepEqual(tally.get("a"), { points: 5, distinctVoters: 1, pointsFor: 5, pointsAgainst: 0 });
 });

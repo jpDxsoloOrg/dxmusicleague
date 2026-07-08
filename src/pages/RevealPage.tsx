@@ -111,7 +111,12 @@ export function RevealPage() {
           {/* winner */}
           {winner && (
             <div className="winner-card">
-              <div className="winner-badge">🏆 Winner · {winner.points} pts</div>
+              <div className="winner-badge">
+                🏆 Winner · {winner.points} pts
+                {winner.pointsAgainst > 0 && (
+                  <span className="pts-breakdown"> (+{winner.pointsFor} / −{winner.pointsAgainst})</span>
+                )}
+              </div>
               <div className="winner-top">
                 <TrackArt track={winner.track} size={88} />
                 <div className="winner-info">
@@ -145,7 +150,12 @@ export function RevealPage() {
                   <span className="rank-by">
                     <Avatar name={r.submitter.displayName} size={24} /> {r.submitter.displayName}
                   </span>
-                  <span className="rank-pts">{r.points} pts</span>
+                  <span className="rank-pts">
+                    {r.points} pts
+                    {r.pointsAgainst > 0 && (
+                      <span className="pts-breakdown">+{r.pointsFor} / −{r.pointsAgainst}</span>
+                    )}
+                  </span>
                 </div>
                 {r.submitterComment && (
                   <p className="submitter-note">

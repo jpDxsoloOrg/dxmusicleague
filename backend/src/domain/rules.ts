@@ -118,22 +118,38 @@ export function rankSubmissions<T extends Tallyable>(items: T[]): Array<T & { ra
  * Anti-votes subtract from the total (which may go negative); only positive
  * votes count toward the distinct-voter tie-break.
  */
+export interface TallyEntry {
+  /** Net total: pointsFor − pointsAgainst. May be negative. */
+  points: number;
+  distinctVoters: number;
+  /** Sum of positive votes. */
+  pointsFor: number;
+  /** Sum of anti-votes (as a positive number). */
+  pointsAgainst: number;
+}
+
 export function tallyBallots(
   ballots: Array<{ allocations: Record<string, number>; downvotes?: Record<string, number> }>,
-): Map<string, { points: number; distinctVoters: number }> {
-  const tally = new Map<string, { points: number; distinctVoters: number }>();
-  const bump = (submissionId: string, delta: number, countsAsVoter: boolean) => {
-    const cur = tally.get(submissionId) ?? { points: 0, distinctVoters: 0 };
-    cur.points += delta;
-    if (countsAsVoter) cur.distinctVoters += 1;
+): Map<string, TallyEntry> {
+  const tally = new Map<string, TallyEntry>();
+  const entry = (submissionId: string): TallyEntry => {
+    const cur = tally.get(submissionId) ?? { points: 0, distinctVoters: 0, pointsFor: 0, pointsAgainst: 0 };
     tally.set(submissionId, cur);
+    return cur;
   };
   for (const ballot of ballots) {
     for (const [submissionId, points] of Object.entries(ballot.allocations)) {
-      if (points > 0) bump(submissionId, points, true);
+      if (points <= 0) continue;
+      const cur = entry(submissionId);
+      cur.points += points;
+      cur.pointsFor += points;
+      cur.distinctVoters += 1;
     }
     for (const [submissionId, antiVotes] of Object.entries(ballot.downvotes ?? {})) {
-      if (antiVotes > 0) bump(submissionId, -antiVotes, false);
+      if (antiVotes <= 0) continue;
+      const cur = entry(submissionId);
+      cur.points -= antiVotes;
+      cur.pointsAgainst += antiVotes;
     }
   }
   return tally;

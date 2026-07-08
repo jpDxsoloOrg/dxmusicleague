@@ -103,6 +103,8 @@ test("anti-votes subtract at tally (can go negative) and bank to standings", asy
   const results = await finalizeReveal(d, round);
   const a = results.find((r) => r.track.title === "Song A")!;
   assert.equal(a.points, 3); // 5 - 2
+  assert.equal(a.pointsFor, 5);
+  assert.equal(a.pointsAgainst, 2);
 
   const standings = await d.repo.getStandings("lg-test");
   assert.equal(standings.find((s) => s.userId === "u-sarah")?.points, 3);

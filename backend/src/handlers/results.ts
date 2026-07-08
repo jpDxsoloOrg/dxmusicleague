@@ -13,7 +13,12 @@ export interface RoundResult {
   rank: number;
   track: Track;
   submitter: UserView;
+  /** Net total: pointsFor − pointsAgainst. May be negative with anti-votes. */
   points: number;
+  /** Sum of positive votes. */
+  pointsFor: number;
+  /** Sum of anti-votes (positive number; 0 when none / league has them off). */
+  pointsAgainst: number;
   /** The submitter's own note about their pick, written at submit time. */
   submitterComment?: string;
   comments: VoterComment[];
@@ -32,6 +37,8 @@ export async function computeResults(deps: Deps, roundId: string): Promise<Round
       title: s.track.title,
       points: tally.get(s.id)?.points ?? 0,
       distinctVoters: tally.get(s.id)?.distinctVoters ?? 0,
+      pointsFor: tally.get(s.id)?.pointsFor ?? 0,
+      pointsAgainst: tally.get(s.id)?.pointsAgainst ?? 0,
       userId: s.userId,
       track: s.track,
     })),
@@ -44,6 +51,8 @@ export async function computeResults(deps: Deps, roundId: string): Promise<Round
       track: r.track,
       submitter: { id: r.userId, displayName: await deps.users.getDisplayName(r.userId) },
       points: r.points,
+      pointsFor: r.pointsFor,
+      pointsAgainst: r.pointsAgainst,
       submitterComment: noteBySubmission.get(r.submissionId) || undefined,
       comments: await commentsFor(deps, r.submissionId, ballots),
     })),

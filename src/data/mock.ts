@@ -497,7 +497,12 @@ export interface RoundResult {
   rank: number;
   track: Track;
   submitter: User;
+  /** Net total: pointsFor − pointsAgainst. May be negative with anti-votes. */
   points: number;
+  /** Sum of positive votes. */
+  pointsFor: number;
+  /** Sum of anti-votes (positive number; 0 when none). */
+  pointsAgainst: number;
   /** The submitter's own note about their pick, written at submit time. */
   submitterComment?: string;
   comments: VoterComment[];
@@ -585,6 +590,8 @@ export function getRoundResults(leagueId: string): RoundResult[] {
         track: mockTrack(s.pid, s.title, s.artists, s.album, s.dur),
         submitter: users[s.submitterId],
         points: s.points,
+        pointsFor: s.points,
+        pointsAgainst: 0,
         submitterComment: s.note,
         comments,
       };
