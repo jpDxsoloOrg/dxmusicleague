@@ -471,6 +471,8 @@ export interface RoundResult {
   track: Track;
   submitter: User;
   points: number;
+  /** The submitter's own note about their pick, written at submit time. */
+  submitterComment?: string;
   comments: VoterComment[];
 }
 
@@ -492,6 +494,8 @@ interface CanonSubmission {
   album: string;
   dur: number;
   submitterId: string;
+  /** The submitter's own note about the pick (shown at reveal). */
+  note?: string;
   points: number;
   /** Distinct voters who placed points on this song — the tie-break key. */
   voters: number;
@@ -502,7 +506,7 @@ interface CanonSubmission {
 // rule: equal points → more distinct voters wins, so "Good 4 U" (6 voters)
 // edges out "Blinding Lights" (5 voters). See getRoundResults below.
 const CANON_SUBMISSIONS: CanonSubmission[] = [
-  { id: "sub-1", pid: "m6", title: "Levitating", artists: ["Dua Lipa"], album: "Future Nostalgia", dur: 203000, submitterId: "u-sarah", points: 85, voters: 7,
+  { id: "sub-1", pid: "m6", title: "Levitating", artists: ["Dua Lipa"], album: "Future Nostalgia", dur: 203000, submitterId: "u-sarah", note: "Instant serotonin — I had to.", points: 85, voters: 7,
     seedComments: [{ voterId: "u-james", text: "Instant dancefloor filler." }, { voterId: "u-mia", text: "Perfect road-trip energy." }] },
   { id: "sub-2", pid: "m5", title: "Blinding Lights", artists: ["The Weeknd"], album: "After Hours", dur: 200000, submitterId: "u-james", points: 72, voters: 5,
     seedComments: [{ voterId: "u-luna", text: "That synth line never gets old." }] },
@@ -554,6 +558,7 @@ export function getRoundResults(leagueId: string): RoundResult[] {
         track: mockTrack(s.pid, s.title, s.artists, s.album, s.dur),
         submitter: users[s.submitterId],
         points: s.points,
+        submitterComment: s.note,
         comments,
       };
     })

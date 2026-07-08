@@ -14,6 +14,8 @@ export interface RoundResult {
   track: Track;
   submitter: UserView;
   points: number;
+  /** The submitter's own note about their pick, written at submit time. */
+  submitterComment?: string;
   comments: VoterComment[];
 }
 
@@ -35,12 +37,14 @@ export async function computeResults(deps: Deps, roundId: string): Promise<Round
     })),
   );
 
+  const noteBySubmission = new Map(subs.map((s) => [s.id, s.comment]));
   return Promise.all(
     ranked.map(async (r) => ({
       rank: r.rank,
       track: r.track,
       submitter: { id: r.userId, displayName: await deps.users.getDisplayName(r.userId) },
       points: r.points,
+      submitterComment: noteBySubmission.get(r.submissionId) || undefined,
       comments: await commentsFor(deps, r.submissionId, ballots),
     })),
   );

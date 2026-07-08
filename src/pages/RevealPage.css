@@ -51,6 +51,20 @@
 .rank-by { display: inline-flex; align-items: center; gap: 7px; margin-left: auto; font-size: 13px; color: var(--text-muted); }
 .rank-pts { width: 64px; text-align: right; font-weight: 700; color: var(--magenta); font-size: 14px; }
 
+/* the submitter's own note about their pick */
+.submitter-note {
+  margin: 0;
+  font-size: 13px;
+  font-style: italic;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.result-item .submitter-note {
+  padding: 10px 16px 12px 52px;
+  border-top: 1px solid var(--border);
+}
+.winner-card .submitter-note { margin-top: 4px; }
+
 /* voter comments */
 .comments { display: flex; flex-direction: column; gap: 8px; }
 /* comments under a ranked row: indented panel below the row */

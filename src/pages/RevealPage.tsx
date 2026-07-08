@@ -122,6 +122,11 @@ export function RevealPage() {
                   </span>
                 </div>
               </div>
+              {winner.submitterComment && (
+                <p className="submitter-note">
+                  “{winner.submitterComment}” — {winner.submitter.displayName}
+                </p>
+              )}
               <CommentList comments={winner.comments} onWinner />
             </div>
           )}
@@ -142,6 +147,11 @@ export function RevealPage() {
                   </span>
                   <span className="rank-pts">{r.points} pts</span>
                 </div>
+                {r.submitterComment && (
+                  <p className="submitter-note">
+                    “{r.submitterComment}” — {r.submitter.displayName}
+                  </p>
+                )}
                 <CommentList comments={r.comments} />
               </div>
             ))}
