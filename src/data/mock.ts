@@ -1,7 +1,7 @@
 // Mock data so the UI is fully clickable before any backend exists.
 // Swap these reads for API calls in Phase 2+ without touching the components.
 
-import type { League, LeagueSettings, LeagueVisibility, RoundProgression, Round, User } from "../domain/types";
+import type { League, LeagueSettings, LeagueVisibility, RoundProgression, Round, RoundStatus, User } from "../domain/types";
 import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types";
 import type { MusicProviderId, Track } from "../music";
 import { trackKey } from "../music";
@@ -142,6 +142,38 @@ export interface PublicLeagueSummary {
   maxMembers: number;
   openSlots: number;
   firstRoundTheme?: string;
+}
+
+/** A league in progress the caller could spectate (read-only). */
+export interface BrowseLeagueSummary {
+  id: string;
+  name: string;
+  visibility: LeagueVisibility;
+  memberCount: number;
+  totalRounds: number;
+  currentRound?: { index: number; theme: string; status: RoundStatus };
+}
+
+/** Leagues in progress (any visibility) the current user isn't in — open to
+ *  spectate. Mirrors the backend: running = any round beyond draft. */
+export function getBrowseLeagues(limit = 24): BrowseLeagueSummary[] {
+  const out = leagues
+    .filter((lg) => !lg.memberIds.includes(currentUser.id))
+    .filter((lg) => rounds.some((r) => r.leagueId === lg.id && r.status !== "draft"))
+    .map((lg) => {
+      const leagueRounds = rounds.filter((r) => r.leagueId === lg.id).sort((a, b) => b.index - a.index);
+      const current = leagueRounds[0];
+      return {
+        id: lg.id,
+        name: lg.name,
+        visibility: lg.visibility,
+        memberCount: lg.memberIds.length,
+        totalRounds: lg.roundCount || leagueRounds.length,
+        currentRound: current ? { index: current.index, theme: current.theme, status: current.status } : undefined,
+      };
+    });
+  out.sort((a, b) => b.memberCount - a.memberCount || a.name.localeCompare(b.name));
+  return out.slice(0, limit);
 }
 
 /** The join window: a league takes new members until round 1 moves past the
@@ -602,11 +634,15 @@ export function getRoundResults(leagueId: string): RoundResult[] {
 export function getLeagueDetail(leagueId: string): LeagueDetail | undefined {
   const league = leagues.find((lg) => lg.id === leagueId);
   if (!league) return undefined;
+  // Spectators (non-members) may look, but never see the invite code.
+  const isMember = league.memberIds.includes(currentUser.id);
   const summary = getMyLeagueSummaries().find((s) => s.league.id === leagueId);
   const leagueRounds = rounds
     .filter((r) => r.leagueId === leagueId)
     .sort((a, b) => a.index - b.index);
-  const currentRound = summary?.currentRound;
+  // Summaries only cover the user's own leagues; for spectated ones fall back
+  // to the latest round directly.
+  const currentRound = summary?.currentRound ?? [...leagueRounds].sort((a, b) => b.index - a.index)[0];
 
   // Who's done vs. pending for the live phase, derived from the canonical
   // picks (submitting) or the seeded voter ids (voting).
@@ -632,7 +668,7 @@ export function getLeagueDetail(leagueId: string): LeagueDetail | undefined {
   }
 
   return {
-    league,
+    league: isMember ? league : { ...league, inviteCode: "" },
     rounds: leagueRounds,
     currentRound,
     totalRounds: summary?.totalRounds ?? leagueRounds.length,

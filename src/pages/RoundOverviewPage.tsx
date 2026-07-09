@@ -59,11 +59,13 @@ export function RoundOverviewPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { data: detail, loading, reload } = useAsync(() => data.getLeagueDetail(leagueId), [leagueId]);
-  // The caller's own picks for the active round, so they can see them while waiting.
+  // The caller's own picks for the active round, so they can see them while
+  // waiting. Spectators (non-members) skip the call — they have no picks.
   const activeRoundId = detail?.currentRound?.id;
+  const isMember = Boolean(user && detail?.league.memberIds.includes(user.id));
   const { data: mySubmissions } = useAsync(
-    () => (activeRoundId ? data.getMySubmissions(activeRoundId) : Promise.resolve([])),
-    [activeRoundId],
+    () => (activeRoundId && isMember ? data.getMySubmissions(activeRoundId) : Promise.resolve([])),
+    [activeRoundId, isMember],
   );
 
   if (loading) {
@@ -104,9 +106,14 @@ export function RoundOverviewPage() {
   const myPicks = mySubmissions ?? [];
   // The voting-progress panel already knows who voted — reuse it for the CTA.
   const hasVoted = Boolean(user && votingProgress?.submitted.some((m) => m.id === user.id));
-  const action = currentRound
+  const rawAction = currentRound
     ? primaryAction(league.id, currentRound, myPicks.length, allowance, hasVoted)
     : undefined;
+  // Spectators only get the read-only action (viewing revealed results).
+  const action =
+    isMember || currentRound?.status === "revealed" || currentRound?.status === "complete"
+      ? rawAction
+      : undefined;
   // Show the player's own picks while a round is live (submitting → voting).
   const showMyPicks =
     myPicks.length > 0 &&
@@ -141,8 +148,10 @@ export function RoundOverviewPage() {
             <div className="ro-head-actions">
               {isOwner ? (
                 <Link to={`/leagues/${league.id}/settings`} className="ro-settings-link">⚙ Settings</Link>
-              ) : (
+              ) : isMember ? (
                 <button className="ro-leave-link" onClick={handleLeave}>Leave league</button>
+              ) : (
+                <span className="spectator-badge">👀 Spectating</span>
               )}
               <span className="provider-badge">via {providerName}</span>
             </div>

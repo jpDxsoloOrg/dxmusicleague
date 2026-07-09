@@ -120,17 +120,23 @@ export class DynamoRepository implements Repository {
   }
 
   async getPublicLeagues(): Promise<League[]> {
-    // Discovery is a low-frequency, small-result read; a filtered Scan for the
-    // handful of public league META rows is fine at this scale. If public
-    // leagues ever grow large, promote this to a dedicated GSI.
+    return this.scanLeagues("public");
+  }
+  async getAllLeagues(): Promise<League[]> {
+    return this.scanLeagues();
+  }
+  /** Discovery/browse are low-frequency, small-result reads; a filtered Scan
+   *  for the handful of league META rows is fine at this scale. If leagues
+   *  ever grow large, promote this to a dedicated GSI. */
+  private async scanLeagues(visibility?: "public" | "private"): Promise<League[]> {
     const metas: Record<string, unknown>[] = [];
     let start: Record<string, unknown> | undefined;
     do {
       const res = await this.doc.send(
         new ScanCommand({
           TableName: this.tableName,
-          FilterExpression: "entity = :e AND visibility = :v",
-          ExpressionAttributeValues: { ":e": "league", ":v": "public" },
+          FilterExpression: visibility ? "entity = :e AND visibility = :v" : "entity = :e",
+          ExpressionAttributeValues: visibility ? { ":e": "league", ":v": visibility } : { ":e": "league" },
           ExclusiveStartKey: start,
         }),
       );

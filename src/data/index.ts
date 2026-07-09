@@ -14,6 +14,7 @@ export const data: DataClient = isApiMode ? new ApiClient() : new MockClient();
 export type { DataClient } from "./client";
 export type {
   ActivityItem,
+  BrowseLeagueSummary,
   CreateLeagueInput,
   JoinResult,
   LeagueDetail,

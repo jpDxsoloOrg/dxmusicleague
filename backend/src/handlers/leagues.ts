@@ -258,6 +258,41 @@ export async function listOpenPublicLeagues(
   return open.slice(0, Math.max(0, limit));
 }
 
+/** A league in progress that the caller could spectate (read-only). */
+export interface BrowseLeagueSummary {
+  id: string;
+  name: string;
+  visibility: LeagueVisibility;
+  memberCount: number;
+  totalRounds: number;
+  currentRound?: { index: number; theme: string; status: Round["status"] };
+}
+
+/** Leagues in progress (any visibility) that the caller isn't in — open for
+ *  spectating: anyone signed in can view rounds, standings, and revealed
+ *  results, but never the invite code, and joining/voting stays member-only.
+ *  "In progress" = at least one round beyond draft. Ranked biggest-first. */
+export async function listBrowseLeagues(deps: Deps, caller: string, limit = 24): Promise<BrowseLeagueSummary[]> {
+  const leagues = await deps.repo.getAllLeagues();
+  const out: BrowseLeagueSummary[] = [];
+  for (const league of leagues) {
+    if (league.memberIds.includes(caller)) continue;
+    const rounds = await deps.repo.getRoundsForLeague(league.id);
+    if (!rounds.some((r) => r.status !== "draft")) continue; // not running yet
+    const current = latestRound(rounds);
+    out.push({
+      id: league.id,
+      name: league.name,
+      visibility: league.visibility,
+      memberCount: league.memberIds.length,
+      totalRounds: league.roundCount || rounds.length,
+      currentRound: current ? { index: current.index, theme: current.theme, status: current.status } : undefined,
+    });
+  }
+  out.sort((a, b) => b.memberCount - a.memberCount || a.name.localeCompare(b.name));
+  return out.slice(0, Math.max(0, limit));
+}
+
 /** A non-member's view of a public league: enough to decide whether to claim a
  *  spot. Never exposes private-league data (those 404 here). */
 export interface PublicLeaguePreview {
@@ -324,7 +359,9 @@ export async function listMyLeagues(deps: Deps, caller: string): Promise<LeagueS
 export async function getLeagueDetail(deps: Deps, caller: string, leagueId: string): Promise<LeagueDetail> {
   const league = await deps.repo.getLeague(leagueId);
   if (!league) throw notFound("That league doesn't exist.");
-  if (!league.memberIds.includes(caller)) throw forbidden("You're not a member of this league.");
+  // Non-members may spectate (read-only) — but must never see the invite code,
+  // or a private league would stop being invite-only.
+  const isMember = league.memberIds.includes(caller);
 
   const rounds = (await deps.repo.getRoundsForLeague(leagueId)).sort((a, b) => a.index - b.index);
   // Lazy timed advance BEFORE reading standings, so a just-revealed round's
@@ -368,7 +405,7 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
   }
 
   return {
-    league,
+    league: isMember ? league : { ...league, inviteCode: "" },
     rounds,
     currentRound,
     // The owner's planned count; fall back to created rounds for legacy leagues.

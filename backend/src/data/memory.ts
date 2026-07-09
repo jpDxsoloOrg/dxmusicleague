@@ -52,6 +52,9 @@ export class MemoryRepository implements Repository {
       .filter((lg) => lg.visibility === "public")
       .map((lg) => structuredClone(lg));
   }
+  async getAllLeagues(): Promise<League[]> {
+    return [...this.leagues.values()].map((lg) => structuredClone(lg));
+  }
   async addMember(leagueId: string, userId: string): Promise<League> {
     const lg = this.leagues.get(leagueId);
     if (!lg) throw new Error(`League not found: ${leagueId}`);

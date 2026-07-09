@@ -7,6 +7,7 @@ import type { Track } from "../music";
 import { auth } from "../auth/config";
 import type { CreateRoundInput, DataClient, EditableLeagueSettings } from "./client";
 import type {
+  BrowseLeagueSummary,
   CreateLeagueInput,
   JoinResult,
   LeagueDetail,
@@ -89,6 +90,9 @@ export class ApiClient implements DataClient {
 
   async leaveLeague(leagueId: string): Promise<void> {
     await request(`/leagues/${enc(leagueId)}/members/me`, { method: "DELETE" });
+  }
+  getBrowseLeagues(): Promise<BrowseLeagueSummary[]> {
+    return request<BrowseLeagueSummary[]>("/leagues/browse");
   }
   async kickMember(leagueId: string, userId: string): Promise<void> {
     await request(`/leagues/${enc(leagueId)}/members/${enc(userId)}`, { method: "DELETE" });

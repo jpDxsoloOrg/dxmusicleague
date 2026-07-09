@@ -15,6 +15,8 @@ export interface Repository {
   /** All leagues with visibility "public" (fully hydrated with members).
    *  The service filters these down to the "open" ones. */
   getPublicLeagues(): Promise<League[]>;
+  /** Every league, any visibility — powers the spectator browse list. */
+  getAllLeagues(): Promise<League[]>;
   /** Add a member to a league (idempotent). Returns the updated league. */
   addMember(leagueId: string, userId: string): Promise<League>;
   /** Remove a member and their standing from a league (idempotent). */

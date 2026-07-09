@@ -60,8 +60,14 @@ export function buildRoutes(deps: Deps): Route[] {
       handler: (req) => leagues.joinLeague(deps, req.caller, asString(asRecord(req.body).code)),
     },
     {
-      // Discover open public leagues. Literal `public` is registered before the
-      // `:leagueId` param route so it wins the match.
+      // Leagues in progress the caller can spectate. Literal segments (`browse`,
+      // `public`) are registered before the `:leagueId` param route so they win.
+      method: "GET",
+      pattern: "/leagues/browse",
+      handler: (req) => leagues.listBrowseLeagues(deps, req.caller),
+    },
+    {
+      // Discover open public leagues (joinable ones).
       method: "GET",
       pattern: "/leagues/public",
       handler: (req) => leagues.listOpenPublicLeagues(deps, req.caller, Number(req.query.limit) || 12),

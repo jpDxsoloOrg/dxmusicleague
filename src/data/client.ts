@@ -11,6 +11,7 @@
 import type { League, LeagueSettings, Round, RoundStatus, Submission } from "../domain/types";
 import type { Track } from "../music";
 import type {
+  BrowseLeagueSummary,
   CreateLeagueInput,
   JoinResult,
   LeagueDetail,
@@ -41,6 +42,8 @@ export interface DataClient {
   joinLeague(code: string): Promise<JoinResult>;
   /** Discover open public leagues to claim a spot in (not-yet-started, has slots). */
   getPublicLeagues(): Promise<PublicLeagueSummary[]>;
+  /** Leagues in progress (any visibility) the caller isn't in — spectate-only. */
+  getBrowseLeagues(): Promise<BrowseLeagueSummary[]>;
   /** Non-member preview of one public league; undefined if private/missing. */
   getPublicLeaguePreview(leagueId: string): Promise<PublicLeaguePreview | undefined>;
   /** Claim a spot in an open public league (creates the caller's membership). */

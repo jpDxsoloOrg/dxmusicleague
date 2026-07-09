@@ -18,6 +18,15 @@
   padding: 6px 12px;
   border-radius: 999px;
 }
+/* read-only visitor tag (non-members browsing a league) */
+.spectator-badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--status-previewing);
+  background: rgba(56, 189, 248, 0.12);
+  padding: 6px 12px;
+  border-radius: 999px;
+}
 
 .ro-head-actions { display: flex; align-items: center; gap: 10px; }
 .ro-settings-link {

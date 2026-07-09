@@ -1,14 +1,26 @@
 import { Link } from "react-router-dom";
 import { data } from "../data";
+import type { RoundStatus } from "../domain/types";
 import { useAsync } from "../lib/useAsync";
 import { LeagueCard, PublicLeagueCard } from "./DashboardPage";
 import "./DashboardPage.css";
 import "./LeaguesPage.css";
 
+const STATUS_LABEL: Record<RoundStatus, string> = {
+  draft: "Draft",
+  submitting: "Submitting",
+  previewing: "Listening",
+  voting: "Voting",
+  revealed: "Revealed",
+  complete: "Complete",
+};
+
 export function LeaguesPage() {
   const { data: summaries, loading, error } = useAsync(() => data.getMyLeagueSummaries(), []);
   // Open public leagues (still forming, with free slots) anyone can claim a spot in.
   const { data: publicLeagues, loading: loadingPublic } = useAsync(() => data.getPublicLeagues(), []);
+  // Leagues in progress the user isn't in — open to spectate (read-only).
+  const { data: browseLeagues } = useAsync(() => data.getBrowseLeagues(), []);
 
   return (
     <div className="leagues-page">
@@ -59,6 +71,36 @@ export function LeaguesPage() {
           </div>
         )}
       </section>
+
+      {browseLeagues && browseLeagues.length > 0 && (
+        <section>
+          <div className="section-head">
+            <h2>Leagues in Progress</h2>
+            <span className="leagues-discover-sub">Take a look at how other leagues are going — spectate only</span>
+          </div>
+          <div className="browse-list">
+            {browseLeagues.map((lg) => (
+              <Link key={lg.id} to={`/leagues/${lg.id}`} className="browse-row">
+                <div className="browse-main">
+                  <strong>{lg.name}</strong>
+                  <span className="browse-round">
+                    {lg.currentRound
+                      ? `Round ${lg.currentRound.index} of ${lg.totalRounds} · ${lg.currentRound.theme}`
+                      : `${lg.totalRounds} rounds`}
+                  </span>
+                </div>
+                {lg.currentRound && (
+                  <span className={`pill pill-${lg.currentRound.status}`}>
+                    {STATUS_LABEL[lg.currentRound.status]}
+                  </span>
+                )}
+                <span className="browse-members">{lg.memberCount} players</span>
+                <span className="browse-cta">👀 Spectate →</span>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

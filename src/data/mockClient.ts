@@ -8,6 +8,7 @@ import type { Track } from "../music";
 import type { CreateRoundInput, DataClient, EditableLeagueSettings } from "./client";
 import {
   claimPublicSpot,
+  getBrowseLeagues,
   createLeague,
   currentUser,
   deleteLeague,
@@ -25,6 +26,7 @@ import {
   rounds,
   saveVoteComments,
   updateLeagueSettings,
+  type BrowseLeagueSummary,
   type CreateLeagueInput,
   type JoinResult,
   type LeagueDetail,
@@ -62,6 +64,9 @@ export class MockClient implements DataClient {
   }
   async leaveLeague(leagueId: string): Promise<void> {
     leaveLeague(leagueId);
+  }
+  async getBrowseLeagues(): Promise<BrowseLeagueSummary[]> {
+    return getBrowseLeagues();
   }
   async kickMember(leagueId: string, userId: string): Promise<void> {
     kickMember(leagueId, userId);

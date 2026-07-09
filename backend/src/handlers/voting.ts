@@ -108,8 +108,11 @@ export async function revealRound(deps: Deps, caller: string, roundId: string): 
   return finalizeReveal(deps, round);
 }
 
-export async function getResults(deps: Deps, caller: string, roundId: string): Promise<RoundResult[]> {
-  const { round } = await roundForMember(deps, caller, roundId);
+export async function getResults(deps: Deps, _caller: string, roundId: string): Promise<RoundResult[]> {
+  // Revealed results are readable by any signed-in user (spectators included) —
+  // they're the public outcome of the round, not ballot internals.
+  const round = await deps.repo.getRound(roundId);
+  if (!round) throw notFound("That round doesn't exist.");
   if (round.status !== "revealed" && round.status !== "complete") {
     throw badRequest("Results aren't available until the round is revealed.");
   }

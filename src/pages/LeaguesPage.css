@@ -27,6 +27,31 @@
 }
 .link-inline:hover { text-decoration: underline; }
 
+/* spectate list — leagues in progress the user isn't in */
+.browse-list { display: flex; flex-direction: column; gap: 10px; }
+.browse-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: border-color 0.15s ease;
+}
+.browse-row:hover { border-color: var(--violet); }
+.browse-main { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.browse-main strong { font-size: 15px; }
+.browse-round { font-size: 12.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.browse-members { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
+.browse-cta { font-size: 13px; font-weight: 600; color: var(--text-muted); white-space: nowrap; }
+.browse-row:hover .browse-cta { color: var(--text); }
+
+@media (max-width: 640px) {
+  .browse-row { flex-wrap: wrap; gap: 8px 12px; }
+  .browse-main { flex: 1 1 100%; }
+}
+
 .leagues-empty {
   margin-top: 32px;
   padding: 48px 24px;

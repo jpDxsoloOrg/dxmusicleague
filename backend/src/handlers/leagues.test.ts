@@ -243,3 +243,52 @@ test("regenerateInvite mints a new code, retires the old, and is owner-only", as
   const stored = await deps.repo.getLeague("lg");
   assert.equal(stored?.inviteCode, updated.inviteCode);
 });
+
+test("browse lists running leagues (any visibility) the caller isn't in", async () => {
+  const { listBrowseLeagues } = await import("./leagues.ts");
+  const deps = await depsWith(
+    [
+      league({ id: "priv-run", name: "Private Running", visibility: "private", memberIds: ["u-owner", "u-2"] }),
+      league({ id: "pub-run", name: "Public Running", visibility: "public" }),
+      league({ id: "not-started", name: "Fresh", visibility: "private" }),
+      league({ id: "mine", name: "Mine", visibility: "private", memberIds: ["u-owner", "u-me"] }),
+    ],
+    [
+      { id: "pr~1", leagueId: "priv-run", index: 1, theme: "Go", status: "voting" },
+      { id: "pu~1", leagueId: "pub-run", index: 1, theme: "Go", status: "submitting" },
+      { id: "ns~1", leagueId: "not-started", index: 1, theme: "Soon", status: "draft" },
+      { id: "mi~1", leagueId: "mine", index: 1, theme: "Go", status: "voting" },
+    ],
+  );
+  const out = await listBrowseLeagues(deps, "u-me");
+  assert.deepEqual(out.map((l) => l.id).sort(), ["priv-run", "pub-run"]);
+  const priv = out.find((l) => l.id === "priv-run")!;
+  assert.equal(priv.currentRound?.status, "voting");
+  // The browse summary never carries an invite code.
+  assert.equal("inviteCode" in priv, false);
+});
+
+test("spectators get league detail without the invite code; members keep it", async () => {
+  const deps = await depsWith(
+    [league({ id: "lg", name: "L", visibility: "private", memberIds: ["u-owner"] })],
+    [{ id: "lg~1", leagueId: "lg", index: 1, theme: "Go", status: "voting" }],
+  );
+  const spectator = await getLeagueDetail(deps, "u-me", "lg");
+  assert.equal(spectator.league.inviteCode, "");
+  const member = await getLeagueDetail(deps, "u-owner", "lg");
+  assert.equal(member.league.inviteCode, "C-lg");
+});
+
+test("revealed results are readable by non-members", async () => {
+  const { getResults } = await import("./voting.ts");
+  const deps = await depsWith(
+    [league({ id: "lg", name: "L", visibility: "private", memberIds: ["u-owner"] })],
+    [{ id: "lg~1", leagueId: "lg", index: 1, theme: "Go", status: "revealed" }],
+  );
+  await deps.repo.putSubmission({
+    id: "sub-a", roundId: "lg~1", userId: "u-owner",
+    track: { id: "t1", provider: "spotify", providerTrackId: "sp1", title: "Song A", artists: ["A"] },
+  });
+  const results = await getResults(deps, "u-me", "lg~1"); // u-me is not a member
+  assert.equal(results.length, 1);
+});
