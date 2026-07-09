@@ -111,6 +111,7 @@ export async function submitSong(
     userId: caller,
     track,
     comment: optStr(input?.comment?.trim()),
+    submittedAt: new Date().toISOString(),
   };
   await deps.repo.putSubmission(submission);
   // Timed leagues: if that filled the last open slot, close submissions now.

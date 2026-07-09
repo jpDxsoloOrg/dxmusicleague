@@ -47,6 +47,15 @@ interface RoundParticipation {
   totalCount: number;
 }
 
+/** One row of the current round's activity feed — who did what, when. Derived
+ *  on read from submission/ballot timestamps (no event log). Names only. */
+interface ActivityItem {
+  id: string;
+  user: UserView;
+  text: string;
+  timeAgo: string;
+}
+
 interface LeagueDetail {
   league: League;
   rounds: Round[];
@@ -57,7 +66,8 @@ interface LeagueDetail {
   submissionProgress?: RoundParticipation;
   /** Present only while the current round is voting ("submitted" = ballot cast). */
   votingProgress?: RoundParticipation;
-  activity: never[]; // activity feed is not backed by data yet — empty for now.
+  /** Latest events in the current round, newest first. */
+  activity: ActivityItem[];
 }
 
 // ---- helpers ----
@@ -83,6 +93,16 @@ async function splitByDone(
 
 function latestRound(rounds: Round[]): Round | undefined {
   return [...rounds].sort((a, b) => b.index - a.index)[0];
+}
+
+/** Compact relative timestamp for the activity feed. */
+function timeAgo(iso: string): string {
+  const minutes = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
 }
 
 /** Real completion %: for a voting round, ballots-cast / members; for a
@@ -368,10 +388,14 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
   // points are already banked in the response.
   const currentRound = await autoAdvanceRound(deps, league, latestRound(rounds));
 
+  // Standing rows persist for ex-members (so a returning player keeps their
+  // points) — the board displays current members only.
   const rawStandings = await deps.repo.getStandings(leagueId);
+  const memberSet = new Set(league.memberIds);
   const standings: Standing[] = (
     await Promise.all(
       rawStandings
+        .filter((s) => memberSet.has(s.userId))
         .sort((a, b) => b.points - a.points)
         .map(async (s, i) => ({
           rank: i + 1,
@@ -383,25 +407,52 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
 
   // Who's done vs. pending for the live phase (identities only): submissions
   // while submitting, ballots while voting. With a multi-song allowance a
-  // member counts as done once they've used every slot.
+  // member counts as done once they've used every slot. The same reads feed
+  // the activity list ("X submitted a song", "Y cast their votes").
   let submissionProgress: RoundParticipation | undefined;
   let votingProgress: RoundParticipation | undefined;
-  if (currentRound?.status === "submitting") {
-    const subs = await deps.repo.getSubmissionsForRound(currentRound.id);
-    const allowance = league.settings.submissionsPerPlayer || 1;
-    const countByUser = new Map<string, number>();
-    for (const s of subs) countByUser.set(s.userId, (countByUser.get(s.userId) ?? 0) + 1);
-    const doneIds = new Set(league.memberIds.filter((id) => (countByUser.get(id) ?? 0) >= allowance));
-    submissionProgress = await splitByDone(deps.users, league.memberIds, doneIds, {
-      done: subs.length,
-      total: league.memberIds.length * allowance,
-    });
-  } else if (currentRound?.status === "voting") {
-    const ballots = await deps.repo.getBallotsForRound(currentRound.id);
-    votingProgress = await splitByDone(deps.users, league.memberIds, new Set(ballots.map((b) => b.voterId)), {
-      done: ballots.length,
-      total: league.memberIds.length,
-    });
+  const activity: ActivityItem[] = [];
+  if (currentRound && currentRound.status !== "draft") {
+    const [subs, ballots] = await Promise.all([
+      deps.repo.getSubmissionsForRound(currentRound.id),
+      deps.repo.getBallotsForRound(currentRound.id),
+    ]);
+
+    if (currentRound.status === "submitting") {
+      const allowance = league.settings.submissionsPerPlayer || 1;
+      const countByUser = new Map<string, number>();
+      for (const s of subs) countByUser.set(s.userId, (countByUser.get(s.userId) ?? 0) + 1);
+      const doneIds = new Set(league.memberIds.filter((id) => (countByUser.get(id) ?? 0) >= allowance));
+      submissionProgress = await splitByDone(deps.users, league.memberIds, doneIds, {
+        done: subs.length,
+        total: league.memberIds.length * allowance,
+      });
+    } else if (currentRound.status === "voting") {
+      votingProgress = await splitByDone(deps.users, league.memberIds, new Set(ballots.map((b) => b.voterId)), {
+        done: ballots.length,
+        total: league.memberIds.length,
+      });
+    }
+
+    // Activity: derived from timestamps, never revealing tracks or points.
+    const events = [
+      ...subs
+        .filter((s) => s.submittedAt)
+        .map((s) => ({ userId: s.userId, text: "submitted a song", at: s.submittedAt! })),
+      ...ballots
+        .filter((b) => b.castAt)
+        .map((b) => ({ userId: b.voterId, text: "cast their votes", at: b.castAt })),
+    ]
+      .sort((a, b) => b.at.localeCompare(a.at))
+      .slice(0, 12);
+    for (const e of events) {
+      activity.push({
+        id: `${e.at}~${e.userId}~${e.text}`,
+        user: { id: e.userId, displayName: await deps.users.getDisplayName(e.userId) },
+        text: e.text,
+        timeAgo: timeAgo(e.at),
+      });
+    }
   }
 
   return {
@@ -413,7 +464,7 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
     standings,
     submissionProgress,
     votingProgress,
-    activity: [],
+    activity,
   };
 }
 

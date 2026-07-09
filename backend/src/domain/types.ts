@@ -89,6 +89,8 @@ export interface Submission {
   userId: string;
   track: Track;
   comment?: string;
+  /** When the pick was (last) submitted — feeds the activity feed. */
+  submittedAt?: string;
 }
 
 /** A cast ballot: the whole point allocation for one voter in one round. */

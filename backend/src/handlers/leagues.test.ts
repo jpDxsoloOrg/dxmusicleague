@@ -292,3 +292,44 @@ test("revealed results are readable by non-members", async () => {
   const results = await getResults(deps, "u-me", "lg~1"); // u-me is not a member
   assert.equal(results.length, 1);
 });
+
+test("points survive a leave/kick and reappear on rejoin", async () => {
+  const { joinLeague } = await import("./leagues.ts");
+  const deps = await depsWith([
+    league({ id: "lg", name: "L", visibility: "private", memberIds: ["u-owner", "u-me"] }),
+  ]);
+  await deps.repo.putInvite("C-lg", "lg");
+  await deps.repo.addStandingPoints("lg", "u-me", 9);
+
+  await leaveLeague(deps, "u-me", "lg", "u-me");
+  // Hidden from the board while gone…
+  const gone = await getLeagueDetail(deps, "u-owner", "lg");
+  assert.equal(gone.standings.some((s) => s.user.id === "u-me"), false);
+
+  // …and intact on return (rejoin seeds 0 with create-if-absent semantics).
+  await joinLeague(deps, "u-me", "C-lg");
+  const back = await getLeagueDetail(deps, "u-me", "lg");
+  assert.equal(back.standings.find((s) => s.user.id === "u-me")?.points, 9);
+});
+
+test("activity feed derives from submissions + ballots, newest first, no track data", async () => {
+  const deps = await depsWith(
+    [league({ id: "lg", name: "L", visibility: "private", memberIds: ["u-owner", "u-me"] })],
+    [{ id: "lg~1", leagueId: "lg", index: 1, theme: "Go", status: "voting" }],
+  );
+  await deps.repo.putSubmission({
+    id: "sub-a", roundId: "lg~1", userId: "u-me", submittedAt: "2026-07-09T10:00:00.000Z",
+    track: { id: "t1", provider: "spotify", providerTrackId: "sp1", title: "Secret Song", artists: ["A"] },
+  });
+  await deps.repo.putBallot({
+    roundId: "lg~1", voterId: "u-owner",
+    allocations: { "sub-a": 10 }, castAt: "2026-07-09T11:00:00.000Z",
+  });
+
+  const detail = await getLeagueDetail(deps, "u-owner", "lg");
+  assert.deepEqual(
+    detail.activity.map((a) => `${a.user.id}: ${a.text}`),
+    ["u-owner: cast their votes", "u-me: submitted a song"], // ballot is newer
+  );
+  assert.equal(JSON.stringify(detail.activity).includes("Secret Song"), false);
+});

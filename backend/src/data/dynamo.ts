@@ -157,12 +157,13 @@ export class DynamoRepository implements Repository {
   }
 
   async removeMember(leagueId: string, userId: string): Promise<void> {
-    // Drop the membership row (and its GSI1 projection) plus the standing row.
+    // Drop the membership row (and its GSI1 projection) ONLY. The standing row
+    // is deliberately kept: a player who leaves (or is kicked) and later rejoins
+    // gets their accumulated points back — the leaderboard just filters display
+    // to current members while they're gone. (Standings are removed for real
+    // only by deleteLeague's cascade.)
     await this.doc.send(
       new DeleteCommand({ TableName: this.tableName, Key: { PK: `LEAGUE#${leagueId}`, SK: `MEMBER#${userId}` } }),
-    );
-    await this.doc.send(
-      new DeleteCommand({ TableName: this.tableName, Key: { PK: `LEAGUE#${leagueId}`, SK: `STANDING#${userId}` } }),
     );
   }
 
@@ -346,7 +347,7 @@ export class DynamoRepository implements Repository {
           userId: submission.userId,
           track: submission.track,
           comment: submission.comment,
-          submittedAt: new Date().toISOString(),
+          submittedAt: submission.submittedAt ?? new Date().toISOString(),
         },
       }),
     );
@@ -392,6 +393,7 @@ export class DynamoRepository implements Repository {
       userId: it.userId as string,
       track: it.track as Submission["track"],
       comment: it.comment as string | undefined,
+      submittedAt: it.submittedAt as string | undefined,
     };
   }
 

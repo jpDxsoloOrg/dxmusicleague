@@ -62,9 +62,10 @@ export class MemoryRepository implements Repository {
     return structuredClone(lg);
   }
   async removeMember(leagueId: string, userId: string): Promise<void> {
+    // Standing deliberately kept (mirrors DynamoRepository) — points survive a
+    // leave/kick and reappear when the player rejoins.
     const lg = this.leagues.get(leagueId);
     if (lg) lg.memberIds = lg.memberIds.filter((id) => id !== userId);
-    this.standings.delete(`${leagueId}/${userId}`);
   }
   async updateLeagueSettings(leagueId: string, settings: LeagueSettings): Promise<League> {
     const lg = this.leagues.get(leagueId);
