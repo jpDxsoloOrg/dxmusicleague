@@ -23,6 +23,7 @@ import {
   kickMember,
   leaveLeague,
   regenerateInvite,
+  rematchLeague,
   rounds,
   saveVoteComments,
   updateLeagueSettings,
@@ -79,6 +80,9 @@ export class MockClient implements DataClient {
   }
   async deleteLeague(leagueId: string): Promise<void> {
     deleteLeague(leagueId);
+  }
+  async rematchLeague(leagueId: string): Promise<League> {
+    return rematchLeague(leagueId);
   }
   async getStandings(leagueId: string): Promise<Standing[]> {
     return getStandings(leagueId);

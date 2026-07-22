@@ -28,6 +28,8 @@ interface LeagueSummary {
   totalRounds: number;
   completionPct: number;
   members: UserView[];
+  /** True once the final round has been revealed — the league is closed. */
+  finished: boolean;
 }
 
 interface Standing {
@@ -68,6 +70,8 @@ interface LeagueDetail {
   votingProgress?: RoundParticipation;
   /** Latest events in the current round, newest first. */
   activity: ActivityItem[];
+  /** True once the final round has been revealed — the league is closed. */
+  finished: boolean;
 }
 
 // ---- helpers ----
@@ -93,6 +97,19 @@ async function splitByDone(
 
 function latestRound(rounds: Round[]): Round | undefined {
   return [...rounds].sort((a, b) => b.index - a.index)[0];
+}
+
+/** A league is finished once its final round (index ≥ roundCount) has been
+ *  revealed. Derived from the rounds rather than stored, so leagues that
+ *  already played out before this rule existed close retroactively, and the
+ *  lazy timed auto-advance needs no extra write. A finished league takes no
+ *  new rounds, leaves the browse list, and becomes eligible for a rematch. */
+export function isLeagueFinished(league: League, rounds: Round[]): boolean {
+  if (!league.roundCount) return false; // legacy league with no planned count
+  const last = latestRound(rounds);
+  return Boolean(
+    last && last.index >= league.roundCount && (last.status === "revealed" || last.status === "complete"),
+  );
 }
 
 /** Compact relative timestamp for the activity feed. */
@@ -299,6 +316,7 @@ export async function listBrowseLeagues(deps: Deps, caller: string, limit = 24):
     if (league.memberIds.includes(caller)) continue;
     const rounds = await deps.repo.getRoundsForLeague(league.id);
     if (!rounds.some((r) => r.status !== "draft")) continue; // not running yet
+    if (isLeagueFinished(league, rounds)) continue; // played out — nothing left to watch
     const current = latestRound(rounds);
     out.push({
       id: league.id,
@@ -371,6 +389,7 @@ export async function listMyLeagues(deps: Deps, caller: string): Promise<LeagueS
         totalRounds: league.roundCount || rounds.length,
         completionPct: await completionPct(deps.repo, league, currentRound),
         members: await toUserViews(deps.users, league.memberIds),
+        finished: isLeagueFinished(league, rounds),
       };
     }),
   );
@@ -465,6 +484,8 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
     submissionProgress,
     votingProgress,
     activity,
+    // After autoAdvanceRound so a reveal that just cascaded counts immediately.
+    finished: isLeagueFinished(league, rounds),
   };
 }
 
@@ -615,4 +636,47 @@ export async function deleteLeague(deps: Deps, caller: string, leagueId: string)
   await ownedLeague(deps, caller, leagueId);
   await deps.repo.deleteLeague(leagueId);
   return { ok: true };
+}
+
+/** "Szn Music Group 1" → "Szn Music Group 2"; no trailing number → append " 2".
+ *  Keeps room for the id slug + a fresh suffix within the 50-char name cap. */
+function rematchName(name: string): string {
+  const numbered = name.match(/^(.*?)(\d+)\s*$/);
+  const next = numbered ? `${numbered[1]}${Number(numbered[2]) + 1}` : `${name} 2`;
+  return next.slice(0, 50);
+}
+
+/** Owner-only: once a league has finished, spin up a fresh one with the same
+ *  players, settings, and format — everyone starts again at 0 points. The old
+ *  league stays readable (results, standings) but closed. */
+export async function rematchLeague(deps: Deps, caller: string, leagueId: string): Promise<League> {
+  const league = await ownedLeague(deps, caller, leagueId);
+  const rounds = await deps.repo.getRoundsForLeague(leagueId);
+  if (!isLeagueFinished(league, rounds)) {
+    throw conflict("You can start a rematch once every round has been played.");
+  }
+
+  const name = rematchName(league.name);
+  const next: League = {
+    id: newLeagueId(name),
+    name,
+    ownerId: caller,
+    musicProvider: league.musicProvider,
+    settings: { ...league.settings },
+    memberIds: [...league.memberIds],
+    inviteCode: newInviteCode(),
+    visibility: league.visibility,
+    maxMembers: league.maxMembers,
+    roundCount: league.roundCount,
+    progression: league.progression,
+    // Timed leagues restart their clock now; the old startAt is history.
+    startAt: league.progression === "timed" ? new Date().toISOString() : undefined,
+    phaseDays: league.phaseDays,
+  };
+  await deps.repo.createLeague(next);
+  await deps.repo.putInvite(next.inviteCode, next.id);
+  for (const memberId of next.memberIds) {
+    await deps.repo.addStandingPoints(next.id, memberId, 0); // seed everyone at 0
+  }
+  return next;
 }

@@ -5,7 +5,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MemoryRepository, MemoryUserDirectory } from "../data/memory.ts";
 import type { Deps } from "./leagues.ts";
-import { claimPublicSpot, getLeagueDetail, getPublicLeaguePreview, leaveLeague, listOpenPublicLeagues } from "./leagues.ts";
+import { claimPublicSpot, getLeagueDetail, getPublicLeaguePreview, leaveLeague, listBrowseLeagues, listOpenPublicLeagues, rematchLeague } from "./leagues.ts";
+import { createRound } from "./rounds.ts";
 import { ApiError } from "../domain/errors.ts";
 import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types.ts";
 import type { League, Round } from "../domain/types.ts";
@@ -332,4 +333,71 @@ test("activity feed derives from submissions + ballots, newest first, no track d
     ["u-owner: cast their votes", "u-me: submitted a song"], // ballot is newer
   );
   assert.equal(JSON.stringify(detail.activity).includes("Secret Song"), false);
+});
+
+// ---- league finish + rematch ----
+
+test("a league finishes once its final round is revealed, and leaves the browse list", async () => {
+  const deps = await depsWith(
+    [league({ id: "done", name: "Done", visibility: "private", roundCount: 2, memberIds: ["u-owner", "u-2"] })],
+    [
+      { id: "done~1", leagueId: "done", index: 1, theme: "One", status: "revealed" },
+      { id: "done~2", leagueId: "done", index: 2, theme: "Two", status: "revealed" },
+    ],
+  );
+  const detail = await getLeagueDetail(deps, "u-owner", "done");
+  assert.equal(detail.finished, true);
+  assert.deepEqual(await listBrowseLeagues(deps, "u-stranger"), []); // closed → not spectatable
+});
+
+test("a league with rounds left to play is not finished and still browsable", async () => {
+  const deps = await depsWith(
+    [league({ id: "mid", name: "Mid", visibility: "private", roundCount: 3 })],
+    [{ id: "mid~1", leagueId: "mid", index: 1, theme: "One", status: "revealed" }],
+  );
+  const detail = await getLeagueDetail(deps, "u-owner", "mid");
+  assert.equal(detail.finished, false);
+  assert.deepEqual((await listBrowseLeagues(deps, "u-stranger")).map((b) => b.id), ["mid"]);
+});
+
+test("rematch clones a finished league: same players + settings, fresh standings at 0", async () => {
+  const deps = await depsWith(
+    [league({ id: "s1", name: "Szn Group 1", visibility: "private", roundCount: 1, memberIds: ["u-owner", "u-2", "u-3"] })],
+    [{ id: "s1~1", leagueId: "s1", index: 1, theme: "One", status: "revealed" }],
+  );
+  await deps.repo.addStandingPoints("s1", "u-2", 42); // old points must not carry over
+
+  const next = await rematchLeague(deps, "u-owner", "s1");
+  assert.equal(next.name, "Szn Group 2"); // trailing number increments
+  assert.notEqual(next.id, "s1");
+  assert.deepEqual(next.memberIds, ["u-owner", "u-2", "u-3"]);
+  assert.equal(next.roundCount, 1);
+  assert.ok(next.inviteCode && next.inviteCode !== "C-s1");
+
+  const standings = await deps.repo.getStandings(next.id);
+  assert.equal(standings.length, 3);
+  assert.ok(standings.every((s) => s.points === 0));
+  // The new invite code resolves to the new league.
+  assert.equal(await deps.repo.getLeagueIdForInvite(next.inviteCode), next.id);
+});
+
+test("rematch is owner-only and only after the league has finished", async () => {
+  const deps = await depsWith(
+    [league({ id: "live", name: "Live", visibility: "private", roundCount: 2, memberIds: ["u-owner", "u-2"] })],
+    [{ id: "live~1", leagueId: "live", index: 1, theme: "One", status: "voting" }],
+  );
+  const is = (code: number) => (e: unknown) => e instanceof ApiError && e.statusCode === code;
+  await assert.rejects(rematchLeague(deps, "u-2", "live"), is(403));
+  await assert.rejects(rematchLeague(deps, "u-owner", "live"), is(409));
+});
+
+test("no round can be created beyond the league's planned roundCount", async () => {
+  const deps = await depsWith(
+    [league({ id: "cap", name: "Cap", visibility: "private", roundCount: 1 })],
+    [{ id: "cap~1", leagueId: "cap", index: 1, theme: "One", status: "revealed" }],
+  );
+  await assert.rejects(
+    createRound(deps, "u-owner", "cap", { theme: "Two" }),
+    (e: unknown) => e instanceof ApiError && e.statusCode === 400,
+  );
 });

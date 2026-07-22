@@ -107,6 +107,13 @@ export function buildRoutes(deps: Deps): Route[] {
       handler: (req) => leagues.regenerateInvite(deps, req.caller, req.params.leagueId!),
     },
     {
+      // Owner-only: after a league finishes, create a fresh league with the
+      // same players + settings (standings reset to 0).
+      method: "POST",
+      pattern: "/leagues/:leagueId/rematch",
+      handler: (req) => leagues.rematchLeague(deps, req.caller, req.params.leagueId!),
+    },
+    {
       method: "PATCH",
       pattern: "/leagues/:leagueId/settings",
       handler: (req) => {

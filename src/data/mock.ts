@@ -257,6 +257,18 @@ export interface LeagueSummary {
   /** 0-100, how complete the current round's phase is (mocked). */
   completionPct: number;
   members: User[];
+  /** True once the final round has been revealed — the league is closed. */
+  finished: boolean;
+}
+
+/** Mirrors the backend rule: finished = the last round (index ≥ roundCount)
+ *  has been revealed, so the league is closed to new rounds. */
+function isLeagueFinished(league: League, leagueRounds: Round[]): boolean {
+  if (!league.roundCount) return false;
+  const last = [...leagueRounds].sort((a, b) => b.index - a.index)[0];
+  return Boolean(
+    last && last.index >= league.roundCount && (last.status === "revealed" || last.status === "complete"),
+  );
 }
 
 const MOCK_COMPLETION: Record<string, number> = {
@@ -277,6 +289,7 @@ export function getMyLeagueSummaries(): LeagueSummary[] {
         totalRounds: league.roundCount || leagueRounds.length,
         completionPct: MOCK_COMPLETION[league.id] ?? 0,
         members: league.memberIds.map((id) => users[id]).filter(Boolean),
+        finished: isLeagueFinished(league, leagueRounds),
       };
     });
 }
@@ -509,6 +522,8 @@ export interface LeagueDetail {
   /** Present only while the current round is voting ("submitted" = ballot cast). */
   votingProgress?: RoundParticipation;
   activity: ActivityItem[];
+  /** True once the final round has been revealed — the league is closed. */
+  finished: boolean;
 }
 
 // ---- round submissions (shared by the vote + reveal screens) ----
@@ -676,5 +691,32 @@ export function getLeagueDetail(leagueId: string): LeagueDetail | undefined {
     submissionProgress,
     votingProgress,
     activity: ACTIVITY[leagueId] ?? [],
+    finished: isLeagueFinished(league, leagueRounds),
   };
+}
+
+/** Owner starts a fresh league with the same players + settings once this one
+ *  has finished (mock: mirrors the backend rematchLeague). */
+export function rematchLeague(leagueId: string): League {
+  const league = leagues.find((lg) => lg.id === leagueId);
+  if (!league) throw new Error("That league doesn't exist.");
+  if (league.ownerId !== currentUser.id) throw new Error("Only the league owner can do that.");
+  const leagueRounds = rounds.filter((r) => r.leagueId === leagueId);
+  if (!isLeagueFinished(league, leagueRounds)) {
+    throw new Error("You can start a rematch once every round has been played.");
+  }
+  createdLeagueSeq += 1;
+  const numbered = league.name.match(/^(.*?)(\d+)\s*$/);
+  const next: League = {
+    ...league,
+    id: `lg-rematch-${createdLeagueSeq}`,
+    name: (numbered ? `${numbered[1]}${Number(numbered[2]) + 1}` : `${league.name} 2`).slice(0, 50),
+    settings: { ...league.settings },
+    memberIds: [...league.memberIds],
+    inviteCode: `NEW-${100 + createdLeagueSeq}`,
+    startAt: league.progression === "timed" ? new Date().toISOString() : undefined,
+  };
+  leagues.push(next);
+  inviteCodes[next.inviteCode] = next.id;
+  return next;
 }

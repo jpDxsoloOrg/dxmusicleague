@@ -38,13 +38,21 @@ export async function createRound(
   leagueId: string,
   input: CreateRoundInput,
 ): Promise<Round> {
-  await requireOwnedLeague(deps, caller, leagueId);
+  const league = await requireOwnedLeague(deps, caller, leagueId);
 
   const theme = (input?.theme ?? "").trim();
   if (!theme) throw badRequest("Give the round a theme.");
 
   const existing = await deps.repo.getRoundsForLeague(leagueId);
   const index = existing.reduce((max, r) => Math.max(max, r.index), 0) + 1;
+
+  // The league closes after its planned rounds — no round N+1. Once the last
+  // round reveals, the league is finished and the owner starts a rematch instead.
+  if (league.roundCount && index > league.roundCount) {
+    throw badRequest(
+      `This league was set to ${league.roundCount} round${league.roundCount === 1 ? "" : "s"} and they've all been created — start a rematch to keep playing.`,
+    );
+  }
 
   const round: Round = {
     id: makeRoundId(leagueId, index),

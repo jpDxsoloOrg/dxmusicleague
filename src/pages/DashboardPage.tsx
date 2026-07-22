@@ -90,20 +90,24 @@ export function PublicLeagueCard({ league }: { league: PublicLeagueSummary }) {
 }
 
 export function LeagueCard({ summary }: { summary: LeagueSummary }) {
-  const { league, currentRound, totalRounds, completionPct, members } = summary;
+  const { league, currentRound, totalRounds, completionPct, members, finished } = summary;
   const status = currentRound?.status ?? "draft";
 
   return (
     <Link to={`/leagues/${league.id}`} className="league-card">
       <div className="league-card-top">
         <span className="round-tag">
-          Round {currentRound?.index ?? 0} of {totalRounds}
+          {finished ? `All ${totalRounds} rounds played` : `Round ${currentRound?.index ?? 0} of ${totalRounds}`}
         </span>
-        <span className={`pill pill-${status}`}>{STATUS_LABEL[status]}</span>
+        {finished ? (
+          <span className="pill pill-complete">Finished</span>
+        ) : (
+          <span className={`pill pill-${status}`}>{STATUS_LABEL[status]}</span>
+        )}
       </div>
 
       <h3 className="league-name">{league.name}</h3>
-      {currentRound && <p className="league-theme">{currentRound.theme}</p>}
+      {finished ? <p className="league-theme">🏁 League complete</p> : currentRound && <p className="league-theme">{currentRound.theme}</p>}
 
       <div className="avatar-stack">
         {members.slice(0, 5).map((m) => (

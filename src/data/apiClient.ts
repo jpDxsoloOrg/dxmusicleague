@@ -129,6 +129,9 @@ export class ApiClient implements DataClient {
   async deleteLeague(leagueId: string): Promise<void> {
     await request(`/leagues/${enc(leagueId)}`, { method: "DELETE" });
   }
+  rematchLeague(leagueId: string): Promise<League> {
+    return request<League>(`/leagues/${enc(leagueId)}/rematch`, { method: "POST" });
+  }
 
   // ---- Rounds (owner) ----
   createRound(leagueId: string, input: CreateRoundInput): Promise<Round> {

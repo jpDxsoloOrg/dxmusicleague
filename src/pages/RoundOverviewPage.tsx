@@ -81,7 +81,7 @@ export function RoundOverviewPage() {
     );
   }
 
-  const { league, rounds, currentRound, totalRounds, standings, submissionProgress, votingProgress, activity } = detail;
+  const { league, rounds, currentRound, totalRounds, standings, submissionProgress, votingProgress, activity, finished } = detail;
   const providerName = getProvider(league.musicProvider).info.name;
   const isOwner = league.ownerId === user?.id;
   // A capped (public) league is full once every slot is taken; uncapped never is.
@@ -157,14 +157,14 @@ export function RoundOverviewPage() {
             </div>
           </header>
 
-          {isOwner && (
+          {isOwner && !finished && (
             <OwnerRoundControl league={league} currentRound={currentRound} onChange={reload} />
           )}
 
           {/* Invite others. When a capped league is full it hides for members,
               but the owner keeps it — the cap only limits public claiming;
               invite-code joins still work. */}
-          {league.inviteCode && (isOwner || !isFull) && (
+          {league.inviteCode && !finished && (isOwner || !isFull) && (
             <InvitePanel
               code={league.inviteCode}
               note={
@@ -197,8 +197,26 @@ export function RoundOverviewPage() {
             })}
           </div>
 
-          {/* active round hero */}
-          {currentRound ? (
+          {/* active round hero — or the wrap-up card once the league finishes */}
+          {finished ? (
+            <section className="hero-round finished">
+              <div className="hero-round-top">
+                <span className="round-tag">League complete</span>
+                <span className="pill pill-complete">Finished</span>
+              </div>
+              <h2 className="hero-theme">
+                🏆 {standings[0] ? `${standings[0].user.displayName} takes the league!` : "That's a wrap!"}
+              </h2>
+              <p className="hero-desc">
+                All {totalRounds} rounds have been played and the final standings are locked in.
+                {isOwner ? " Fancy another run with the same crew?" : ""}
+              </p>
+              <div className="hero-footer">
+                <Link to={`/leagues/${league.id}/reveal`} className="btn hero-cta">View final results</Link>
+                {isOwner && <RematchButton leagueId={league.id} />}
+              </div>
+            </section>
+          ) : currentRound ? (
             <section className="hero-round">
               <div className="hero-round-top">
                 <span className="round-tag">Round {currentRound.index} · Active</span>
@@ -314,6 +332,35 @@ export function RoundOverviewPage() {
         </aside>
       </div>
     </div>
+  );
+}
+
+// Owner-only, shown once the league finishes: creates a fresh league with the
+// same players + settings (standings reset) and jumps straight to it.
+function RematchButton({ leagueId }: { leagueId: string }) {
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleRematch() {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await data.rematchLeague(leagueId);
+      navigate(`/leagues/${next.id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't start the new league.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <button className="btn btn-primary hero-cta" disabled={busy} onClick={handleRematch}>
+        {busy ? "Setting up…" : "Run it back — new league, same players →"}
+      </button>
+      {error && <span className="page-error">{error}</span>}
+    </>
   );
 }
 

@@ -59,6 +59,9 @@ export interface DataClient {
   updateLeagueSettings(leagueId: string, settings: EditableLeagueSettings): Promise<League>;
   /** Owner-only: permanently delete a league and all its data. */
   deleteLeague(leagueId: string): Promise<void>;
+  /** Owner-only, once a league has finished: create a fresh league with the
+   *  same players + settings (standings reset). Returns the new league. */
+  rematchLeague(leagueId: string): Promise<League>;
 
   // ---- Rounds (league owner) ----
   createRound(leagueId: string, input: CreateRoundInput): Promise<Round>;

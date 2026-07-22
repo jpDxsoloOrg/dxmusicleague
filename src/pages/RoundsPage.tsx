@@ -29,7 +29,8 @@ const NEEDS_ACTION: RoundStatus[] = ["submitting", "voting"];
 
 export function RoundsPage() {
   const { data: all, loading, error } = useAsync(() => data.getMyLeagueSummaries(), []);
-  const summaries = (all ?? []).filter((s) => s.currentRound);
+  // Finished leagues have nothing left to do — they live on the dashboard, not here.
+  const summaries = (all ?? []).filter((s) => s.currentRound && !s.finished);
   const active = summaries.filter((s) => NEEDS_ACTION.includes(s.currentRound!.status));
   const other = summaries.filter((s) => !NEEDS_ACTION.includes(s.currentRound!.status));
 

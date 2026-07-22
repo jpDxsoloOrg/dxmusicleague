@@ -6,9 +6,8 @@ import type { MusicProviderId } from "../music";
 import type { LeagueVisibility, RoundProgression } from "../domain/types";
 import "./CreateLeaguePage.css";
 
-/** Beta gate: timed rounds exist end-to-end but haven't been tested in prod
- *  yet, so new leagues can't pick them. Flip to true to offer them again. */
-const TIMED_ROUNDS_ENABLED = false;
+/** Beta gate for timed rounds — flip to false to hide them from new leagues. */
+const TIMED_ROUNDS_ENABLED = true;
 
 export function CreateLeaguePage() {
   const navigate = useNavigate();
