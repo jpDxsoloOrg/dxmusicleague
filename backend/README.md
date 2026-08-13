@@ -63,6 +63,66 @@ npx cdk deploy                # provisions Table, Cognito, API GW, Lambda
 
 Outputs `ApiUrl`, `UserPoolId`, `UserPoolClientId`, `TableName` for the frontend.
 
+## Email delivery
+
+Sign-up codes, resends and password resets are all sent by the Cognito user
+pool. Cognito's **built-in sender is capped at 50 messages/day per user pool** —
+a hard AWS limit that support cannot raise. Past it, every registration fails
+with `LimitExceededException: Exceeded daily email limit for the operation or
+the account` until the counter resets at 00:00 UTC.
+
+The stack therefore accepts an SES sender, which swaps that cap for the SES
+account quota. It is **optional** — omit it and the pool stays on the 50/day
+default sender, which is fine for a test stack.
+
+To switch the deployed pool over:
+
+1. **Verify the sender** in SES, in a region Cognito supports (`us-east-1`,
+   `us-west-2`, `eu-west-1`). Verify either a single address or a whole domain —
+   a domain gets you DKIM and better deliverability.
+
+   ```bash
+   aws ses verify-email-identity --email-address no-reply@example.com
+   # or, for a domain:
+   aws ses verify-domain-identity --domain example.com   # then add the DNS records
+   ```
+
+2. **Leave the SES sandbox.** A sandboxed account can only send *to* verified
+   addresses, so new registrants would get nothing at all — this step is not
+   optional. Request production access in the SES console (Account dashboard →
+   "Request production access"); approval is usually same-day.
+
+3. **Deploy with the sender set:**
+
+   ```bash
+   npx cdk deploy -c sesFromEmail=no-reply@example.com
+   # domain identity instead of a single address:
+   npx cdk deploy -c sesFromEmail=no-reply@example.com -c sesVerifiedDomain=example.com
+   # identity in a different region than the stack:
+   npx cdk deploy -c sesFromEmail=no-reply@example.com -c sesRegion=us-east-1
+   ```
+
+   `sesFromName` overrides the From display name (default "DX Music League").
+   Each flag also reads an env var — `SES_FROM_EMAIL`, `SES_VERIFIED_DOMAIN`,
+   `SES_REGION`, `SES_FROM_NAME` — for CI. **Pass the flag on every subsequent
+   deploy:** dropping it reverts the pool to the 50/day default sender.
+
+### If the quota is being burned faster than real signups explain
+
+The pool's sign-up API is public (the client ID ships in the frontend bundle),
+so scripted signups from bots will spend the quota without any traffic showing
+up in the app. A pool full of unconfirmed junk accounts is the tell:
+
+```bash
+aws cognito-idp list-users --user-pool-id <pool-id> \
+  --filter 'cognito:user_status = "UNCONFIRMED"' --max-results 60 \
+  --query 'Users[].[Username,UserCreateDate]' --output table
+```
+
+Moving to SES raises the ceiling but does not stop the spend. The AWS-recommended
+guard is a [pre-sign-up Lambda trigger](https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-lambda-pre-sign-up.html)
+that rejects signups failing a CAPTCHA or an allowlist check. Not wired up here.
+
 ## Status
 
 Implemented: build-order steps 1–2 (infra scaffold + league create/join/list/detail).

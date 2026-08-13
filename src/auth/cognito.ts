@@ -151,6 +151,15 @@ function userFromSession(session: CognitoUserSession): AuthUser {
  *  The SDK puts the exception name on `.code` (older) or `.name` (newer). */
 function toAuthError(err: unknown): AuthError {
   const e = err as { message?: string; code?: string; name?: string };
-  const message = e?.message ?? "Something went wrong. Please try again.";
-  return new AuthError(message, e?.code ?? e?.name);
+  const code = e?.code ?? e?.name;
+  let message = e?.message ?? "Something went wrong. Please try again.";
+  // The pool's daily email quota is spent. Cognito words this one for the account
+  // operator ("configure your user pool to use your own Amazon SES configuration"),
+  // which is alarming and unactionable for someone just trying to register — the
+  // code is reused for other limits, so match the message, not just the name.
+  if (code === "LimitExceededException" && /daily email limit/i.test(message)) {
+    message =
+      "We couldn't email your code — the league has hit its daily email limit. Please try again tomorrow, or ask the league admin to look into it.";
+  }
+  return new AuthError(message, code);
 }

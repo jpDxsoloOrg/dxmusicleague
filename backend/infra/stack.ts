@@ -23,8 +23,24 @@ import { dirname, join } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+/** Optional SES sender for the user pool's outbound mail. See "Email delivery"
+ *  in ../README.md — omit it all and the pool stays on Cognito's built-in
+ *  sender, which is capped at 50 messages/day. */
+export interface MusicLeagueStackProps extends StackProps {
+  /** Verified SES identity mail is sent from, e.g. `no-reply@dxleague.com`.
+   *  Setting this is what switches the pool off the 50/day default sender. */
+  readonly sesFromEmail?: string;
+  /** Display name on the From header. Defaults to "DX Music League". */
+  readonly sesFromName?: string;
+  /** Set when a whole *domain* is the verified identity rather than the single
+   *  address in `sesFromEmail`. Must match that address's domain. */
+  readonly sesVerifiedDomain?: string;
+  /** Region the SES identity lives in. Defaults to the stack's own region. */
+  readonly sesRegion?: string;
+}
+
 export class MusicLeagueStack extends Stack {
-  constructor(scope: Construct, id: string, props?: StackProps) {
+  constructor(scope: Construct, id: string, props?: MusicLeagueStackProps) {
     super(scope, id, props);
 
     // ---- DynamoDB single table ----
@@ -46,6 +62,21 @@ export class MusicLeagueStack extends Stack {
     });
 
     // ---- Cognito (our accounts; Spotify auth stays host-only, elsewhere) ----
+    // Outbound mail: Cognito's built-in sender is capped at 50 messages/day per
+    // user pool — a hard AWS limit that cannot be raised. Sign-up codes, resends
+    // and password resets all draw on the same bucket, so once it is spent every
+    // new registration fails with "Exceeded daily email limit for the operation
+    // or the account" until it resets at 00:00 UTC. Pointing the pool at our own
+    // verified SES identity replaces that cap with the SES account quota.
+    const email = props?.sesFromEmail
+      ? cognito.UserPoolEmail.withSES({
+          fromEmail: props.sesFromEmail,
+          fromName: props.sesFromName ?? "DX Music League",
+          sesVerifiedDomain: props.sesVerifiedDomain,
+          sesRegion: props.sesRegion ?? this.region,
+        })
+      : cognito.UserPoolEmail.withCognito();
+
     const userPool = new cognito.UserPool(this, "MusicLeagueUserPool", {
       userPoolName: "music-league",
       selfSignUpEnabled: true,
@@ -54,6 +85,7 @@ export class MusicLeagueStack extends Stack {
       standardAttributes: { preferredUsername: { required: false, mutable: true } },
       passwordPolicy: { minLength: 8, requireLowercase: true, requireDigits: true },
       removalPolicy: RemovalPolicy.RETAIN,
+      email,
     });
 
     const userPoolClient = userPool.addClient("WebClient", {
