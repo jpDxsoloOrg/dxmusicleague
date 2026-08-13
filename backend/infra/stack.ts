@@ -62,12 +62,13 @@ export class MusicLeagueStack extends Stack {
     });
 
     // ---- Cognito (our accounts; Spotify auth stays host-only, elsewhere) ----
-    // Outbound mail: Cognito's built-in sender is capped at 50 messages/day per
-    // user pool — a hard AWS limit that cannot be raised. Sign-up codes, resends
-    // and password resets all draw on the same bucket, so once it is spent every
+    // Outbound mail: Cognito's built-in sender is capped at 50 messages/day — a
+    // hard AWS limit that cannot be raised, and one other pools in the account
+    // may draw on too (see "Email delivery" in ../README.md). Sign-up codes,
+    // resends and password resets all spend from it, so once it runs out every
     // new registration fails with "Exceeded daily email limit for the operation
-    // or the account" until it resets at 00:00 UTC. Pointing the pool at our own
-    // verified SES identity replaces that cap with the SES account quota.
+    // or the account". Pointing the pool at our own verified SES identity
+    // replaces that cap with the SES account quota.
     const email = props?.sesFromEmail
       ? cognito.UserPoolEmail.withSES({
           fromEmail: props.sesFromEmail,

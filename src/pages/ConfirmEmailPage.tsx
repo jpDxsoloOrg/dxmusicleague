@@ -4,8 +4,8 @@ import { useAuth } from "../auth/AuthContext";
 import { AuthBrand } from "./AuthBrand";
 import "./AuthPage.css";
 
-// Every resend spends one message from the pool's daily email quota, so the
-// button goes quiet for a minute after each send rather than firing on every click.
+// Every resend spends one message from the daily email allowance, so the button
+// goes quiet for a minute after each send rather than firing on every click.
 const RESEND_COOLDOWN_SECONDS = 60;
 
 export function ConfirmEmailPage() {
