@@ -102,6 +102,12 @@
 .auth-link:hover { filter: brightness(1.15); }
 .auth-link-sm { font-size: 12px; font-weight: 600; color: var(--text-muted); }
 .auth-link-sm:hover { color: var(--magenta); }
+/* e.g. "Resend code" while its cooldown runs — still readable, clearly inert. */
+.auth-link:disabled, .auth-link-sm:disabled {
+  color: var(--text-muted);
+  cursor: default;
+  filter: none;
+}
 
 .auth-error {
   margin: 0;
