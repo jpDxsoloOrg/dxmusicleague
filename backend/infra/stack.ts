@@ -46,6 +46,18 @@ export class MusicLeagueStack extends Stack {
     });
 
     // ---- Cognito (our accounts; Spotify auth stays host-only, elsewhere) ----
+    // TEMPORARY: auto-confirm sign-ups without sending any verification email —
+    // the account-wide 50/day Cognito sender quota is exhausted and blocking
+    // registration. Remove with src/auth/pre-signup.ts once the pool sends
+    // through the verified SES identity.
+    const preSignUpFn = new NodejsFunction(this, "PreSignUpAutoConfirmFn", {
+      runtime: lambda.Runtime.NODEJS_22_X,
+      entry: join(__dirname, "../src/auth/pre-signup.ts"),
+      handler: "handler",
+      timeout: Duration.seconds(5),
+      bundling: { format: OutputFormat.ESM, minify: false, target: "node22" },
+    });
+
     const userPool = new cognito.UserPool(this, "MusicLeagueUserPool", {
       userPoolName: "music-league",
       selfSignUpEnabled: true,
@@ -54,6 +66,7 @@ export class MusicLeagueStack extends Stack {
       standardAttributes: { preferredUsername: { required: false, mutable: true } },
       passwordPolicy: { minLength: 8, requireLowercase: true, requireDigits: true },
       removalPolicy: RemovalPolicy.RETAIN,
+      lambdaTriggers: { preSignUp: preSignUpFn },
     });
 
     const userPoolClient = userPool.addClient("WebClient", {
