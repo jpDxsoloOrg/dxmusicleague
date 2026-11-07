@@ -191,6 +191,38 @@ set status `revealed`. `GET /results` is the read side — available only once `
 returns submitters, points, ranks, and all voter comments (matching
 [`getRoundResults`](../src/data/mock.ts)).
 
+### Head-to-head matchups
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `GET` | `/rounds/{roundId}/matchups` | — | `{ matchups: [{ matchupId, a, b, isMine }], bye }` |
+
+The voting-phase view of a head-to-head round, derived on every read (nothing
+stored): pairings from `h2hParticipants` + `h2hSalt` + the round index
+(`domain/schedule.ts`), each player's song attached from the round's
+submissions (`domain/matchups.ts`, the one derivation ballots and the tally
+share). `a`, `b` and `bye` are anonymized songs — the same `{ id, track }`
+shape as `GET /submissions` items — or `null` when that player has no song:
+they didn't submit, or they've left / been kicked while the round is in play
+(a departed player's song is withdrawn, so their pair shows as a walkover;
+`GET /submissions` drops it too for head-to-head leagues). Both sides `null` =
+no contest; `bye` is the sitting-out player's exhibition song (`null` for even
+fields). `matchupId` is `<roundId>~M<n>`, matchups come sorted by it, and
+`isMine` (the caller is one of the two players in the frozen schedule — a
+player who has since left still matches their own matchup in a revealed
+round; a spectator who never played never does) is the payload's only
+identity signal — no user ids, no submitter notes, never the frozen order.
+
+A revealed (or complete) round is never re-judged against the current member
+list, so a later leave/kick doesn't rewrite it: it shows every submitted song.
+For a round where someone departed *during* play, that means the revealed
+payload is not authoritative about walkovers — `GET /results` is.
+
+Access: members from `voting` on (403 while `draft` / `submitting` /
+`previewing` — no peeking before voting opens); once `revealed` (or
+`complete`) any signed-in user, spectators included, like `GET /results`.
+Non-members before the reveal → 403; a standard league's round → 400.
+
 ### Standings
 
 `GET /leagues/{leagueId}/standings → Standing[]` (also embedded in `LeagueDetail`). Reads the

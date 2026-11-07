@@ -8,6 +8,7 @@ import * as leagues from "../handlers/leagues.ts";
 import * as rounds from "../handlers/rounds.ts";
 import * as submissions from "../handlers/submissions.ts";
 import * as voting from "../handlers/voting.ts";
+import * as matchups from "../handlers/matchups.ts";
 import * as providers from "../handlers/providers.ts";
 
 export interface RouteRequest {
@@ -221,6 +222,14 @@ export function buildRoutes(deps: Deps): Route[] {
       method: "GET",
       pattern: "/rounds/:roundId/my-ballot",
       handler: (req) => voting.getMyBallot(deps, req.caller, req.params.roundId!),
+    },
+    {
+      // Head-to-head rounds: the matchups (anonymous songs, the caller's own
+      // pair flagged) + the bye's exhibition song. Members from voting on;
+      // anyone signed in once revealed, like results.
+      method: "GET",
+      pattern: "/rounds/:roundId/matchups",
+      handler: (req) => matchups.listMatchups(deps, req.caller, req.params.roundId!),
     },
     {
       method: "GET",

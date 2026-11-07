@@ -10,7 +10,10 @@
 
 import { randomUUID } from "node:crypto";
 import type { MusicProviderId, Submission, Track } from "../domain/types.ts";
+import { leagueFormat } from "../domain/types.ts";
 import { badRequest, forbidden, notFound } from "../domain/errors.ts";
+import { anonymousSong, departedParticipants } from "../domain/matchups.ts";
+import type { AnonSong } from "../domain/matchups.ts";
 import { autoAdvanceRound } from "./progression.ts";
 import type { Deps } from "./leagues.ts";
 
@@ -155,14 +158,18 @@ export async function listVotableSubmissions(
   deps: Deps,
   caller: string,
   roundId: string,
-): Promise<Array<{ id: string; track: Track }>> {
-  const { round } = await roundForMember(deps, caller, roundId);
+): Promise<AnonSong[]> {
+  const { round, league } = await roundForMember(deps, caller, roundId);
   if (round.status !== "previewing" && round.status !== "voting") {
     throw badRequest("The songs aren't revealed yet for this round.");
   }
 
   const subs = await deps.repo.getSubmissionsForRound(roundId);
-  return subs
-    .filter((s) => s.userId !== caller)
-    .map((s) => ({ id: s.id, track: s.track }));
+  // Head-to-head: a departed player's song is withdrawn here too, by the same
+  // rule as the matchups read (domain/matchups.ts), so the two lists never
+  // disagree about a round. Standard leagues keep every song, as before.
+  const departed = leagueFormat(league) === "headToHead" ? departedParticipants(league, round) : new Set<string>();
+  // The shared anonymizer (domain/matchups.ts) — the H2H matchups read uses
+  // the same one, so both vote screens get the identical song shape.
+  return subs.filter((s) => s.userId !== caller && !departed.has(s.userId)).map(anonymousSong);
 }
