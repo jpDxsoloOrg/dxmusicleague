@@ -167,8 +167,19 @@ export function inMatchup(m: RoundMatchup, userId: string): boolean {
  *  tally (HTH-07) and the "who can still vote" checks (HTH-08) all use it.
  *  The set can shrink mid-voting: a departure turns a contest into a walkover
  *  after picks may already be cast in it, and my-ballot pre-fills those picks
- *  on a re-cast. So ballot validation (HTH-06) should drop picks on matchups
- *  outside this set (walkover / no-contest) rather than reject the ballot. */
+ *  on a re-cast. So ballot validation (`validateH2HBallot`, domain/rules.ts)
+ *  never rejects a pick on a walkover / no-contest matchup: it keeps one made
+ *  before a departure (so a rejoin restores it) and drops anything else.
+ *  Count only picks in THIS set (as it stands at the reveal) — a stored
+ *  ballot can hold inert picks outside it.
+ *
+ *  HTH-08 (completion %, everyone-voted): a ballot row is not proof of a
+ *  vote. A member whose set is empty (e.g. both players of a two-player
+ *  league) can still store a comments-only row, and a row cast while a
+ *  player was departed has no pick in that pair if the player rejoins. So
+ *  count only ballots from voters whose set is non-empty — in the numerator
+ *  as well as the denominator — or a round can reveal before an eligible
+ *  voter has voted. */
 export function votableMatchups(set: RoundMatchupSet, voterId: string): RoundMatchup[] {
   return set.matchups.filter((m) => matchupState(m) === "contest" && !inMatchup(m, voterId));
 }

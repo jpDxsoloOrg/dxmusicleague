@@ -201,6 +201,9 @@ export function buildRoutes(deps: Deps): Route[] {
         submissions.removeSubmission(deps, req.caller, req.params.roundId!, req.params.submissionId!),
     },
     {
+      // Explicit field list: a body field missing here is silently dropped.
+      // `picks` = head-to-head winner picks (matchupId -> submissionId),
+      // passed through raw — the rules engine validates its shape.
       method: "POST",
       pattern: "/rounds/:roundId/ballot",
       handler: (req) => {
@@ -209,6 +212,7 @@ export function buildRoutes(deps: Deps): Route[] {
           allocations: body.allocations as Record<string, number>,
           downvotes: body.downvotes as Record<string, number> | undefined,
           comments: body.comments as Record<string, string> | undefined,
+          picks: body.picks as Record<string, string> | undefined,
         });
       },
     },

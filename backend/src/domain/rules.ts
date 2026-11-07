@@ -4,6 +4,8 @@
 
 import type { LeagueSettings } from "./types.ts";
 import { badRequest } from "./errors.ts";
+import { inMatchup, matchupState, votableMatchups } from "./matchups.ts";
+import type { RoundMatchup, RoundMatchupSet } from "./matchups.ts";
 
 export interface BallotInput {
   allocations: Record<string, number>;
@@ -87,6 +89,94 @@ export function validateBallot(
     if (antiVotes > 0) cleanedDown[submissionId] = antiVotes;
   }
   return { allocations: cleaned, downvotes: cleanedDown };
+}
+
+/**
+ * Validate a head-to-head ballot — the winner-pick analog of `validateBallot`.
+ * `picks` is the raw map from the request body (matchupId -> the submissionId
+ * picked to win it); `matchups` is the round's derived set with songs attached
+ * (`deriveRoundMatchups` / handlers `loadRoundMatchups`, HTH-05), departures
+ * applied. `asScheduled` is the same round derived as if nobody had departed
+ * (`{ departed: [] }`) — only used to recognise picks made before a departure
+ * (below); without it every walkover / no-contest pick is dropped. Throws
+ * ApiError(400) on the first broken rule; returns the cleaned picks on pass:
+ *
+ *   - every pick names a matchup of THIS round (unknown / another round's id
+ *     → reject; the bye is not a matchup, so nothing can be picked "in" it);
+ *   - no pick in the voter's own matchup, ever — the self-vote rule
+ *     (`allowSelfVote` doesn't apply: a matchup ballot can't be self-voted);
+ *   - in a contest, the pick is the id of one of that matchup's two songs
+ *     (not another matchup's, not the bye's exhibition song, not made up, not
+ *     a non-string);
+ *   - a pick in a walkover or no-contest matchup is never rejected and never
+ *     counts: such a matchup takes no votes. A departure mid-voting turns a
+ *     contest the voter may already have picked in into a walkover, which
+ *     my-ballot pre-fills on a re-cast (possibly naming the departed player's
+ *     now-withdrawn song). That pick — one of the pair's two songs as
+ *     scheduled — is KEPT, so if the player rejoins (the pair is a contest
+ *     again) the ballot still holds it; anything else there is dropped. The
+ *     tally (HTH-07) counts only picks in matchups that are contests at the
+ *     reveal, so a kept pick on a walkover is inert;
+ *   - completeness, the exact-spend analog: a pick in EVERY votable matchup —
+ *     `votableMatchups` (domain/matchups.ts), THE votable-set definition the
+ *     tally and the who-can-vote checks share: every contest except the
+ *     voter's own. So the bye player picks in all of them, a paired player in
+ *     all but their own. A voter with nothing votable (e.g. a two-player
+ *     league) passes with no picks — their ballot can still carry comments
+ *     (HTH-08 must not count such a ballot row as a vote; see
+ *     `votableMatchups`).
+ */
+export function validateH2HBallot(
+  picks: unknown,
+  matchups: RoundMatchupSet,
+  voterId: string,
+  asScheduled?: RoundMatchupSet,
+): Record<string, string> {
+  if (picks !== undefined && picks !== null && (typeof picks !== "object" || Array.isArray(picks))) {
+    throw badRequest("Picks must map each matchup to the song you picked to win it.");
+  }
+  const byId = new Map(matchups.matchups.map((m) => [m.matchupId, m]));
+  const scheduledById = new Map((asScheduled?.matchups ?? []).map((m) => [m.matchupId, m]));
+
+  const cleaned: Record<string, string> = {};
+  for (const [matchupId, submissionId] of Object.entries((picks ?? {}) as Record<string, unknown>)) {
+    const matchup = byId.get(matchupId);
+    if (!matchup) throw badRequest(`Unknown matchup in ballot: ${matchupId}`);
+    if (inMatchup(matchup, voterId)) throw badRequest("You can't pick a winner in your own matchup.");
+    if (matchupState(matchup) !== "contest") {
+      // Walkover / no contest: takes no votes. Keep a pick from before a
+      // departure (a song of the pair as scheduled), drop anything else.
+      const scheduled = scheduledById.get(matchupId);
+      if (scheduled && matchupState(scheduled) === "contest" && isSongOf(scheduled, submissionId)) {
+        cleaned[matchupId] = submissionId;
+      }
+      continue;
+    }
+    if (typeof submissionId !== "string") {
+      throw badRequest("Each pick must be the id of one of the matchup's two songs.");
+    }
+    if (!isSongOf(matchup, submissionId)) {
+      throw badRequest(`That song isn't in matchup ${matchupId}: pick one of its two songs.`);
+    }
+    cleaned[matchupId] = submissionId;
+  }
+
+  const votable = votableMatchups(matchups, voterId);
+  const picked = votable.filter((m) => Object.hasOwn(cleaned, m.matchupId)).length;
+  if (picked !== votable.length) {
+    const n = votable.length;
+    throw badRequest(
+      `Pick a winner in every matchup you can vote in: ${n} ${n === 1 ? "matchup" : "matchups"} (you picked ${picked}).`,
+    );
+  }
+  return cleaned;
+}
+
+/** Is `submissionId` the id of one of the matchup's songs (sides with a song)? */
+function isSongOf(m: RoundMatchup, submissionId: unknown): submissionId is string {
+  return (
+    typeof submissionId === "string" && (submissionId === m.a.submission?.id || submissionId === m.b.submission?.id)
+  );
 }
 
 export interface Tallyable {

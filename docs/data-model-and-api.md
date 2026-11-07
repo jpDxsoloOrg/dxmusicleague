@@ -29,7 +29,7 @@ because every read below is a point-get or a single-partition `Query` — no cro
 | Membership | `LEAGUE#<leagueId>` | `MEMBER#<userId>` | `joinedAt, displayName` |
 | Round | `LEAGUE#<leagueId>` | `ROUND#<index4>` | `roundId, theme, description, status, submissionDeadline, voteDeadline, playlistUrl` |
 | Submission | `ROUND#<roundId>` | `SUB#<userId>` | `track{}, submittedAt` |
-| Vote ballot | `ROUND#<roundId>` | `BALLOT#<voterId>` | `allocations{subId:pts}, comments{subId:text}, castAt` |
+| Vote ballot | `ROUND#<roundId>` | `BALLOT#<voterId>` | `allocations{subId:pts}, comments{subId:text}, castAt`; head-to-head: `picks{matchupId:subId}` with `allocations` empty |
 | Standing | `LEAGUE#<leagueId>` | `STANDING#<userId>` | `points` (running season total); `wins, losses, draws` (head-to-head record — absent on older rows, read as 0) |
 | Invite code | `INVITE#<code>` | `META` | `leagueId` |
 
@@ -117,6 +117,8 @@ afresh at its own round 1). Standard leagues never get either attribute.
   enforced by the schema itself, not just by code.
 - `BALLOT#<voterId>` (one item holding the whole allocation map) means a ballot is atomic:
   it is validated as a complete unit (full pool, caps) and written once. No partial rows.
+  A head-to-head ballot is the same one item per voter (its `picks` map instead of points),
+  so per-voter counts — completion %, the timed everyone-voted reveal — hold for both formats.
 
 ---
 
@@ -171,7 +173,8 @@ list **excluding the caller's own pick**, and only when the round is `voting`.
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| `POST` | `/rounds/{roundId}/ballot` | `{ allocations: {submissionId: points}, comments?: {submissionId: text} }` | `{ ok: true }` |
+| `POST` | `/rounds/{roundId}/ballot` | `{ allocations: {submissionId: points}, comments?: {submissionId: text} }` — head-to-head: `{ picks: {matchupId: submissionId}, comments? }` | `{ ok: true }` |
+| `GET` | `/rounds/{roundId}/my-ballot` | — | `{ allocations, downvotes, comments }` (+ `picks` in head-to-head leagues), or `null` before voting |
 | `POST` | `/rounds/{roundId}/reveal` | — (owner-only) | `RoundResult[]` |
 | `GET` | `/rounds/{roundId}/results` | — | `RoundResult[]` |
 
@@ -183,6 +186,31 @@ list **excluding the caller's own pick**, and only when the round is `voting`.
 4. Each allocation is an integer `0 ≤ p ≤ maxPointsPerSong`.
 5. `sum(points) === votePoolSize` exactly — no partial ballots.
 6. One ballot per voter: overwrite of `BALLOT#<me>` allowed until the deadline.
+
+**Head-to-head ballots** (`validateH2HBallot`, `domain/rules.ts`) pick a winner per matchup,
+over the same derived matchups as `GET /matchups` — reject the whole ballot if any fail:
+
+1. Same guards as above: round `voting`, deadline not passed, caller is a member.
+2. Every pick's `matchupId` is a matchup of this round (the bye is not a matchup). In a
+   contest, its value is the id of one of that matchup's two songs (walkover / no-contest
+   picks aren't refereed — see 4).
+3. No pick in the caller's own matchup (the self-vote rule; `allowSelfVote` doesn't apply).
+4. A pick in **every** votable matchup — every contest (both songs present) except the
+   caller's own (`votableMatchups`, the set the tally shares). A pick in a walkover / no-contest
+   matchup is never rejected and never counts: a mid-voting departure can turn a picked contest
+   into a walkover, and the re-cast pre-filled from my-ballot must still go through. Such a
+   pick is kept if it names one of the pair's songs as scheduled (made before the departure, so
+   a rejoin — the pair is a contest again — restores it) and dropped otherwise. The tally counts
+   only picks in matchups that are contests at the reveal. A caller with nothing votable (e.g. a
+   two-player league) casts an empty `picks` and may still comment.
+5. No points and no anti-votes (`allocations` / `downvotes` must be absent or empty); a standard
+   league's ballot with non-empty `picks` is rejected the same way.
+
+Comments work as for points ballots, keyed by submission id: any song of the round's frozen
+participants — both songs of every matchup (their own included) and the bye's exhibition
+song. A departed player's withdrawn song keeps its comments too (as on a points ballot), so a
+pre-filled re-cast loses nothing. Stored as `allocations: {}` + `picks`; a re-cast overwrites
+the row.
 
 **Reveal** (owner triggers once): tally points per submission from all ballots, rank with the
 fixed tie-break (points → distinct voters → title), increment each member's `STANDING#`

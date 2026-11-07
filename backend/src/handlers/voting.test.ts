@@ -4,18 +4,24 @@
 // song, walkover / no-contest sides as null, departures (withdrawn while the
 // round is in play, never re-judged once it's revealed; the anonymous song
 // list agrees), the phase + membership gates, and that nothing in the payload
-// (or the league) gives away who submitted what or the frozen order. Every league is driven through the real flow
-// (open round 1 → freeze, submit, close, open voting) over MemoryRepository,
-// with the freeze RNG seeded through deps.
+// (or the league) gives away who submitted what or the frozen order.
+// HTH-06: casting a head-to-head ballot (POST /rounds/:roundId/ballot with
+// `picks`) — stored on the voter's one Ballot row, refereed by
+// validateH2HBallot over the same derived matchups, re-cast + my-ballot
+// pre-fill, comments, format cross-checks, and the timed auto-reveal.
+// Every league is driven through the real flow (open round 1 → freeze,
+// submit, close, open voting) over MemoryRepository, with the freeze RNG
+// seeded through deps.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MemoryRepository, MemoryUserDirectory } from "../data/memory.ts";
 import type { Deps } from "./leagues.ts";
-import { leaveLeague } from "./leagues.ts";
+import { joinLeague, leaveLeague } from "./leagues.ts";
 import { updateRound } from "./rounds.ts";
 import { listVotableSubmissions, submitSong } from "./submissions.ts";
 import { listMatchups } from "./matchups.ts";
+import { castBallot, getMyBallot } from "./voting.ts";
 import { ApiError } from "../domain/errors.ts";
 import type { RandomInt } from "../domain/freeze.ts";
 import type { RoundMatchupsView } from "../domain/matchups.ts";
@@ -71,13 +77,14 @@ interface Setup {
  */
 async function h2hRound(
   members: string[],
-  { submitters = members, status = "voting" as RoundStatus } = {},
+  { submitters = members, status = "voting" as RoundStatus, timed = false } = {},
 ): Promise<Setup> {
   const repo = new MemoryRepository(false);
   await repo.createLeague({
     id: LEAGUE, name: "Duel League", ownerId: OWNER, musicProvider: "mock", format: "headToHead",
     settings: { ...DEFAULT_LEAGUE_SETTINGS, ...H2H_FORCED_SETTINGS }, memberIds: [...members],
-    inviteCode: "DUEL-1", visibility: "private", roundCount: 3, progression: "manual",
+    inviteCode: "DUEL-1", visibility: "private", roundCount: 3,
+    ...(timed ? { progression: "timed" as const, phaseDays: 3 } : { progression: "manual" as const }),
   });
   for (const id of members) await repo.addStandingPoints(LEAGUE, id, 0);
   await repo.createRound({ id: ROUND, leagueId: LEAGUE, index: 1, theme: "Openers", status: "draft" });
@@ -359,4 +366,316 @@ test("GET /rounds/:roundId/matchups through the real route table; no league payl
     assert.ok(!json.includes("h2hParticipants") && !json.includes("h2hSalt"), caller);
     assert.ok(!json.includes(league.h2hSalt!), caller);
   }
+});
+
+// ---- HTH-06: casting head-to-head ballots ----------------------------------
+
+/** The contests `voter` gets a pick in, from the independent derivation: both
+ *  players submitted and the voter isn't one of them. */
+function contestsFor({ schedule, subs }: Setup, voter: string) {
+  return schedule.matchups.filter((m) => subs.has(m.a) && subs.has(m.b) && m.a !== voter && m.b !== voter);
+}
+
+/** A complete pick set for `voter`: side `pick` of every contest they vote in. */
+function fullPicks(setup: Setup, voter: string, pick: "a" | "b" = "a"): Record<string, string> {
+  return Object.fromEntries(contestsFor(setup, voter).map((m) => [m.matchupId, setup.subs.get(m[pick])!.id]));
+}
+
+/** The voter's own matchup in the derived schedule (undefined for the bye). */
+const ownMatchup = ({ schedule }: Setup, voter: string) => schedule.matchups.find((m) => m.a === voter || m.b === voter);
+
+/** A standard (points) league in voting with all four songs in. */
+async function pointsRound() {
+  const repo = new MemoryRepository(false);
+  await repo.createLeague({
+    id: "pts", name: "Points League", ownerId: OWNER, musicProvider: "mock", format: "standard",
+    settings: DEFAULT_LEAGUE_SETTINGS, memberIds: [...FOUR], inviteCode: "PTS-1", visibility: "private",
+    roundCount: 3, progression: "manual",
+  });
+  await repo.createRound({ id: "pts~0001", leagueId: "pts", index: 1, theme: "Openers", status: "submitting" });
+  const deps: Deps = { repo, users: new MemoryUserDirectory() };
+  for (const [i, id] of FOUR.entries()) {
+    const song = SONGS[i]!;
+    await submitSong(deps, id, "pts~0001", {
+      track: { id: `mock-${song.title}`, provider: "mock", providerTrackId: `mock-${song.title}`, ...song },
+    });
+  }
+  await repo.updateRound({ ...((await repo.getRound("pts~0001")) as Round), status: "voting" });
+  const subs = new Map((await repo.getSubmissionsForRound("pts~0001")).map((x) => [x.userId, x]));
+  return { deps, repo, subs };
+}
+
+test("H2H cast happy path: complete picks land on the voter's one Ballot row as allocations {} + picks; my-ballot returns them", async () => {
+  const setup = await h2hRound(FIVE);
+  const { deps, repo, schedule } = setup;
+
+  for (const voter of FIVE) {
+    const picks = fullPicks(setup, voter, voter === OWNER ? "b" : "a");
+    // The bye player picks in both matchups; a paired player in the other one only.
+    assert.equal(Object.keys(picks).length, voter === schedule.bye ? 2 : 1, voter);
+    assert.deepEqual(await castBallot(deps, voter, ROUND, { picks }), { ok: true });
+
+    const { castAt, ...stored } = (await repo.getBallot(ROUND, voter))!;
+    assert.deepEqual(stored, { roundId: ROUND, voterId: voter, allocations: {}, picks, comments: {} });
+    assert.ok(!Number.isNaN(Date.parse(castAt)));
+    assert.deepEqual(await getMyBallot(deps, voter, ROUND), { allocations: {}, downvotes: {}, comments: {}, picks });
+  }
+  // One ballot row per voter — what completion % and everyone-voted count.
+  assert.deepEqual((await repo.getBallotsForRound(ROUND)).map((b) => b.voterId).sort(), [...FIVE].sort());
+  // The picks are keyed exactly by the matchups payload's ids.
+  const ids = new Set((await listMatchups(deps, OWNER, ROUND)).matchups.map((m) => m.matchupId));
+  for (const b of await repo.getBallotsForRound(ROUND)) {
+    for (const id of Object.keys(b.picks!)) assert.ok(ids.has(id), id);
+  }
+});
+
+test("H2H comments: any song in the round's matchups takes one — both songs of a matchup, their own matchup, the bye's song; unknown ids dropped", async () => {
+  const setup = await h2hRound(FIVE);
+  const { deps, repo, subs, schedule } = setup;
+  const voter = schedule.matchups[0]!.a; // a paired player
+  const own = ownMatchup(setup, voter)!;
+  const [other] = contestsFor(setup, voter);
+  const song = (userId: string) => subs.get(userId)!.id;
+
+  await castBallot(deps, voter, ROUND, {
+    picks: fullPicks(setup, voter),
+    comments: {
+      [song(other!.a)]: "  great opener ",
+      [song(other!.b)]: "solid",
+      [song(own.a)]: "mine — comments aren't votes",
+      [song(own.b)]: "my opponent's",
+      [song(schedule.bye!)]: "the exhibition song",
+      "s-nope": "not a song in this round",
+      [song(other!.a) + "x"]: "near miss",
+    },
+  });
+  assert.deepEqual((await repo.getBallot(ROUND, voter))!.comments, {
+    [song(other!.a)]: "great opener",
+    [song(other!.b)]: "solid",
+    [song(own.a)]: "mine — comments aren't votes",
+    [song(own.b)]: "my opponent's",
+    [song(schedule.bye!)]: "the exhibition song",
+  });
+  // Blank comments are dropped, as for standard ballots.
+  await castBallot(deps, voter, ROUND, { picks: fullPicks(setup, voter), comments: { [song(other!.a)]: "   " } });
+  assert.deepEqual((await repo.getBallot(ROUND, voter))!.comments, {});
+});
+
+test("H2H recast overwrites the picks and keeps the comments — my-ballot pre-fills exactly what was cast", async () => {
+  const setup = await h2hRound(FOUR);
+  const { deps, repo, subs } = setup;
+  const voter = "u-ben";
+  const own = ownMatchup(setup, voter)!;
+  const [contest] = contestsFor(setup, voter);
+  const comments = {
+    [subs.get(contest!.a)!.id]: "loved this one",
+    [subs.get(contest!.b)!.id]: "close call",
+    [subs.get(voter)!.id]: "my pick, for the record",
+    [subs.get(own.a === voter ? own.b : own.a)!.id]: "tough opponent",
+  };
+  const first = fullPicks(setup, voter, "a");
+  await castBallot(deps, voter, ROUND, { picks: first, comments });
+  const castAt1 = (await repo.getBallot(ROUND, voter))!.castAt;
+
+  // The vote page pre-fills from my-ballot: exactly what was cast.
+  const prefill = (await getMyBallot(deps, voter, ROUND))!;
+  assert.deepEqual(prefill, { allocations: {}, downvotes: {}, comments, picks: first });
+
+  // Change the pick, re-submit with the pre-filled comments.
+  const second = fullPicks(setup, voter, "b");
+  assert.notDeepEqual(second, first);
+  await castBallot(deps, voter, ROUND, { picks: second, comments: prefill.comments });
+
+  const ballots = await repo.getBallotsForRound(ROUND);
+  assert.equal(ballots.length, 1, "the re-cast overwrote the row, no second ballot");
+  assert.deepEqual(ballots[0]!.picks, second);
+  assert.deepEqual(ballots[0]!.comments, comments, "comments survive the re-cast");
+  assert.ok(ballots[0]!.castAt >= castAt1);
+  assert.deepEqual(await getMyBallot(deps, voter, ROUND), { allocations: {}, downvotes: {}, comments, picks: second });
+});
+
+test("a standard league ballot carrying picks → rejected, nothing stored; an empty picks map is tolerated and my-ballot's shape is unchanged", async () => {
+  const { deps, repo, subs } = await pointsRound();
+  const allocations = { [subs.get("u-ben")!.id]: 5, [subs.get("u-cyd")!.id]: 5 };
+
+  await assert.rejects(
+    castBallot(deps, OWNER, "pts~0001", { allocations, picks: { "pts~0001~M0": subs.get("u-ben")!.id } }),
+    isStatus(400, /scores by points/),
+  );
+  await assert.rejects(castBallot(deps, OWNER, "pts~0001", { allocations, picks: "u-ben" as never }), isStatus(400, /scores by points/));
+  assert.equal(await repo.getBallot("pts~0001", OWNER), undefined, "nothing stored");
+
+  // No picks / an empty map: the points ballot goes through exactly as before.
+  await castBallot(deps, OWNER, "pts~0001", { allocations, picks: {} });
+  await castBallot(deps, "u-ben", "pts~0001", { allocations: { [subs.get(OWNER)!.id]: 5, [subs.get("u-cyd")!.id]: 5 } });
+  for (const voter of [OWNER, "u-ben"]) {
+    const stored = (await repo.getBallot("pts~0001", voter))!;
+    assert.deepEqual(Object.keys(stored).sort(), ["allocations", "castAt", "comments", "downvotes", "roundId", "voterId"]);
+    const mine = (await getMyBallot(deps, voter, "pts~0001"))!;
+    assert.deepEqual(Object.keys(mine).sort(), ["allocations", "comments", "downvotes"], "no picks key on a standard my-ballot");
+  }
+  // And the points rules still referee it.
+  await assert.rejects(castBallot(deps, "u-cyd", "pts~0001", { allocations: { [subs.get(OWNER)!.id]: 3 } }), isStatus(400, /exactly 10/));
+});
+
+test("an H2H ballot with non-empty allocations → rejected (and anti-votes); an empty allocations map is tolerated", async () => {
+  const setup = await h2hRound(FOUR);
+  const { deps, repo, subs } = setup;
+  const voter = "u-cyd";
+  const picks = fullPicks(setup, voter);
+  const otherSong = Object.values(picks)[0]!;
+
+  // A points ballot posted to an H2H league (e.g. an old cached vote page) …
+  await assert.rejects(castBallot(deps, voter, ROUND, { allocations: { [otherSong]: 10 } }), isStatus(400, /head-to-head/));
+  // … or points alongside otherwise-valid picks.
+  await assert.rejects(castBallot(deps, voter, ROUND, { allocations: { [otherSong]: 10 }, picks }), isStatus(400, /head-to-head/));
+  await assert.rejects(castBallot(deps, voter, ROUND, { allocations: { [otherSong]: 0 }, picks }), isStatus(400, /head-to-head/));
+  await assert.rejects(castBallot(deps, voter, ROUND, { downvotes: { [subs.get(OWNER)!.id]: 1 }, picks }), isStatus(400, /anti-votes/));
+  assert.equal(await repo.getBallot(ROUND, voter), undefined, "nothing stored");
+
+  await castBallot(deps, voter, ROUND, { allocations: {}, downvotes: {}, picks });
+  const stored = (await repo.getBallot(ROUND, voter))!;
+  assert.deepEqual(stored.allocations, {});
+  assert.deepEqual(stored.picks, picks);
+  assert.equal(stored.downvotes, undefined);
+});
+
+test("the referee through the handler: missing, own-matchup, foreign-song and unknown-matchup picks → 400 and the earlier ballot stands; phase, deadline and membership guards unchanged", async () => {
+  const setup = await h2hRound(FIVE);
+  const { deps, repo, subs, schedule } = setup;
+  const voter = schedule.bye!; // votes in both matchups
+  const picks = fullPicks(setup, voter);
+  const [m0, m1] = schedule.matchups;
+
+  await assert.rejects(castBallot(deps, voter, ROUND, {}), isStatus(400, /every matchup.*you picked 0/));
+  await assert.rejects(castBallot(deps, voter, ROUND, { picks: { [m0!.matchupId]: picks[m0!.matchupId]! } }), isStatus(400, /you picked 1/));
+  await assert.rejects(
+    castBallot(deps, voter, ROUND, { picks: { ...picks, [m0!.matchupId]: subs.get(m1!.a)!.id } }),
+    isStatus(400, /isn't in matchup/),
+  );
+  await assert.rejects(
+    castBallot(deps, voter, ROUND, { picks: { ...picks, [m0!.matchupId]: subs.get(voter)!.id } }), // the bye's own song
+    isStatus(400, /isn't in matchup/),
+  );
+  await assert.rejects(castBallot(deps, voter, ROUND, { picks: { ...picks, [`${ROUND}~M7`]: subs.get(m0!.a)!.id } }), isStatus(400, /Unknown matchup/));
+  // A paired player picking in their own matchup.
+  const paired = m0!.a;
+  await assert.rejects(
+    castBallot(deps, paired, ROUND, { picks: { ...fullPicks(setup, paired), [m0!.matchupId]: subs.get(m0!.b)!.id } }),
+    isStatus(400, /your own matchup/),
+  );
+  assert.equal((await repo.getBallotsForRound(ROUND)).length, 0, "no rejected ballot was stored");
+
+  // A rejected re-cast leaves the earlier valid ballot in place.
+  await castBallot(deps, voter, ROUND, { picks, comments: { [subs.get(m0!.a)!.id]: "keep me" } });
+  await assert.rejects(castBallot(deps, voter, ROUND, { picks: {} }), isStatus(400));
+  assert.deepEqual((await repo.getBallot(ROUND, voter))!.picks, picks);
+  assert.deepEqual((await repo.getBallot(ROUND, voter))!.comments, { [subs.get(m0!.a)!.id]: "keep me" });
+
+  // Guards shared with standard ballots: membership, phase, deadline.
+  await assert.rejects(castBallot(deps, SPECTATOR, ROUND, { picks }), isStatus(403));
+  const round = (await repo.getRound(ROUND))!;
+  await repo.updateRound({ ...round, voteDeadline: new Date(Date.now() - 60_000).toISOString() });
+  await assert.rejects(castBallot(deps, voter, ROUND, { picks }), isStatus(400, /deadline/));
+  for (const status of ["submitting", "previewing", "revealed"] as const) {
+    await repo.updateRound({ ...round, status });
+    await assert.rejects(castBallot(deps, voter, ROUND, { picks }), isStatus(400, /isn't open for voting/), status);
+  }
+});
+
+test("a departure mid-voting: the pre-filled re-cast goes through and keeps the now-walkover pick and its comments, so a rejoin restores them", async () => {
+  const setup = await h2hRound(FIVE);
+  const { deps, repo, subs, schedule } = setup;
+  // The bye player (who votes in every matchup) picks the leaver's song and
+  // comments on it; that player is then kicked.
+  const voter = schedule.bye!;
+  const [contest, other] = contestsFor(setup, voter).sort((x, y) => Number(y.a === OWNER || y.b === OWNER) - Number(x.a === OWNER || x.b === OWNER));
+  assert.ok(contest && other);
+  const leaver = [other.a, other.b].find((u) => u !== OWNER)!; // the owner can't be removed
+  const stayer = other.a === leaver ? other.b : other.a;
+  const picks = { [contest.matchupId]: subs.get(contest.a)!.id, [other.matchupId]: subs.get(leaver)!.id };
+  const comments = { [subs.get(leaver)!.id]: "on the departed song", [subs.get(stayer)!.id]: "on the stayer's song" };
+  await castBallot(deps, voter, ROUND, { picks, comments });
+
+  await leaveLeague(deps, OWNER, LEAGUE, leaver);
+  const view = await listMatchups(deps, voter, ROUND);
+  assert.equal(view.matchups.filter((m) => m.a && m.b).length, 1, "the leaver's pair is a walkover now");
+  // my-ballot still returns exactly what was cast …
+  const prefill = (await getMyBallot(deps, voter, ROUND))!;
+  assert.deepEqual(prefill, { allocations: {}, downvotes: {}, comments, picks });
+  // … and re-casting it goes through unchanged: the now-walkover pick (naming
+  // the withdrawn song) is kept, inert, and its song keeps its comment.
+  await castBallot(deps, voter, ROUND, { picks: prefill.picks, comments: prefill.comments });
+  assert.deepEqual((await repo.getBallot(ROUND, voter))!.picks, picks);
+  assert.deepEqual((await repo.getBallot(ROUND, voter))!.comments, comments);
+  // The walkover pick isn't required any more — the other contest completes the ballot …
+  await castBallot(deps, voter, ROUND, { picks: { [contest.matchupId]: picks[contest.matchupId]! }, comments });
+  assert.deepEqual((await repo.getBallot(ROUND, voter))!.picks, { [contest.matchupId]: picks[contest.matchupId] });
+  // … and a walkover pick that can't predate the departure is dropped, not kept or rejected.
+  await castBallot(deps, voter, ROUND, { picks: { ...picks, [other.matchupId]: "garbage" }, comments });
+  assert.deepEqual((await repo.getBallot(ROUND, voter))!.picks, { [contest.matchupId]: picks[contest.matchupId] });
+  await castBallot(deps, voter, ROUND, { picks, comments }); // back to the pre-filled ballot
+
+  // The leaver can't vote; the stayer's own matchup is still off-limits.
+  await assert.rejects(castBallot(deps, leaver, ROUND, { picks: {} }), isStatus(403));
+  await assert.rejects(
+    castBallot(deps, stayer, ROUND, { picks: { ...fullPicks(setup, stayer), [other.matchupId]: subs.get(stayer)!.id } }),
+    isStatus(400, /your own matchup/),
+  );
+
+  // The leaver rejoins: their pair is a contest again and the ballot still holds the pick + comments.
+  await repo.putInvite("DUEL-1", LEAGUE); // h2hRound creates the league row only
+  await joinLeague(deps, leaver, "DUEL-1");
+  assert.equal((await listMatchups(deps, voter, ROUND)).matchups.filter((m) => m.a && m.b).length, 2);
+  assert.deepEqual(await getMyBallot(deps, voter, ROUND), { allocations: {}, downvotes: {}, comments, picks });
+  await castBallot(deps, voter, ROUND, { picks, comments });
+  assert.deepEqual((await repo.getBallot(ROUND, voter))!.picks, picks);
+});
+
+test("nothing to vote on (a two-player league's only matchup is the voter's own): a ballot with no picks is accepted and still carries comments", async () => {
+  const duo = [OWNER, "u-ben"];
+  const { deps, repo, subs } = await h2hRound(duo);
+  await castBallot(deps, OWNER, ROUND, { comments: { [subs.get("u-ben")!.id]: "good luck" } });
+  const stored = (await repo.getBallot(ROUND, OWNER))!;
+  assert.deepEqual(stored.picks, {});
+  assert.deepEqual(stored.comments, { [subs.get("u-ben")!.id]: "good luck" });
+  assert.deepEqual((await getMyBallot(deps, OWNER, ROUND))!.picks, {});
+  // Picking in it is still the self-vote rule.
+  const [only] = (await listMatchups(deps, "u-ben", ROUND)).matchups;
+  await assert.rejects(castBallot(deps, "u-ben", ROUND, { picks: { [only!.matchupId]: subs.get(OWNER)!.id } }), isStatus(400, /your own matchup/));
+});
+
+test("timed H2H league: the last outstanding ballot still triggers the auto-reveal (autoAdvanceRound runs after an H2H cast)", async () => {
+  const setup = await h2hRound(FOUR, { timed: true });
+  const { deps, repo } = setup;
+  assert.equal((await repo.getRound(ROUND))!.status, "voting");
+  for (const [i, voter] of FOUR.entries()) {
+    await castBallot(deps, voter, ROUND, { picks: fullPicks(setup, voter) });
+    const status = (await repo.getRound(ROUND))!.status;
+    assert.equal(status, i < FOUR.length - 1 ? "voting" : "revealed", `after ${i + 1} ballots`);
+  }
+  await assert.rejects(castBallot(deps, OWNER, ROUND, { picks: fullPicks(setup, OWNER) }), isStatus(400, /isn't open for voting/));
+});
+
+test("POST /rounds/:roundId/ballot forwards `picks` through the route table's field list; GET my-ballot returns them", async () => {
+  const setup = await h2hRound(FOUR);
+  const { deps, repo, subs } = setup;
+  const routes = buildRoutes(deps);
+  const call = (method: string, path: string, caller: string, body?: unknown) => {
+    const match = matchRoute(routes, method, path);
+    assert.ok(match, `no route for ${method} ${path}`);
+    return match.route.handler({ caller, params: match.params, query: {}, body });
+  };
+  const picks = fullPicks(setup, "u-dot");
+  const comments = { [Object.values(picks)[0]!]: "via the route" };
+  assert.deepEqual(await call("POST", `/rounds/${encodeURIComponent(ROUND)}/ballot`, "u-dot", { picks, comments }), { ok: true });
+  assert.deepEqual((await repo.getBallot(ROUND, "u-dot"))!.picks, picks);
+  assert.deepEqual(await call("GET", `/rounds/${encodeURIComponent(ROUND)}/my-ballot`, "u-dot"), {
+    allocations: {}, downvotes: {}, comments, picks,
+  });
+  // An H2H points body through the route is still refused.
+  await assert.rejects(
+    call("POST", `/rounds/${ROUND}/ballot`, "u-ben", { allocations: { [subs.get(OWNER)!.id]: 10 } }),
+    isStatus(400, /head-to-head/),
+  );
 });

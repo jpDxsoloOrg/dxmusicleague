@@ -120,14 +120,26 @@ export interface Submission {
   submittedAt?: string;
 }
 
-/** A cast ballot: the whole point allocation for one voter in one round. */
+/** A cast ballot: one voter's whole vote in one round, stored as one atomic
+ *  item (`BALLOT#<voterId>`) in either format — so "one ballot row per voter"
+ *  (completion %, everyone-voted) holds for head-to-head leagues unchanged.
+ *  Standard: the point allocation (+ anti-votes). Head-to-head: `picks`, with
+ *  `allocations` stored empty. */
 export interface Ballot {
   roundId: string;
   voterId: string;
-  /** submissionId -> points. Stored as one atomic item. */
+  /** submissionId -> points. Always present; `{}` on a head-to-head ballot. */
   allocations: Record<string, number>;
   /** submissionId -> anti-votes; each subtracts a point at tally. */
   downvotes?: Record<string, number>;
+  /** Head-to-head only: matchupId (`<roundId>~M<n>`, domain/schedule.ts) ->
+   *  the submissionId the voter picked to win that matchup. One entry per
+   *  matchup the voter could vote in when they cast (`validateH2HBallot`,
+   *  domain/rules.ts), plus any pick made before a departure turned its pair
+   *  into a walkover (kept, inert, in case the player rejoins) — so count only
+   *  picks in `votableMatchups` at the reveal. Absent on standard ballots. */
+  picks?: Record<string, string>;
+  /** submissionId -> the voter's comment on that song (either format). */
   comments?: Record<string, string>;
   castAt: string;
 }

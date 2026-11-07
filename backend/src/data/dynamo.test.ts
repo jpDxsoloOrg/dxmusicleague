@@ -6,14 +6,15 @@
 // the head-to-head freeze's conditional writes (HTH-03): the write-once
 // UpdateItem, its re-plan, the season-gated join transaction, and the
 // strongly consistent read the freeze checks itself with; plus the W/L/D
-// counters on the existing STANDING# item (HTH-04).
+// counters on the existing STANDING# item (HTH-04) and head-to-head `picks` on
+// the existing BALLOT# item (HTH-06).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { GetCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { DynamoRepository } from "./dynamo.ts";
 import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types.ts";
-import type { League } from "../domain/types.ts";
+import type { Ballot, League } from "../domain/types.ts";
 
 type Item = Record<string, unknown>;
 
@@ -121,6 +122,16 @@ function fakeRepo(): { repo: DynamoRepository; table: Map<string, Item>; sent: u
       }
       return {};
     }
+    if (cmd instanceof PutCommand) {
+      // A whole-item write. JSON round-trip = the real client's
+      // removeUndefinedValues: an undefined attribute is never stored.
+      const it = JSON.parse(JSON.stringify(cmd.input.Item ?? {})) as Item;
+      if (!conditionHolds(cmd.input.ConditionExpression, table.get(key(it.PK, it.SK)), cmd.input.ExpressionAttributeValues)) {
+        throw Object.assign(new Error("The conditional request failed"), { name: "ConditionalCheckFailedException" });
+      }
+      table.set(key(it.PK, it.SK), it);
+      return {};
+    }
     if (cmd instanceof GetCommand) {
       const it = table.get(key(cmd.input.Key?.PK, cmd.input.Key?.SK));
       return { Item: it ? structuredClone(it) : undefined };
@@ -128,7 +139,7 @@ function fakeRepo(): { repo: DynamoRepository; table: Map<string, Item>; sent: u
     if (cmd instanceof QueryCommand) {
       const values = cmd.input.ExpressionAttributeValues ?? {};
       const pk = values[":pk"];
-      const prefix = String(values[":m"] ?? values[":s"] ?? "");
+      const prefix = String(values[":m"] ?? values[":s"] ?? values[":b"] ?? "");
       return { Items: [...table.values()].filter((it) => it.PK === pk && String(it.SK).startsWith(prefix)) };
     }
     throw new Error(`fake doc client: unexpected command ${(cmd as object).constructor.name}`);
@@ -425,4 +436,41 @@ test("getLeague({ consistent: true }) reads META and members strongly consistent
   await repo.getLeague("h2h", { consistent: true });
   assert.equal(sent.length, 2);
   for (const cmd of sent as Array<GetCommand | QueryCommand>) assert.equal(cmd.input.ConsistentRead, true);
+});
+
+// ---- Ballots: head-to-head picks on the existing BALLOT# item (HTH-06) ----
+
+test("an H2H ballot's picks round-trip on the same BALLOT#<voterId> item; a points ballot's item carries no picks attribute", async () => {
+  const { repo, table } = fakeRepo();
+  const h2h: Ballot = {
+    roundId: "lg-1~0001", voterId: "u-me", allocations: {},
+    picks: { "lg-1~0001~M0": "sub-a", "lg-1~0001~M1": "sub-d" },
+    comments: { "sub-a": "nice" }, castAt: "2026-11-07T12:00:00.000Z",
+  };
+  const points: Ballot = {
+    roundId: "lg-1~0001", voterId: "u-you", allocations: { "sub-a": 6, "sub-b": 4 }, downvotes: {},
+    comments: {}, castAt: "2026-11-07T12:01:00.000Z",
+  };
+  await repo.putBallot(h2h);
+  await repo.putBallot(points);
+
+  // Same key scheme as ever — no new entity; picks is just another attribute.
+  assert.deepEqual([...table.keys()].sort(), ["ROUND#lg-1~0001|BALLOT#u-me", "ROUND#lg-1~0001|BALLOT#u-you"]);
+  assert.deepEqual(table.get("ROUND#lg-1~0001|BALLOT#u-me")?.picks, h2h.picks);
+  assert.equal("picks" in table.get("ROUND#lg-1~0001|BALLOT#u-you")!, false);
+
+  // (Compared as JSON: the existing mapping reads an absent `downvotes` as an
+  // undefined-valued key, which is the same on the wire.)
+  const json = (v: unknown) => JSON.parse(JSON.stringify(v)) as unknown;
+  assert.deepEqual(json(await repo.getBallot("lg-1~0001", "u-me")), h2h);
+  const readPoints = await repo.getBallot("lg-1~0001", "u-you");
+  assert.deepEqual(json(readPoints), points);
+  assert.equal("picks" in readPoints!, false, "a points ballot reads back without a picks key");
+  const all = await repo.getBallotsForRound("lg-1~0001");
+  assert.deepEqual(json(all.sort((x, y) => x.voterId.localeCompare(y.voterId))), [h2h, points]);
+
+  // A re-cast overwrites the one item, picks included.
+  await repo.putBallot({ ...h2h, picks: { "lg-1~0001~M0": "sub-b" }, castAt: "2026-11-07T13:00:00.000Z" });
+  assert.deepEqual((await repo.getBallot("lg-1~0001", "u-me"))?.picks, { "lg-1~0001~M0": "sub-b" });
+  assert.equal((await repo.getBallotsForRound("lg-1~0001")).length, 2);
 });

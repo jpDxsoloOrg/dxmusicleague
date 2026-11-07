@@ -6,7 +6,7 @@
 //   Membership    PK=LEAGUE#<id>      SK=MEMBER#<userId>   (+ GSI1: USER#<id> / LEAGUE#<id>)
 //   Round         PK=LEAGUE#<id>      SK=ROUND#<index4>
 //   Submission    PK=ROUND#<roundId>  SK=SUB#<userId>
-//   Ballot        PK=ROUND#<roundId>  SK=BALLOT#<voterId>
+//   Ballot        PK=ROUND#<roundId>  SK=BALLOT#<voterId>   (allocations; picks for H2H)
 //   Standing      PK=LEAGUE#<id>      SK=STANDING#<userId>  (points; wins/losses/draws for H2H)
 //   Invite        PK=INVITE#<code>    SK=META
 //
@@ -503,6 +503,9 @@ export class DynamoRepository implements Repository {
           voterId: ballot.voterId,
           allocations: ballot.allocations,
           downvotes: ballot.downvotes,
+          // Head-to-head winner picks (absent on standard ballots — dropped by
+          // removeUndefinedValues, so a points ballot's item is unchanged).
+          picks: ballot.picks,
           comments: ballot.comments,
           castAt: ballot.castAt,
         },
@@ -520,6 +523,7 @@ export class DynamoRepository implements Repository {
       voterId: it.voterId as string,
       allocations: (it.allocations ?? {}) as Record<string, number>,
       downvotes: it.downvotes as Record<string, number> | undefined,
+      ...(it.picks ? { picks: it.picks as Record<string, string> } : {}),
       comments: it.comments as Record<string, string> | undefined,
       castAt: it.castAt as string,
     };
@@ -537,6 +541,7 @@ export class DynamoRepository implements Repository {
       voterId: it.voterId as string,
       allocations: (it.allocations ?? {}) as Record<string, number>,
       downvotes: it.downvotes as Record<string, number> | undefined,
+      ...(it.picks ? { picks: it.picks as Record<string, string> } : {}),
       comments: it.comments as Record<string, string> | undefined,
       castAt: it.castAt as string,
     }));
