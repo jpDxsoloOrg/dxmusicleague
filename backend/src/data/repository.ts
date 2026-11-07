@@ -5,6 +5,7 @@
 // Swapping which one a handler runs against is the whole point of the seam.
 
 import type { Ballot, League, LeagueSettings, Round, Submission } from "../domain/types.ts";
+import type { StandingRecordDelta, StandingTotals } from "../domain/standings.ts";
 
 export interface Repository {
   // ---- Leagues ----
@@ -56,9 +57,17 @@ export interface Repository {
   getBallotsForRound(roundId: string): Promise<Ballot[]>;
 
   // ---- Standings (running season totals) ----
-  getStandings(leagueId: string): Promise<Array<{ userId: string; points: number }>>;
+  /** Every standing row in the league (ex-members included — the board
+   *  filters). Counters are always numbers: a row that never had a W/L/D
+   *  written (standard leagues, legacy rows) reads back with zeros. */
+  getStandings(leagueId: string): Promise<StandingTotals[]>;
   /** Add points to a member's running total (creates at 0 if absent). */
   addStandingPoints(leagueId: string, userId: string, delta: number): Promise<void>;
+  /** Add to a member's head-to-head record on the same standing row (each
+   *  counter created at 0 if absent; omitted fields add 0). One atomic write
+   *  per call — no read-modify-write, so concurrent reveals can't lose a
+   *  result. Leaves `points` untouched, as addStandingPoints leaves W/L/D. */
+  addStandingRecord(leagueId: string, userId: string, delta: StandingRecordDelta): Promise<void>;
 }
 
 /** Lightweight directory of display names — real impl reads from Cognito/profile

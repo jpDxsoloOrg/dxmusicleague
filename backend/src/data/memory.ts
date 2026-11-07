@@ -4,6 +4,8 @@
 
 import type { Ballot, League, LeagueSettings, Round, Submission } from "../domain/types.ts";
 import { DEFAULT_LEAGUE_SETTINGS, leagueFormat } from "../domain/types.ts";
+import type { StandingRecordDelta, StandingTotals } from "../domain/standings.ts";
+import { recordIncrements } from "../domain/standings.ts";
 import type { Repository, UserDirectory } from "./repository.ts";
 
 /** Fixed display-name directory, mirroring the frontend mock's `users`. */
@@ -22,13 +24,20 @@ export class MemoryUserDirectory implements UserDirectory {
   }
 }
 
+/** A stored standing row — only the counters written so far are present. */
+type StoredStanding = Partial<Omit<StandingTotals, "userId">>;
+
 export class MemoryRepository implements Repository {
   private leagues = new Map<string, League>();
   private invites = new Map<string, string>(); // code -> leagueId
   private rounds = new Map<string, Round>();
   private submissions = new Map<string, Submission>(); // `${roundId}/${userId}`
   private ballots = new Map<string, Ballot>(); // `${roundId}/${voterId}`
-  private standings = new Map<string, number>(); // `${leagueId}/${userId}` -> points
+  // `${leagueId}/${userId}` -> the standing row. Counters are optional here
+  // exactly as attributes are on a Dynamo item: a row only carries what has
+  // been written to it (points-only rows = standard/legacy), and getStandings
+  // applies the same read-time zero defaults as DynamoRepository.
+  private standings = new Map<string, StoredStanding>();
 
   constructor(seed = true) {
     if (seed) this.loadSeed();
@@ -166,15 +175,36 @@ export class MemoryRepository implements Repository {
   }
 
   // ---- Standings ----
-  async getStandings(leagueId: string): Promise<Array<{ userId: string; points: number }>> {
+  async getStandings(leagueId: string): Promise<StandingTotals[]> {
     const prefix = `${leagueId}/`;
     return [...this.standings.entries()]
       .filter(([key]) => key.startsWith(prefix))
-      .map(([key, points]) => ({ userId: key.slice(prefix.length), points }));
+      .map(([key, row]) => ({
+        userId: key.slice(prefix.length),
+        points: row.points ?? 0,
+        wins: row.wins ?? 0,
+        losses: row.losses ?? 0,
+        draws: row.draws ?? 0,
+      }));
+  }
+  /** The live stored row for a member, created empty on first write (Map
+   *  insertion order = first-write order, which getStandings preserves). */
+  private standingRow(leagueId: string, userId: string): StoredStanding {
+    const key = `${leagueId}/${userId}`;
+    let row = this.standings.get(key);
+    if (!row) this.standings.set(key, (row = {}));
+    return row;
   }
   async addStandingPoints(leagueId: string, userId: string, delta: number): Promise<void> {
-    const key = `${leagueId}/${userId}`;
-    this.standings.set(key, (this.standings.get(key) ?? 0) + delta);
+    const row = this.standingRow(leagueId, userId);
+    row.points = (row.points ?? 0) + delta;
+  }
+  async addStandingRecord(leagueId: string, userId: string, delta: StandingRecordDelta): Promise<void> {
+    const inc = recordIncrements(delta); // validate before touching the row
+    const row = this.standingRow(leagueId, userId);
+    row.wins = (row.wins ?? 0) + inc.wins;
+    row.losses = (row.losses ?? 0) + inc.losses;
+    row.draws = (row.draws ?? 0) + inc.draws;
   }
 
   // ---- Seed (mirrors src/data/mock.ts) ----
@@ -230,7 +260,7 @@ export class MemoryRepository implements Repository {
       "lg-bassline": [["u-mia", 420], ["u-sarah", 415], ["u-james", 390], ["u-me", 380], ["u-jpop", 360], ["u-luna", 340]],
     };
     for (const [leagueId, rows] of Object.entries(seedStandings)) {
-      for (const [userId, points] of rows) this.standings.set(`${leagueId}/${userId}`, points);
+      for (const [userId, points] of rows) this.standings.set(`${leagueId}/${userId}`, { points });
     }
   }
 }

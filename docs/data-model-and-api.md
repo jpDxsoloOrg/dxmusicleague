@@ -30,7 +30,7 @@ because every read below is a point-get or a single-partition `Query` — no cro
 | Round | `LEAGUE#<leagueId>` | `ROUND#<index4>` | `roundId, theme, description, status, submissionDeadline, voteDeadline, playlistUrl` |
 | Submission | `ROUND#<roundId>` | `SUB#<userId>` | `track{}, submittedAt` |
 | Vote ballot | `ROUND#<roundId>` | `BALLOT#<voterId>` | `allocations{subId:pts}, comments{subId:text}, castAt` |
-| Standing | `LEAGUE#<leagueId>` | `STANDING#<userId>` | `points` (running season total) |
+| Standing | `LEAGUE#<leagueId>` | `STANDING#<userId>` | `points` (running season total); `wins, losses, draws` (head-to-head record — absent on older rows, read as 0) |
 | Invite code | `INVITE#<code>` | `META` | `leagueId` |
 
 `index4` = zero-padded round number (`ROUND#0001`) so rounds sort in order within the league
@@ -151,8 +151,19 @@ returns submitters, points, ranks, and all voter comments (matching
 ### Standings
 
 `GET /leagues/{leagueId}/standings → Standing[]` (also embedded in `LeagueDetail`). Reads the
-`STANDING#` items, sorts by points desc, assigns rank. Maintained incrementally at reveal, so
-this is a cheap single-partition query — no recomputation over all votes.
+`STANDING#` items, sorts them in the league format's board order (below), assigns rank.
+Maintained incrementally at reveal, so this is a cheap single-partition query — no
+recomputation over all votes.
+
+Every `Standing` row carries `points` **and** a `wins`/`losses`/`draws` record (the side a
+league's format doesn't use is 0). Head-to-head leagues rank by wins desc → losses asc →
+display name, collated in English whatever the host locale (draws don't break ties); standard
+leagues keep points desc, equal points in stored order. The record lives on the same
+`STANDING#` item, bumped with one atomic
+`SET #w = if_not_exists(#w, :zero) + :w, #l = if_not_exists(#l, :zero) + :l, #d = …` per
+player (`addStandingRecord`; `#w`/`#l`/`#d` name `wins`/`losses`/`draws`), so leave/rejoin
+durability, rematch reseeding and the league cascade delete cover it unchanged; rows written
+before head-to-head existed have no such attributes and read back as 0–0–0 (no migration).
 
 ### Music provider proxy
 

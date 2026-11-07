@@ -7,7 +7,7 @@
 //   Round         PK=LEAGUE#<id>      SK=ROUND#<index4>
 //   Submission    PK=ROUND#<roundId>  SK=SUB#<userId>
 //   Ballot        PK=ROUND#<roundId>  SK=BALLOT#<voterId>
-//   Standing      PK=LEAGUE#<id>      SK=STANDING#<userId>
+//   Standing      PK=LEAGUE#<id>      SK=STANDING#<userId>  (points; wins/losses/draws for H2H)
 //   Invite        PK=INVITE#<code>    SK=META
 //
 // The league-loop methods (create/get/list/addMember/invites/rounds/standings)
@@ -28,6 +28,8 @@ import {
 } from "@aws-sdk/lib-dynamodb";
 import type { Ballot, League, LeagueSettings, Round, Submission } from "../domain/types.ts";
 import { leagueFormat } from "../domain/types.ts";
+import type { StandingRecordDelta, StandingTotals } from "../domain/standings.ts";
+import { recordIncrements } from "../domain/standings.ts";
 import type { Repository } from "./repository.ts";
 
 const index4 = (n: number) => String(n).padStart(4, "0");
@@ -460,7 +462,7 @@ export class DynamoRepository implements Repository {
   }
 
   // ---- Standings ----
-  async getStandings(leagueId: string): Promise<Array<{ userId: string; points: number }>> {
+  async getStandings(leagueId: string): Promise<StandingTotals[]> {
     const res = await this.doc.send(
       new QueryCommand({
         TableName: this.tableName,
@@ -468,7 +470,15 @@ export class DynamoRepository implements Repository {
         ExpressionAttributeValues: { ":pk": `LEAGUE#${leagueId}`, ":s": "STANDING#" },
       }),
     );
-    return (res.Items ?? []).map((it) => ({ userId: it.userId as string, points: (it.points as number) ?? 0 }));
+    // W/L/D are plain attributes on the same item, absent on every row written
+    // before head-to-head existed — those read back as 0 (no migration).
+    return (res.Items ?? []).map((it) => ({
+      userId: it.userId as string,
+      points: (it.points as number) ?? 0,
+      wins: (it.wins as number) ?? 0,
+      losses: (it.losses as number) ?? 0,
+      draws: (it.draws as number) ?? 0,
+    }));
   }
   async addStandingPoints(leagueId: string, userId: string, delta: number): Promise<void> {
     await this.doc.send(
@@ -477,6 +487,26 @@ export class DynamoRepository implements Repository {
         Key: { PK: `LEAGUE#${leagueId}`, SK: `STANDING#${userId}` },
         UpdateExpression: "SET points = if_not_exists(points, :zero) + :d, userId = :u, entity = :e",
         ExpressionAttributeValues: { ":zero": 0, ":d": delta, ":u": userId, ":e": "standing" },
+      }),
+    );
+  }
+  async addStandingRecord(leagueId: string, userId: string, delta: StandingRecordDelta): Promise<void> {
+    const inc = recordIncrements(delta);
+    // Same item and same atomic in-place increment as addStandingPoints: one
+    // UpdateItem, every counter created at 0 if absent, `points` untouched.
+    // Attribute names go through placeholders so no counter name can ever
+    // collide with a DynamoDB reserved word.
+    await this.doc.send(
+      new UpdateCommand({
+        TableName: this.tableName,
+        Key: { PK: `LEAGUE#${leagueId}`, SK: `STANDING#${userId}` },
+        UpdateExpression:
+          "SET #w = if_not_exists(#w, :zero) + :w, #l = if_not_exists(#l, :zero) + :l, " +
+          "#d = if_not_exists(#d, :zero) + :d, userId = :u, entity = :e",
+        ExpressionAttributeNames: { "#w": "wins", "#l": "losses", "#d": "draws" },
+        ExpressionAttributeValues: {
+          ":zero": 0, ":w": inc.wins, ":l": inc.losses, ":d": inc.draws, ":u": userId, ":e": "standing",
+        },
       }),
     );
   }

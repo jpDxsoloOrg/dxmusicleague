@@ -7,6 +7,7 @@ import { randomInt, randomUUID } from "node:crypto";
 import type { League, LeagueFormat, LeagueSettings, LeagueVisibility, RoundProgression, Round } from "../domain/types.ts";
 import { DEFAULT_LEAGUE_SETTINGS, H2H_FORCED_SETTINGS, LEAGUE_FORMATS, applyFormatSettings, leagueFormat } from "../domain/types.ts";
 import { badRequest, conflict, forbidden, notFound } from "../domain/errors.ts";
+import { sortStandings } from "../domain/standings.ts";
 import type { Repository, UserDirectory } from "../data/repository.ts";
 import { autoAdvanceRound } from "./progression.ts";
 
@@ -32,10 +33,18 @@ interface LeagueSummary {
   finished: boolean;
 }
 
+/** One row of the league table. Every row carries both scorings: `points`
+ *  (what a standard league ranks and shows) and the head-to-head record
+ *  `wins`/`losses`/`draws` (what an H2H league ranks and shows). The unused
+ *  side is simply 0 — a standard league's rows are the same as before with
+ *  three zeroed fields added. */
 interface Standing {
   rank: number;
   user: UserView;
   points: number;
+  wins: number;
+  losses: number;
+  draws: number;
 }
 
 /** Who's done vs. pending for the current phase. Names only — no tracks, no
@@ -424,21 +433,25 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
   const currentRound = await autoAdvanceRound(deps, league, latestRound(rounds));
 
   // Standing rows persist for ex-members (so a returning player keeps their
-  // points) — the board displays current members only.
+  // points / W-L-D record) — the board displays current members only.
   const rawStandings = await deps.repo.getStandings(leagueId);
   const memberSet = new Set(league.memberIds);
-  const standings: Standing[] = (
-    await Promise.all(
-      rawStandings
-        .filter((s) => memberSet.has(s.userId))
-        .sort((a, b) => b.points - a.points)
-        .map(async (s, i) => ({
-          rank: i + 1,
-          user: { id: s.userId, displayName: await deps.users.getDisplayName(s.userId) },
-          points: s.points,
-        })),
-    )
+  // Names resolve before sorting: an H2H board breaks record ties by name.
+  const named = await Promise.all(
+    rawStandings
+      .filter((s) => memberSet.has(s.userId))
+      .map(async (s) => ({ ...s, displayName: await deps.users.getDisplayName(s.userId) })),
   );
+  // Format-aware order (points desc, or wins desc → losses asc → name); rank
+  // is the position after sorting, as before.
+  const standings: Standing[] = sortStandings(leagueFormat(league), named).map((s, i) => ({
+    rank: i + 1,
+    user: { id: s.userId, displayName: s.displayName },
+    points: s.points,
+    wins: s.wins,
+    losses: s.losses,
+    draws: s.draws,
+  }));
 
   // Who's done vs. pending for the live phase (identities only): submissions
   // while submitting, ballots while voting. With a multi-song allowance a
@@ -674,8 +687,9 @@ function rematchName(name: string): string {
 }
 
 /** Owner-only: once a league has finished, spin up a fresh one with the same
- *  players, settings, and format — everyone starts again at 0 points. The old
- *  league stays readable (results, standings) but closed. */
+ *  players, settings, and format — everyone starts again at 0 points (and a
+ *  0–0–0 record in head-to-head). The old league stays readable (results,
+ *  standings) but closed. */
 export async function rematchLeague(deps: Deps, caller: string, leagueId: string): Promise<League> {
   const league = await ownedLeague(deps, caller, leagueId);
   const rounds = await deps.repo.getRoundsForLeague(leagueId);
@@ -708,6 +722,12 @@ export async function rematchLeague(deps: Deps, caller: string, leagueId: string
   await deps.repo.putInvite(next.inviteCode, next.id);
   for (const memberId of next.memberIds) {
     await deps.repo.addStandingPoints(next.id, memberId, 0); // seed everyone at 0
+    // H2H: an explicit 0–0–0 record on the fresh row too (reads would default
+    // it anyway; this keeps the clone's rows complete). Standard rematches
+    // write exactly what they always did.
+    if (format === "headToHead") {
+      await deps.repo.addStandingRecord(next.id, memberId, { wins: 0, losses: 0, draws: 0 });
+    }
   }
   return next;
 }

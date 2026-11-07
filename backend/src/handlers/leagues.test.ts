@@ -617,3 +617,208 @@ test("a legacy league stored without `format` reads as standard everywhere (no u
   assert.equal(saved.settings.downvotePoolSize, 2);
   assert.equal(saved.format, "standard");
 });
+
+// ---- W/L/D standings (HTH-04): storage, view model, format-aware order ----
+
+test("addStandingRecord accumulates on one standing row (memory impl); points untouched", async () => {
+  const repo = new MemoryRepository(false);
+  await repo.addStandingPoints("lg", "u-me", 7);
+  await repo.addStandingRecord("lg", "u-me", { wins: 1 });
+  await repo.addStandingRecord("lg", "u-me", { wins: 1, losses: 1 });
+  await repo.addStandingRecord("lg", "u-me", { draws: 1 });
+  assert.deepEqual(await repo.getStandings("lg"), [{ userId: "u-me", points: 7, wins: 2, losses: 1, draws: 1 }]);
+
+  // …and the points side doesn't disturb the record either.
+  await repo.addStandingPoints("lg", "u-me", 3);
+  assert.deepEqual(await repo.getStandings("lg"), [{ userId: "u-me", points: 10, wins: 2, losses: 1, draws: 1 }]);
+
+  // A record written before any points (no join seed) still reads complete.
+  await repo.addStandingRecord("lg", "u-2", { losses: 1 });
+  assert.deepEqual(
+    (await repo.getStandings("lg")).find((s) => s.userId === "u-2"),
+    { userId: "u-2", points: 0, wins: 0, losses: 1, draws: 0 },
+  );
+
+  // A bad increment is refused before it can poison the row with NaN.
+  await assert.rejects(repo.addStandingRecord("lg", "u-me", { wins: Number.NaN }));
+  await assert.rejects(repo.addStandingRecord("lg", "u-me", { draws: 0.5 }));
+  assert.deepEqual(
+    (await repo.getStandings("lg")).find((s) => s.userId === "u-me"),
+    { userId: "u-me", points: 10, wins: 2, losses: 1, draws: 1 },
+  );
+});
+
+test("H2H standings sort: 3W-1L above 3W-2L above 2W-0L; record ties by name; ranks 1..n", async () => {
+  const members = ["u-me", "u-sarah", "u-james", "u-mia", "u-luna", "u-jpop"];
+  const deps = await depsWith([
+    league({ id: "h2h", name: "Duel", visibility: "private", format: "headToHead", ownerId: "u-me", memberIds: members }),
+  ]);
+  const bank = async (userId: string, wins: number, losses: number, draws: number, points = 0) => {
+    await deps.repo.addStandingPoints("h2h", userId, points);
+    await deps.repo.addStandingRecord("h2h", userId, { wins, losses, draws });
+  };
+  // Written in an order that matches neither the expected board nor the ids,
+  // and with points that would rank them differently — H2H must ignore both.
+  await bank("u-mia", 2, 0, 0, 99);
+  await bank("u-sarah", 3, 2, 0);
+  // Three players tied at 1W-1L. Their draws (1, 0, 1 in name order) are
+  // neither ascending nor descending, so a draws tiebreak in either direction
+  // would reorder them; only the name rule yields Curator Max, J-Pop, Luna.
+  await bank("u-luna", 1, 1, 1, 50);
+  await bank("u-jpop", 1, 1, 0, 20);
+  await bank("u-me", 1, 1, 1);
+  await bank("u-james", 3, 1, 0);
+  await bank("u-gone", 9, 0, 0); // ex-member's row: kept in storage, off the board
+
+  const { standings } = await getLeagueDetail(deps, "u-me", "h2h");
+  assert.deepEqual(
+    standings.map((s) => `${s.rank}. ${s.user.displayName} ${s.wins}-${s.losses}-${s.draws}`),
+    [
+      "1. James 3-1-0",
+      "2. Sarah 3-2-0",
+      "3. Mia 2-0-0",
+      // Tie on W and L → display name A→Z, regardless of draws, points, ids
+      // (u-jpop < u-luna < u-me) or write order (Luna's row came first).
+      "4. Curator Max 1-1-1",
+      "5. J-Pop 1-1-0",
+      "6. Luna 1-1-1",
+    ],
+  );
+  assert.deepEqual(standings.map((s) => s.rank), [1, 2, 3, 4, 5, 6]);
+  assert.equal(standings.find((s) => s.user.id === "u-mia")?.points, 99); // points still carried, just not ranked on
+});
+
+test("the W/L/D record survives a leave or a kick and reappears on rejoin", async () => {
+  const { joinLeague } = await import("./leagues.ts");
+  const deps = await depsWith([
+    league({ id: "lg", name: "L", visibility: "private", format: "headToHead", memberIds: ["u-owner", "u-me", "u-2"] }),
+  ]);
+  await deps.repo.putInvite("C-lg", "lg");
+  await deps.repo.addStandingPoints("lg", "u-owner", 0); // the owner's creation seed
+  await deps.repo.addStandingRecord("lg", "u-me", { wins: 2, losses: 1, draws: 1 });
+  await deps.repo.addStandingRecord("lg", "u-2", { wins: 1, losses: 3 });
+
+  await leaveLeague(deps, "u-me", "lg", "u-me"); // leave
+  await leaveLeague(deps, "u-owner", "lg", "u-2"); // kick
+  // Hidden from the board while gone…
+  const gone = await getLeagueDetail(deps, "u-owner", "lg");
+  assert.deepEqual(gone.standings.map((s) => s.user.id), ["u-owner"]);
+
+  // …and intact on return (the rejoin seed is create-if-absent, adding 0).
+  await joinLeague(deps, "u-me", "C-lg");
+  await joinLeague(deps, "u-2", "C-lg");
+  const back = await getLeagueDetail(deps, "u-owner", "lg");
+  const record = (id: string) => {
+    const s = back.standings.find((row) => row.user.id === id);
+    return s && [s.wins, s.losses, s.draws];
+  };
+  assert.deepEqual(record("u-me"), [2, 1, 1]);
+  assert.deepEqual(record("u-2"), [1, 3, 0]);
+  assert.deepEqual(back.standings.map((s) => s.user.id), ["u-me", "u-2", "u-owner"]); // re-ranked on record
+});
+
+test("standard league standings: same rows, order and ranks as before — plus three zeroed fields", async () => {
+  const deps = await depsWith([
+    league({ id: "std", name: "Std", visibility: "private", memberIds: ["u-owner", "u-sarah", "u-james", "u-mia"] }),
+  ]);
+  // A points tie (sarah/james) must keep its stored order, exactly as the old
+  // `b.points - a.points` sort did — it is not re-broken by name (James < Sarah).
+  await deps.repo.addStandingPoints("std", "u-owner", 5);
+  await deps.repo.addStandingPoints("std", "u-sarah", 12);
+  await deps.repo.addStandingPoints("std", "u-james", 12);
+  await deps.repo.addStandingPoints("std", "u-mia", 20);
+
+  const { standings } = await getLeagueDetail(deps, "u-owner", "std");
+  assert.deepEqual(standings, [
+    { rank: 1, user: { id: "u-mia", displayName: "Mia" }, points: 20, wins: 0, losses: 0, draws: 0 },
+    { rank: 2, user: { id: "u-sarah", displayName: "Sarah" }, points: 12, wins: 0, losses: 0, draws: 0 },
+    { rank: 3, user: { id: "u-james", displayName: "James" }, points: 12, wins: 0, losses: 0, draws: 0 },
+    { rank: 4, user: { id: "u-owner", displayName: "u-owner" }, points: 5, wins: 0, losses: 0, draws: 0 },
+  ]);
+  // Shape: the pre-HTH-04 keys first, in the same order, then the new ones.
+  for (const row of standings) assert.deepEqual(Object.keys(row), ["rank", "user", "points", "wins", "losses", "draws"]);
+
+  // A standard board ranks on points only, even if a record ever landed on it.
+  await deps.repo.addStandingRecord("std", "u-owner", { wins: 9 });
+  const again = await getLeagueDetail(deps, "u-owner", "std");
+  assert.deepEqual(again.standings.map((s) => s.user.id), ["u-mia", "u-sarah", "u-james", "u-owner"]);
+});
+
+test("legacy standing rows (points only) read back as a 0–0–0 record — no NaN/undefined in the response", async () => {
+  const deps = await depsWith([
+    league({ id: "h2h", name: "Duel", visibility: "public", format: "headToHead", memberIds: ["u-owner", "u-sarah"] }),
+  ]);
+  // Exactly what a row looks like before any W/L/D write: the join/create seed.
+  await deps.repo.addStandingPoints("h2h", "u-owner", 0);
+  await claimPublicSpot(deps, "u-james", "h2h");
+  await deps.repo.addStandingPoints("h2h", "u-sarah", 4);
+
+  const detail = await getLeagueDetail(deps, "u-owner", "h2h");
+  for (const s of detail.standings) {
+    for (const n of [s.points, s.wins, s.losses, s.draws]) assert.ok(Number.isFinite(n), `non-number in ${JSON.stringify(s)}`);
+    assert.deepEqual([s.wins, s.losses, s.draws], [0, 0, 0]);
+  }
+  // All 0–0 → name order (James, Sarah, then the id-named owner), ranks 1..n.
+  assert.deepEqual(detail.standings.map((s) => `${s.rank}:${s.user.id}`), ["1:u-james", "2:u-sarah", "3:u-owner"]);
+  // What goes on the wire is identical after a JSON round-trip (nothing undefined dropped).
+  assert.deepEqual(JSON.parse(JSON.stringify(detail.standings)), detail.standings);
+});
+
+/** A MemoryRepository that records every addStandingRecord call. */
+class RecordSpyRepository extends MemoryRepository {
+  recordCalls: Array<[string, string, object]> = [];
+  override async addStandingRecord(...args: Parameters<MemoryRepository["addStandingRecord"]>): Promise<void> {
+    this.recordCalls.push([args[0], args[1], { ...args[2] }]);
+    return super.addStandingRecord(...args);
+  }
+}
+
+test("rematch reseeds a 0–0–0 record for every H2H player (old record dropped); standard rematch writes none", async () => {
+  const repo = new RecordSpyRepository(false);
+  const deps: Deps = { repo, users: new MemoryUserDirectory() };
+  await repo.createLeague(league({ id: "h1", name: "Duel 1", visibility: "private", format: "headToHead", roundCount: 1, memberIds: ["u-owner", "u-2", "u-3"] }));
+  await repo.createRound({ id: "h1~1", leagueId: "h1", index: 1, theme: "One", status: "revealed" });
+  await repo.addStandingRecord("h1", "u-2", { wins: 1 }); // old record must not carry over
+  await repo.addStandingRecord("h1", "u-3", { losses: 1 });
+  repo.recordCalls = [];
+
+  const next = await rematchLeague(deps, "u-owner", "h1");
+  assert.deepEqual(repo.recordCalls, [
+    [next.id, "u-owner", { wins: 0, losses: 0, draws: 0 }],
+    [next.id, "u-2", { wins: 0, losses: 0, draws: 0 }],
+    [next.id, "u-3", { wins: 0, losses: 0, draws: 0 }],
+  ]);
+  assert.deepEqual(
+    await repo.getStandings(next.id),
+    ["u-owner", "u-2", "u-3"].map((userId) => ({ userId, points: 0, wins: 0, losses: 0, draws: 0 })),
+  );
+  // The finished league keeps its history.
+  assert.equal((await repo.getStandings("h1")).find((s) => s.userId === "u-2")?.wins, 1);
+
+  // Standard rematch: the same writes as before HTH-04 — no record calls.
+  await repo.createLeague(league({ id: "s1", name: "Szn 1", visibility: "private", roundCount: 1, memberIds: ["u-owner", "u-2"] }));
+  await repo.createRound({ id: "s1~1", leagueId: "s1", index: 1, theme: "One", status: "revealed" });
+  repo.recordCalls = [];
+  const std = await rematchLeague(deps, "u-owner", "s1");
+  assert.deepEqual(repo.recordCalls, []);
+  assert.ok((await repo.getStandings(std.id)).every((s) => s.points === 0 && s.wins === 0 && s.losses === 0 && s.draws === 0));
+});
+
+test("finished H2H league: the wrap-up winner (standings[0]) is the best record, not the most points", async () => {
+  const deps = await depsWith(
+    [league({ id: "h2h", name: "Duel", visibility: "private", format: "headToHead", roundCount: 2, memberIds: ["u-owner", "u-sarah", "u-james"] })],
+    [
+      { id: "h2h~1", leagueId: "h2h", index: 1, theme: "One", status: "revealed" },
+      { id: "h2h~2", leagueId: "h2h", index: 2, theme: "Two", status: "revealed" },
+    ],
+  );
+  await deps.repo.addStandingPoints("h2h", "u-sarah", 40);
+  await deps.repo.addStandingRecord("h2h", "u-sarah", { wins: 1, losses: 1 });
+  await deps.repo.addStandingRecord("h2h", "u-james", { wins: 2 });
+  await deps.repo.addStandingRecord("h2h", "u-owner", { losses: 1, draws: 1 });
+
+  const detail = await getLeagueDetail(deps, "u-owner", "h2h");
+  assert.equal(detail.finished, true); // phase-derived, format-agnostic
+  assert.equal(detail.standings[0]?.user.displayName, "James"); // what the wrap-up hero renders
+  assert.deepEqual(detail.standings.map((s) => s.user.id), ["u-james", "u-sarah", "u-owner"]);
+});
