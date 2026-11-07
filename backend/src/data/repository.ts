@@ -6,11 +6,16 @@
 
 import type { Ballot, League, LeagueSettings, Round, Submission } from "../domain/types.ts";
 import type { StandingRecordDelta, StandingTotals } from "../domain/standings.ts";
+import type { SeasonFreeze } from "../domain/freeze.ts";
 
 export interface Repository {
   // ---- Leagues ----
   createLeague(league: League): Promise<void>;
-  getLeague(leagueId: string): Promise<League | undefined>;
+  /** `consistent`: a strongly consistent read (DynamoDB's default reads are
+   *  eventually consistent and can miss a write that just landed). Only the
+   *  head-to-head freeze asks for it, to see every member right after its
+   *  conditional write; everything else reads as before. */
+  getLeague(leagueId: string, opts?: { consistent?: boolean }): Promise<League | undefined>;
   /** Leagues the user is a member of. */
   getLeaguesForUser(userId: string): Promise<League[]>;
   /** All leagues with visibility "public" (fully hydrated with members).
@@ -24,6 +29,28 @@ export interface Repository {
   removeMember(leagueId: string, userId: string): Promise<void>;
   /** Replace a league's settings. Returns the updated league. */
   updateLeagueSettings(leagueId: string, settings: LeagueSettings): Promise<League>;
+  /** Head-to-head join (HTH-03): add a member ONLY while the season is open
+   *  to them — not frozen yet (no, or an empty, `h2hParticipants`), or they're
+   *  already in the frozen order (a participant coming back). The check and
+   *  the membership write are one atomic conditional write, so a join can
+   *  never land after the freeze without being in the schedule, however
+   *  stale the caller's earlier read was. Resolves the updated league, or
+   *  `undefined` (writing nothing) when the season lock refuses. Standard
+   *  leagues use `addMember`. */
+  addMemberUnlessSeasonLocked(leagueId: string, userId: string): Promise<League | undefined>;
+  /** Head-to-head season freeze (HTH-03): write the frozen participant order,
+   *  its secret schedule salt and the schedule-derived roundCount onto the
+   *  league, as one conditional write. Resolves `true` when it landed,
+   *  `false` (writing nothing) when its condition failed:
+   *  - without `replacesSalt`: the initial freeze, write-once — refused when
+   *    the season is already frozen (a non-empty `h2hParticipants`; e.g. a
+   *    concurrent round-1 open won the race) or the league no longer exists;
+   *  - with `replacesSalt`: the round-1 open re-planning its OWN freeze to
+   *    take in a member whose join landed between its member snapshot and its
+   *    freeze write — refused unless the stored salt is still exactly that
+   *    one. Only the opening request does this, before round 1 is written;
+   *    once a round has opened, the order never changes. */
+  freezeH2HSeason(leagueId: string, freeze: SeasonFreeze, replacesSalt?: string): Promise<boolean>;
   /** Delete a league and every record scoped to it (members, rounds, their
    *  submissions/ballots, standings, and invite codes). */
   deleteLeague(leagueId: string): Promise<void>;

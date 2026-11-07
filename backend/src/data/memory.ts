@@ -6,6 +6,7 @@ import type { Ballot, League, LeagueSettings, Round, Submission } from "../domai
 import { DEFAULT_LEAGUE_SETTINGS, leagueFormat } from "../domain/types.ts";
 import type { StandingRecordDelta, StandingTotals } from "../domain/standings.ts";
 import { recordIncrements } from "../domain/standings.ts";
+import type { SeasonFreeze } from "../domain/freeze.ts";
 import type { Repository, UserDirectory } from "./repository.ts";
 
 /** Fixed display-name directory, mirroring the frontend mock's `users`. */
@@ -17,6 +18,12 @@ const SEED_USERS: Record<string, string> = {
   "u-jpop": "J-Pop",
   "u-luna": "Luna",
 };
+
+/** The repos' storage-level "frozen" test — a non-empty frozen order — the
+ *  same definition DynamoRepository's conditions use and domain/freeze.ts's
+ *  `seasonLocked` applies (minus the format check: only head-to-head leagues
+ *  ever reach these writes). */
+const isFrozen = (lg: League): boolean => (lg.h2hParticipants?.length ?? 0) > 0;
 
 export class MemoryUserDirectory implements UserDirectory {
   async getDisplayName(userId: string): Promise<string> {
@@ -53,7 +60,9 @@ export class MemoryRepository implements Repository {
   async createLeague(league: League): Promise<void> {
     this.leagues.set(league.id, structuredClone(league));
   }
-  async getLeague(leagueId: string): Promise<League | undefined> {
+  async getLeague(leagueId: string, _opts?: { consistent?: boolean }): Promise<League | undefined> {
+    // Every read here is strongly consistent, so the port's `consistent`
+    // option needs no handling.
     const lg = this.leagues.get(leagueId);
     return lg ? this.readLeague(lg) : undefined;
   }
@@ -87,6 +96,29 @@ export class MemoryRepository implements Repository {
     if (!lg) throw new Error(`League not found: ${leagueId}`);
     lg.settings = { ...settings };
     return this.readLeague(lg);
+  }
+  async addMemberUnlessSeasonLocked(leagueId: string, userId: string): Promise<League | undefined> {
+    // Same contract as DynamoRepository's transactional join: the season check
+    // and the membership write happen together (synchronously here), so no
+    // freeze can slip in between them.
+    const lg = this.leagues.get(leagueId);
+    if (!lg) throw new Error(`League not found: ${leagueId}`);
+    if (isFrozen(lg) && !lg.h2hParticipants!.includes(userId)) return undefined;
+    if (!lg.memberIds.includes(userId)) lg.memberIds.push(userId);
+    return this.readLeague(lg);
+  }
+  async freezeH2HSeason(leagueId: string, freeze: SeasonFreeze, replacesSalt?: string): Promise<boolean> {
+    // Same contract as DynamoRepository's conditional write: the initial
+    // freeze lands once (a second attempt — or one on a league that no longer
+    // exists — writes nothing and reports it lost); a re-plan lands only over
+    // the exact salt it read.
+    const lg = this.leagues.get(leagueId);
+    if (!lg) return false;
+    if (replacesSalt === undefined ? isFrozen(lg) : lg.h2hSalt !== replacesSalt) return false;
+    lg.h2hParticipants = [...freeze.participants];
+    lg.h2hSalt = freeze.salt;
+    lg.roundCount = freeze.roundCount;
+    return true;
   }
   async deleteLeague(leagueId: string): Promise<void> {
     const lg = this.leagues.get(leagueId);

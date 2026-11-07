@@ -79,6 +79,21 @@ export interface League {
   /** Timed mode: how many days each phase (submitting/previewing/voting) lasts
    *  before it auto-advances. Ignored in manual mode. */
   phaseDays?: number;
+  /** Head-to-head only: the season's frozen participant order — every member
+   *  at the moment round 1 opened, shuffled once (rounds.ts freeze hook,
+   *  HTH-03). Unset until then (the league is "un-frozen" and still takes
+   *  players); once set it never changes and the league takes no new players.
+   *  Every round's pairings derive from it (domain/schedule.ts). SERVER-ONLY:
+   *  the order would deanonymize future matchups, so `toLeagueView` strips it
+   *  from every payload (owner included) and the frontend types never carry
+   *  it. Never copied by a rematch. Stored as a plain attribute on META. */
+  h2hParticipants?: string[];
+  /** Head-to-head only: the secret salt keying the schedule's per-round
+   *  presentation order (see domain/schedule.ts). 128 random bits as 32 hex
+   *  chars, generated in the same freeze write as `h2hParticipants`.
+   *  SERVER-ONLY like the order — stripped from every payload, never copied
+   *  by a rematch. */
+  h2hSalt?: string;
 }
 
 export interface Round {

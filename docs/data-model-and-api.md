@@ -25,7 +25,7 @@ because every read below is a point-get or a single-partition `Query` — no cro
 
 | Entity | PK | SK | Key attributes |
 |---|---|---|---|
-| League meta | `LEAGUE#<leagueId>` | `META` | `name, ownerId, musicProvider, format, settings{}, createdAt` |
+| League meta | `LEAGUE#<leagueId>` | `META` | `name, ownerId, musicProvider, format, settings{}, roundCount, createdAt`, head-to-head only once frozen: `h2hParticipants[], h2hSalt` |
 | Membership | `LEAGUE#<leagueId>` | `MEMBER#<userId>` | `joinedAt, displayName` |
 | Round | `LEAGUE#<leagueId>` | `ROUND#<index4>` | `roundId, theme, description, status, submissionDeadline, voteDeadline, playlistUrl` |
 | Submission | `ROUND#<roundId>` | `SUB#<userId>` | `track{}, submittedAt` |
@@ -68,6 +68,48 @@ leagues are locked to `submissionsPerPlayer: 1` and `downvotePoolSize: 0`:
 creation and rematch clamp to those values, and a settings PATCH that changes
 either is rejected with a 400.
 
+### Head-to-head season freeze
+
+A head-to-head league is a lobby until its round 1 opens
+(`PATCH /leagues/{id}/rounds/{roundId}` `draft → submitting` — the only way
+any round leaves draft, manual or timed). That transition freezes the season
+once, in one conditional `UpdateItem` on META (season not frozen yet — no, or
+an empty, `h2hParticipants` — so concurrent opens can't both shuffle):
+
+- `h2hParticipants` — every member at that moment, shuffled (Fisher–Yates
+  over `node:crypto` randomness). Every round's pairings derive from it
+  (`domain/schedule.ts`); it never changes again.
+- `h2hSalt` — 128 random bits (32 hex chars) keying the schedule's per-round
+  presentation order.
+- `roundCount` — overwritten with the round-robin length (`n − 1` rounds for
+  an even field, `n` for odd), whatever the owner typed at creation; the
+  existing "no round beyond roundCount" cap then ends the season on schedule.
+
+Rules around it: round 1 needs at least 2 members to open (400); no round 2
+can be created before round 1 has opened (400); once frozen the league takes
+no new players — the invite-code join and the public claim both answer 409
+"Season locked — …", discovery hides it and its preview reports
+`hasStarted` — though a frozen participant who left or was kicked may rejoin
+by invite (they're already in the schedule).
+
+Joins can't slip past the freeze. A head-to-head join writes its `MEMBER#`
+row in a `TransactWriteItems` together with a `ConditionCheck` on META
+(not frozen, or the joiner already in `h2hParticipants`), so DynamoDB
+serializes it against the freeze's `UpdateItem`: a join either commits
+before the freeze or is refused. The one join the freeze can't see coming —
+committed after the opener read the member list but before its freeze write
+— is caught by the opener itself: right after the write it re-reads the
+league strongly consistently (`ConsistentRead`), and if a member is missing
+from the order it re-plans the whole order (fresh shuffle, salt and
+`roundCount`) over participants + latecomers, conditional on the salt it
+just read (`h2hSalt = :old`). That happens before round 1 is written, so no
+pairing has been derived yet; once round 1 has opened, the order never
+changes. Hence every member of a frozen league is in `h2hParticipants`
+(participants who left are the only difference the other way round). Both attributes are
+**server-only**: every response strips them (owner included), the frontend
+types don't carry them, and a rematch never copies them (the clone freezes
+afresh at its own round 1). Standard leagues never get either attribute.
+
 ### Why submission/vote keys are what they are
 
 - `SUB#<userId>` as the sort key means a player physically *cannot* have two submissions in a
@@ -97,8 +139,9 @@ All routes require a valid Cognito JWT. `:me` denotes the caller's `sub`. Errors
   the owner, and a fresh invite code minted (write League META + Membership + Invite items in
   one `TransactWriteItems`).
 - **Join**: point-get `INVITE#<code.toUpperCase()>`; 404 → "That code doesn't match any
-  league."; already a member → "You're already a member of {name}."; else write Membership +
-  Standing(0) and return the league.
+  league."; already a member → "You're already a member of {name}."; a frozen head-to-head
+  season → 409 "Season locked — …" (see [Head-to-head season freeze](#head-to-head-season-freeze));
+  else write Membership + Standing(0) and return the league.
 - **Summary** fields (`currentRound`, `totalRounds`, `completionPct`, `members`) are computed
   in the Lambda from the league's rounds + memberships; `completionPct` becomes real
   (votes-cast / members for voting rounds) instead of the mock's hardcoded map.

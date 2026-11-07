@@ -30,6 +30,7 @@ import type { Ballot, League, LeagueSettings, Round, Submission } from "../domai
 import { leagueFormat } from "../domain/types.ts";
 import type { StandingRecordDelta, StandingTotals } from "../domain/standings.ts";
 import { recordIncrements } from "../domain/standings.ts";
+import type { SeasonFreeze } from "../domain/freeze.ts";
 import type { Repository } from "./repository.ts";
 
 const index4 = (n: number) => String(n).padStart(4, "0");
@@ -66,6 +67,11 @@ export class DynamoRepository implements Repository {
         progression: league.progression,
         startAt: league.startAt,
         phaseDays: league.phaseDays,
+        // Head-to-head freeze fields (normally absent at creation — a rematch
+        // never copies them — and written later by freezeH2HSeason). Undefined
+        // values are dropped by removeUndefinedValues.
+        h2hParticipants: league.h2hParticipants,
+        h2hSalt: league.h2hSalt,
         createdAt: new Date().toISOString(),
       },
       ...league.memberIds.map((userId) => this.memberItem(league.id, userId)),
@@ -77,9 +83,12 @@ export class DynamoRepository implements Repository {
     );
   }
 
-  async getLeague(leagueId: string): Promise<League | undefined> {
+  async getLeague(leagueId: string, opts?: { consistent?: boolean }): Promise<League | undefined> {
+    // Strongly consistent only when asked (the head-to-head freeze's
+    // post-write check); every other read keeps the default, unchanged.
+    const consistency = opts?.consistent ? { ConsistentRead: true } : {};
     const meta = await this.doc.send(
-      new GetCommand({ TableName: this.tableName, Key: { PK: `LEAGUE#${leagueId}`, SK: "META" } }),
+      new GetCommand({ TableName: this.tableName, Key: { PK: `LEAGUE#${leagueId}`, SK: "META" }, ...consistency }),
     );
     if (!meta.Item) return undefined;
 
@@ -88,6 +97,7 @@ export class DynamoRepository implements Repository {
         TableName: this.tableName,
         KeyConditionExpression: "PK = :pk AND begins_with(SK, :m)",
         ExpressionAttributeValues: { ":pk": `LEAGUE#${leagueId}`, ":m": "MEMBER#" },
+        ...consistency,
       }),
     );
     const memberIds = (members.Items ?? []).map((it) => it.userId as string);
@@ -114,6 +124,10 @@ export class DynamoRepository implements Repository {
       progression: (meta.Item.progression as League["progression"] | undefined) ?? "manual",
       startAt: meta.Item.startAt as string | undefined,
       phaseDays: meta.Item.phaseDays as number | undefined,
+      // Head-to-head season freeze (absent until round 1 opens, and on every
+      // standard league). Server-only: handlers strip both from payloads.
+      h2hParticipants: meta.Item.h2hParticipants as string[] | undefined,
+      h2hSalt: meta.Item.h2hSalt as string | undefined,
     };
   }
 
@@ -192,6 +206,73 @@ export class DynamoRepository implements Repository {
     const lg = await this.getLeague(leagueId);
     if (!lg) throw new Error(`League not found after updateLeagueSettings: ${leagueId}`);
     return lg;
+  }
+
+  async addMemberUnlessSeasonLocked(leagueId: string, userId: string): Promise<League | undefined> {
+    // One transaction: a ConditionCheck on META (season not frozen — no or an
+    // empty frozen order — or the joiner already in it) plus the MEMBER# put.
+    // DynamoDB serializes it against the freeze's UpdateItem on the same META,
+    // so a join either commits before the freeze (and the opener's post-write
+    // check takes the joiner in) or fails here — never lands outside the
+    // schedule. A failed season check means "locked" (undefined); anything
+    // else (e.g. a TransactionConflict) propagates.
+    try {
+      await this.doc.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              ConditionCheck: {
+                TableName: this.tableName,
+                Key: { PK: `LEAGUE#${leagueId}`, SK: "META" },
+                ConditionExpression:
+                  "attribute_not_exists(h2hParticipants) OR size(h2hParticipants) = :zero OR contains(h2hParticipants, :u)",
+                ExpressionAttributeValues: { ":zero": 0, ":u": userId },
+              },
+            },
+            { Put: { TableName: this.tableName, Item: this.memberItem(leagueId, userId) } },
+          ],
+        }),
+      );
+    } catch (err) {
+      const e = err as { name?: string; CancellationReasons?: Array<{ Code?: string }> } | null;
+      if (e?.name === "TransactionCanceledException" && e.CancellationReasons?.[0]?.Code === "ConditionalCheckFailed") {
+        return undefined;
+      }
+      throw err;
+    }
+    const lg = await this.getLeague(leagueId);
+    if (!lg) throw new Error(`League not found after addMemberUnlessSeasonLocked: ${leagueId}`);
+    return lg;
+  }
+
+  async freezeH2HSeason(leagueId: string, freeze: SeasonFreeze, replacesSalt?: string): Promise<boolean> {
+    // One conditional UpdateItem on META: the order, its salt and the
+    // schedule-derived roundCount land together or not at all. The initial
+    // freeze lands only while the season isn't frozen (no, or an empty,
+    // frozen order — seasonLocked's definition), so two concurrent round-1
+    // opens can't both shuffle; a re-plan lands only over the exact salt it
+    // read. Losing either race is a normal outcome (false), not an error.
+    // attribute_exists(PK): never create a phantom META for a deleted league.
+    const condition =
+      replacesSalt === undefined
+        ? "attribute_exists(PK) AND (attribute_not_exists(h2hParticipants) OR size(h2hParticipants) = :zero)"
+        : "attribute_exists(PK) AND h2hSalt = :old";
+    const guard = replacesSalt === undefined ? { ":zero": 0 } : { ":old": replacesSalt };
+    try {
+      await this.doc.send(
+        new UpdateCommand({
+          TableName: this.tableName,
+          Key: { PK: `LEAGUE#${leagueId}`, SK: "META" },
+          UpdateExpression: "SET h2hParticipants = :p, h2hSalt = :s, roundCount = :n",
+          ConditionExpression: condition,
+          ExpressionAttributeValues: { ":p": freeze.participants, ":s": freeze.salt, ":n": freeze.roundCount, ...guard },
+        }),
+      );
+      return true;
+    } catch (err) {
+      if ((err as { name?: string } | null)?.name === "ConditionalCheckFailedException") return false;
+      throw err;
+    }
   }
 
   async deleteLeague(leagueId: string): Promise<void> {

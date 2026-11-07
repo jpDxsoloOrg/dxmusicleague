@@ -8,12 +8,19 @@ import type { League, LeagueFormat, LeagueSettings, LeagueVisibility, RoundProgr
 import { DEFAULT_LEAGUE_SETTINGS, H2H_FORCED_SETTINGS, LEAGUE_FORMATS, applyFormatSettings, leagueFormat } from "../domain/types.ts";
 import { badRequest, conflict, forbidden, notFound } from "../domain/errors.ts";
 import { sortStandings } from "../domain/standings.ts";
+import { SEASON_LOCKED_MESSAGE, lockedOutOfSeason, seasonLocked } from "../domain/freeze.ts";
+import type { RandomInt } from "../domain/freeze.ts";
 import type { Repository, UserDirectory } from "../data/repository.ts";
 import { autoAdvanceRound } from "./progression.ts";
 
 export interface Deps {
   repo: Repository;
   users: UserDirectory;
+  /** Randomness seam for the head-to-head season freeze (participant shuffle
+   *  + schedule salt) — the feature's only nondeterminism. Unset in
+   *  production, where rounds.ts falls back to node:crypto's `randomInt`;
+   *  tests inject a seeded generator. */
+  randomInt?: RandomInt;
 }
 
 // ---- view models (mirror src/data/mock.ts) ----
@@ -84,6 +91,19 @@ interface LeagueDetail {
 }
 
 // ---- helpers ----
+
+/** The league as clients see it: a copy without the head-to-head season
+ *  secrets. `h2hParticipants` (the frozen order) would let any player
+ *  deanonymize every future matchup and `h2hSalt` is the key that hides it,
+ *  so neither leaves the server for anyone, owner included — pairings are
+ *  only ever served derived and anonymized (HTH-05). Every handler that
+ *  returns a League returns it through here. */
+export function toLeagueView(league: League): League {
+  const view: League = { ...league };
+  delete view.h2hParticipants;
+  delete view.h2hSalt;
+  return view;
+}
 
 async function toUserViews(users: UserDirectory, ids: string[]): Promise<UserView[]> {
   return Promise.all(ids.map(async (id) => ({ id, displayName: await users.getDisplayName(id) })));
@@ -262,7 +282,7 @@ export async function createLeague(deps: Deps, caller: string, input: CreateLeag
   await deps.repo.createLeague(league);
   await deps.repo.putInvite(league.inviteCode, league.id);
   await deps.repo.addStandingPoints(league.id, caller, 0); // seed standing at 0
-  return league;
+  return toLeagueView(league);
 }
 
 /** A public league a non-member could discover and claim a spot in. */
@@ -281,6 +301,16 @@ export interface PublicLeagueSummary {
  *  league. Closed once any round is beyond submitting (or a later round exists). */
 function joinWindowClosed(rounds: Round[]): boolean {
   return rounds.some((r) => !(r.status === "draft" || (r.index === 1 && r.status === "submitting")));
+}
+
+/** Whether the league is closed to new players — what discovery and the
+ *  public preview advertise. The rounds-based join window above, plus, for
+ *  head-to-head only, the season lock: the round robin is scheduled over
+ *  exactly the players frozen when round 1 opened, so an H2H league stops
+ *  taking newcomers at that moment, not when round 1's submissions close.
+ *  Standard leagues: identical to `joinWindowClosed`. */
+function closedToNewPlayers(league: League, rounds: Round[]): boolean {
+  return seasonLocked(league) || joinWindowClosed(rounds);
 }
 
 /** Discover open public leagues: public, join window still open (round 1 at
@@ -303,7 +333,8 @@ export async function listOpenPublicLeagues(
     if (openSlots <= 0) continue; // full
 
     const rounds = await deps.repo.getRoundsForLeague(league.id);
-    if (joinWindowClosed(rounds)) continue; // past round 1's submitting phase
+    // Past round 1's submitting phase, or a head-to-head season already locked.
+    if (closedToNewPlayers(league, rounds)) continue;
 
     const firstRound = [...rounds].sort((a, b) => a.index - b.index)[0];
     open.push({
@@ -366,7 +397,8 @@ export interface PublicLeaguePreview {
   openSlots: number;
   firstRoundTheme?: string;
   members: UserView[];
-  /** True once the join window closed (round 1 past submitting) — no longer joinable. */
+  /** True once the join window closed (round 1 past submitting, or — head-to-
+   *  head — the season locked when round 1 opened) — no longer joinable. */
   hasStarted: boolean;
   isFull: boolean;
   /** True when the caller already belongs (UI links them straight in instead). */
@@ -395,7 +427,7 @@ export async function getPublicLeaguePreview(
     openSlots,
     firstRoundTheme: firstRound?.theme,
     members: await toUserViews(deps.users, league.memberIds),
-    hasStarted: joinWindowClosed(rounds),
+    hasStarted: closedToNewPlayers(league, rounds),
     isFull: openSlots <= 0,
     alreadyMember: league.memberIds.includes(caller),
   };
@@ -408,7 +440,7 @@ export async function listMyLeagues(deps: Deps, caller: string): Promise<LeagueS
       const rounds = await deps.repo.getRoundsForLeague(league.id);
       const currentRound = await autoAdvanceRound(deps, league, latestRound(rounds));
       return {
-        league,
+        league: toLeagueView(league),
         currentRound,
         // The owner's planned count; fall back to created rounds for legacy leagues.
         totalRounds: league.roundCount || rounds.length,
@@ -504,7 +536,7 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
   }
 
   return {
-    league: isMember ? league : { ...league, inviteCode: "" },
+    league: isMember ? toLeagueView(league) : { ...toLeagueView(league), inviteCode: "" },
     rounds,
     currentRound,
     // The owner's planned count; fall back to created rounds for legacy leagues.
@@ -526,10 +558,28 @@ export async function joinLeague(deps: Deps, caller: string, rawCode: string): P
   const league = leagueId ? await deps.repo.getLeague(leagueId) : undefined;
   if (!league) throw notFound("That code doesn't match any league.");
   if (league.memberIds.includes(caller)) throw conflict(`You're already a member of ${league.name}.`);
+  // The invite path deliberately bypasses the join window and the player cap
+  // (standard leagues: an owner can always bring a friend in). Head-to-head
+  // is the exception: once round 1 opens the season is frozen, and a newcomer
+  // can't be added to a round robin that's already scheduled.
+  if (lockedOutOfSeason(league, caller)) throw conflict(SEASON_LOCKED_MESSAGE);
 
-  const updated = await deps.repo.addMember(league.id, caller);
+  const updated = await addJoiningMember(deps, league, caller);
   await deps.repo.addStandingPoints(league.id, caller, 0);
-  return { league: updated };
+  return { league: toLeagueView(updated) };
+}
+
+/** The membership write for both join paths. Standard leagues: the plain
+ *  write, exactly as before. Head-to-head: the lock check above ran on a read
+ *  that may already be stale — a round-1 open can freeze the season between
+ *  it and this write — so the write goes through the repo's season-gated
+ *  conditional join, which re-checks atomically and refuses with the same
+ *  "season locked" 409. */
+async function addJoiningMember(deps: Deps, league: League, caller: string): Promise<League> {
+  if (leagueFormat(league) !== "headToHead") return deps.repo.addMember(league.id, caller);
+  const updated = await deps.repo.addMemberUnlessSeasonLocked(league.id, caller);
+  if (!updated) throw conflict(SEASON_LOCKED_MESSAGE);
+  return updated;
 }
 
 /** Claim a spot in an open public league — creates the caller's membership.
@@ -545,6 +595,10 @@ export async function claimPublicSpot(
   if (!league || league.visibility !== "public") throw notFound("That public league doesn't exist.");
   if (league.memberIds.includes(caller)) throw conflict(`You're already a member of ${league.name}.`);
 
+  // Head-to-head: the season lock (round 1 opened) shuts newcomers out even
+  // while round 1 is still submitting — checked first so the UI gets the
+  // distinct "season locked" reason.
+  if (lockedOutOfSeason(league, caller)) throw conflict(SEASON_LOCKED_MESSAGE);
   const rounds = await deps.repo.getRoundsForLeague(leagueId);
   if (joinWindowClosed(rounds)) {
     throw conflict("It's too late to join — round 1 has closed submissions.");
@@ -555,9 +609,9 @@ export async function claimPublicSpot(
   const cap = league.maxMembers ?? 0;
   if (league.memberIds.length >= cap) throw conflict("This league is full.");
 
-  const updated = await deps.repo.addMember(leagueId, caller);
+  const updated = await addJoiningMember(deps, league, caller);
   await deps.repo.addStandingPoints(leagueId, caller, 0); // seed standing at 0
-  return { league: updated };
+  return { league: toLeagueView(updated) };
 }
 
 /** Leave a league — removes the caller's own membership (and standing). The
@@ -595,7 +649,7 @@ export async function regenerateInvite(deps: Deps, caller: string, leagueId: str
   await deps.repo.putInvite(code, league.id);
   await deps.repo.updateInviteCode(league.id, code);
   if (oldCode) await deps.repo.deleteInvite(oldCode);
-  return { league: { ...league, inviteCode: code } };
+  return { league: toLeagueView({ ...league, inviteCode: code }) };
 }
 
 /** Load a league and assert the caller owns it. */
@@ -669,7 +723,7 @@ export async function updateLeagueSettings(
     submissionsPerPlayer,
     downvotePoolSize,
   };
-  return deps.repo.updateLeagueSettings(leagueId, settings);
+  return toLeagueView(await deps.repo.updateLeagueSettings(leagueId, settings));
 }
 
 export async function deleteLeague(deps: Deps, caller: string, leagueId: string): Promise<{ ok: true }> {
@@ -689,7 +743,13 @@ function rematchName(name: string): string {
 /** Owner-only: once a league has finished, spin up a fresh one with the same
  *  players, settings, and format — everyone starts again at 0 points (and a
  *  0–0–0 record in head-to-head). The old league stays readable (results,
- *  standings) but closed. */
+ *  standings) but closed.
+ *
+ *  Head-to-head: the clone starts UN-frozen. Its fields are copied one by one
+ *  and `h2hParticipants` / `h2hSalt` deliberately are not, so the clone takes
+ *  players again until its own round 1 opens, then freezes with its own
+ *  shuffle and salt, and its roundCount is re-derived from its own member
+ *  count at that moment (the value copied here is only provisional). */
 export async function rematchLeague(deps: Deps, caller: string, leagueId: string): Promise<League> {
   const league = await ownedLeague(deps, caller, leagueId);
   const rounds = await deps.repo.getRoundsForLeague(leagueId);
@@ -712,11 +772,13 @@ export async function rematchLeague(deps: Deps, caller: string, leagueId: string
     inviteCode: newInviteCode(),
     visibility: league.visibility,
     maxMembers: league.maxMembers,
+    // Head-to-head: provisional — the clone's own freeze overrides it.
     roundCount: league.roundCount,
     progression: league.progression,
     // Timed leagues restart their clock now; the old startAt is history.
     startAt: league.progression === "timed" ? new Date().toISOString() : undefined,
     phaseDays: league.phaseDays,
+    // h2hParticipants / h2hSalt: never copied (see above).
   };
   await deps.repo.createLeague(next);
   await deps.repo.putInvite(next.inviteCode, next.id);
@@ -729,5 +791,5 @@ export async function rematchLeague(deps: Deps, caller: string, leagueId: string
       await deps.repo.addStandingRecord(next.id, memberId, { wins: 0, losses: 0, draws: 0 });
     }
   }
-  return next;
+  return toLeagueView(next);
 }
