@@ -10,11 +10,27 @@
 //
 // The owner can still advance manually in timed mode (rounds.updateRound /
 // revealRound) — this just automates it. See memory: round-automation.
+//
+// Head-to-head (HTH-08): the machinery is format-agnostic — one song and one
+// ballot row per member — except for who "everyone" is (domain/matchups.ts,
+// "turnout"): a round is done submitting when every CURRENT member has a song
+// (a departed player's withdrawn song doesn't stand in for a missing one), and
+// done voting when every member who has a matchup to pick in has picked in
+// all of them. A round in which nobody can vote (every pair a walkover / no
+// contest, or a two-player league whose one matchup is both players' own)
+// has nothing to wait for and reveals straight away — in rounds.updateRound
+// when the owner opens voting (`revealIfNobodyCanVote`, manual and timed
+// leagues alike), and here when a timed round reaches voting by deadline (or
+// departures mid-voting leave nobody who can vote) — so it never sits dead
+// in voting. Deadlines, cascades and early-advance re-basing need no format
+// awareness.
 
-import type { League, Round } from "../domain/types.ts";
+import type { League, Round, Submission } from "../domain/types.ts";
 import { leagueFormat } from "../domain/types.ts";
+import { everyoneEligibleVoted, membersWithSong } from "../domain/matchups.ts";
 import { createPlaylistForRound } from "./providers.ts";
 import { finalizeReveal } from "./results.ts";
+import { loadVotingTurnout } from "./matchups.ts";
 import { phaseDeadline } from "./timing.ts";
 import type { Deps } from "./leagues.ts";
 
@@ -37,8 +53,10 @@ export async function autoAdvanceRound(
   // submission slot (submissionsPerPlayer picks each).
   if (round.status === "submitting") {
     const subs = await deps.repo.getSubmissionsForRound(round.id);
-    const allowance = league.settings.submissionsPerPlayer || 1;
-    const everyoneSubmitted = memberCount > 0 && subs.length >= memberCount * allowance;
+    const everyoneSubmitted =
+      leagueFormat(league) === "headToHead"
+        ? everyMemberHasSong(league, subs)
+        : everySlotFilled(league, subs, memberCount);
     const deadlineHit = past(round.submissionDeadline);
     if (deadlineHit || everyoneSubmitted) {
       round.status = "previewing";
@@ -67,13 +85,15 @@ export async function autoAdvanceRound(
     advanced = true;
   }
 
-  // voting → revealed: deadline passed OR every member voted (with songs to rank).
+  // voting → revealed: deadline passed OR every member voted (with songs to
+  // rank). Head-to-head: every member who CAN vote has — vacuously true when
+  // nobody can, so a round that just reached voting with nothing to vote on
+  // reveals in this same pass instead of hanging until its deadline.
   if (round.status === "voting") {
-    const [subs, ballots] = await Promise.all([
-      deps.repo.getSubmissionsForRound(round.id),
-      deps.repo.getBallotsForRound(round.id),
-    ]);
-    const everyoneVoted = memberCount > 0 && ballots.length >= memberCount && subs.length > 0;
+    const everyoneVoted =
+      leagueFormat(league) === "headToHead"
+        ? everyoneEligibleVoted(await loadVotingTurnout(deps, league, round))
+        : await everyMemberVoted(deps, round, memberCount);
     if (past(round.voteDeadline) || everyoneVoted) {
       await finalizeReveal(deps, round); // tallies, banks points, persists
       return round;
@@ -82,6 +102,53 @@ export async function autoAdvanceRound(
 
   if (advanced) await persistAdvance(deps, league, round);
   return round;
+}
+
+/** Standard everyone-submitted: as many songs as members × allowance. */
+function everySlotFilled(league: League, subs: Submission[], memberCount: number): boolean {
+  const allowance = league.settings.submissionsPerPlayer || 1;
+  return memberCount > 0 && subs.length >= memberCount * allowance;
+}
+
+/** Head-to-head everyone-submitted: every current member has their one song
+ *  (allowance is forced to 1). Counted by member, not by row, so a departed
+ *  player's song — withdrawn from their pair — can't close the phase while
+ *  a member who stayed hasn't submitted (they'd lose by walkover). */
+function everyMemberHasSong(league: League, subs: Submission[]): boolean {
+  return league.memberIds.length > 0 && membersWithSong(league.memberIds, subs).length === league.memberIds.length;
+}
+
+/** Standard everyone-voted: a ballot row per member, and songs to rank. */
+async function everyMemberVoted(deps: Deps, round: Round, memberCount: number): Promise<boolean> {
+  const [subs, ballots] = await Promise.all([
+    deps.repo.getSubmissionsForRound(round.id),
+    deps.repo.getBallotsForRound(round.id),
+  ]);
+  return memberCount > 0 && ballots.length >= memberCount && subs.length > 0;
+}
+
+/**
+ * Head-to-head (HTH-08): reveal a round that has just entered voting if
+ * nobody can vote in it — no member has a matchup to pick in (every pair a
+ * walkover / no contest, or a two-player league whose one matchup is both
+ * players' own). No ballot could ever arrive, so the round goes straight to
+ * the reveal, which banks its walkovers (and a two-player league's 0–0 draw)
+ * exactly as any reveal does (HTH-07). Used by rounds.updateRound when the
+ * owner opens voting; the timed advance above gets the same effect from its
+ * everyone-voted check. `round` is the round about to enter voting (status
+ * already `voting`, not yet written): `finalizeReveal`'s one conditional
+ * write stores it revealed, edits included. Returns whether it revealed (then
+ * `round` is the revealed round); a round someone can vote in is untouched.
+ * If another reveal settled the round first (a racing PATCH or a timed
+ * advance), this request's edits never landed, so it throws the same 409 the
+ * H2H round write answers in that race rather than return someone else's
+ * round as if the edits had been kept.
+ */
+export async function revealIfNobodyCanVote(deps: Deps, league: League, round: Round): Promise<boolean> {
+  const turnout = await loadVotingTurnout(deps, league, round);
+  if (turnout.eligible.length > 0) return false;
+  await finalizeReveal(deps, round, { conflictIfSettled: true });
+  return true;
 }
 
 /** Write an advanced round. A head-to-head league's write lands only while

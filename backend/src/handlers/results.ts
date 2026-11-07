@@ -23,7 +23,7 @@
 
 import type { Ballot, League, Round, Submission, Track } from "../domain/types.ts";
 import { leagueFormat } from "../domain/types.ts";
-import { notFound } from "../domain/errors.ts";
+import { conflict, notFound } from "../domain/errors.ts";
 import { compareMatchupIds } from "../domain/schedule.ts";
 import { departedParticipants } from "../domain/matchups.ts";
 import { matchupRecords, rankSubmissions, resolveMatchups, settleMatchups, tallyBallots, tallyMatchups } from "../domain/rules.ts";
@@ -97,14 +97,30 @@ async function commentsFor(deps: Deps, submissionId: string, ballots: Ballot[]):
   );
 }
 
+/** How `finalizeReveal` answers when it loses a head-to-head reveal race. */
+export interface FinalizeRevealOptions {
+  /** Head-to-head only. When another reveal settled the round first, the
+   *  default answers with the round as it was settled — right for the reveal
+   *  endpoint and the timed advance, which only want it revealed. A caller
+   *  whose own edits ride on the claim (rounds.updateRound opening voting on
+   *  a round nobody can vote in, HTH-08) passes `true` to get the 409 the
+   *  H2H round write answers in the same race, not a 200 that silently
+   *  dropped its edits. */
+  conflictIfSettled?: boolean;
+}
+
 /** Tally + rank a voting round, bank each submitter's points, mark it revealed,
  *  and persist. Shared by the owner reveal endpoint and timed auto-advance, so
  *  both settle a round identically. Mutates `round.status`. A head-to-head
  *  league's round settles as matchups instead (`finalizeHeadToHeadReveal`);
  *  a standard round takes exactly the original path. */
-export async function finalizeReveal(deps: Deps, round: Round): Promise<RoundResultsPayload> {
+export async function finalizeReveal(
+  deps: Deps,
+  round: Round,
+  options: FinalizeRevealOptions = {},
+): Promise<RoundResultsPayload> {
   const league = await deps.repo.getLeague(round.leagueId);
-  if (league && leagueFormat(league) === "headToHead") return finalizeHeadToHeadReveal(deps, league, round);
+  if (league && leagueFormat(league) === "headToHead") return finalizeHeadToHeadReveal(deps, league, round, options);
 
   const results = await computeResults(deps, round.id);
   for (const r of results) {
@@ -218,9 +234,16 @@ export type RoundResultsPayload = RoundResult[] | HeadToHeadResults;
  * not the ballot rows.
  *
  * Mutates `round` to what is stored afterwards (status `revealed` and the
- * pins), like the standard path mutates `round.status`.
+ * pins), like the standard path mutates `round.status` — unless the caller
+ * asked for a 409 on a lost race (`conflictIfSettled`), which leaves `round`
+ * as it was.
  */
-async function finalizeHeadToHeadReveal(deps: Deps, league: League, round: Round): Promise<HeadToHeadResults> {
+async function finalizeHeadToHeadReveal(
+  deps: Deps,
+  league: League,
+  round: Round,
+  options: FinalizeRevealOptions,
+): Promise<HeadToHeadResults> {
   const departed = [...departedParticipants(league, { status: "voting" })].sort();
   const [matchups, ballots] = await Promise.all([
     loadRoundMatchups(deps, league, round, { departed }),
@@ -234,6 +257,7 @@ async function finalizeHeadToHeadReveal(deps: Deps, league: League, round: Round
     // Another reveal settled it first (or it's gone): nothing was banked.
     const stored = await deps.repo.getRound(round.id, { consistent: true });
     if (!stored) throw notFound("That round doesn't exist.");
+    if (options.conflictIfSettled) throw conflict("That round was just revealed. Reload to see the results.");
     Object.assign(round, stored);
     return headToHeadResults(deps, league, stored);
   }

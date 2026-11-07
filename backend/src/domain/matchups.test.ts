@@ -4,20 +4,27 @@
 // each side gets its player's song, a departed player's song is withdrawn
 // while the round is in play (never re-judged once it's revealed: it reads
 // the departed set the reveal pinned on it, HTH-07), the walkover /
-// no-contest / votable definitions, and
-// that the anonymized view carries songs and `isMine` but never a user id or
-// the frozen order.
+// no-contest / votable definitions, that the anonymized view carries songs
+// and `isMine` but never a user id or the frozen order, and the round's
+// turnout (HTH-08): who can vote and who has, and whom the who-voted panel
+// and the activity feed may name as having voted.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   anonymousSong,
+  ballotAuthorVisible,
   departedParticipants,
   deriveRoundMatchups,
+  everyoneEligibleVoted,
   inMatchup,
   matchupState,
   matchupsView,
+  membersWithSong,
   votableMatchups,
+  votersNameable,
+  votingPanelNames,
+  votingTurnout,
 } from "./matchups.ts";
 import type { RoundMatchup, RoundMatchupSet } from "./matchups.ts";
 import { matchupsForRound } from "./schedule.ts";
@@ -215,4 +222,152 @@ test("matchupsView: anonymized songs (id + track only), null for missing sides, 
   for (const id of ["u-ana", "u-ben", "u-cyd", "u-dot", "u-eli", "u-fay", "u-gus"]) assert.ok(!json.includes(`"${id}"`), id);
   assert.ok(!json.includes("submitter note"));
   assert.deepEqual(matchupsView({ matchups: [] }, "u-ana"), { matchups: [], bye: null });
+});
+
+// ---- turnout (HTH-08): who a round waits on --------------------------------
+
+test("membersWithSong: current members with a song, in member order — a departed player's song doesn't count, nor does a second row", () => {
+  const subs = [sub("u-eli"), sub("u-ana"), sub("u-ana", "sub-ana-2"), sub("u-zed")]; // u-zed has left
+  assert.deepEqual(membersWithSong(FIVE, subs), ["u-ana", "u-eli"]);
+  assert.deepEqual(membersWithSong(FIVE, []), []);
+  assert.deepEqual(membersWithSong([], subs), []);
+});
+
+test("votingTurnout: eligible = members with a matchup to pick in; voted = picked one of the two songs in every one of them", () => {
+  const set: RoundMatchupSet = {
+    matchups: [m(0, ["u-ana", true], ["u-ben", true]), m(1, ["u-cyd", true], ["u-dot", true])],
+    bye: side("u-eli", true),
+  };
+  const [m0, m1] = set.matchups.map((x) => x.matchupId) as [string, string];
+  const pick = (matchupId: string, userId: string) => [matchupId, `sub-${userId.slice(2)}`] as const;
+  const turnout = votingTurnout(set, FIVE, [
+    { voterId: "u-eli", picks: Object.fromEntries([pick(m0, "u-ana"), pick(m1, "u-dot")]) }, // bye: both contests
+    { voterId: "u-ana", picks: Object.fromEntries([pick(m1, "u-cyd")]) }, // all of theirs
+    { voterId: "u-ben" }, // comments-only row: no picks at all
+    { voterId: "u-cyd", picks: Object.fromEntries([pick(m0, "u-eli")]) }, // not one of the pair's songs
+    // u-dot: no ballot
+  ]);
+  assert.deepEqual(turnout.eligible, FIVE, "everyone has a contest to judge");
+  assert.deepEqual(turnout.voted, ["u-ana", "u-eli"]);
+  assert.equal(everyoneEligibleVoted(turnout), false);
+  // The bye player missing one of their two picks hasn't voted.
+  const partial = votingTurnout(set, ["u-eli"], [{ voterId: "u-eli", picks: Object.fromEntries([pick(m0, "u-ben")]) }]);
+  assert.deepEqual(partial, { eligible: ["u-eli"], voted: [] });
+  // A departed voter's ballot is nobody's vote here (the tally still counts it).
+  assert.deepEqual(votingTurnout(set, ["u-ana"], [{ voterId: "u-zed", picks: Object.fromEntries([pick(m1, "u-cyd")]) }]).voted, []);
+});
+
+test("votingTurnout: the pair of the round's only contest has nothing to vote on — left out, their comments-only row is no vote; nobody able to vote → everyoneEligibleVoted", () => {
+  const set: RoundMatchupSet = {
+    matchups: [m(0, ["u-ana", true], ["u-ben", true]), m(1, ["u-cyd", true], ["u-dot", false])],
+    bye: side("u-eli", false),
+  };
+  const m0 = set.matchups[0]!.matchupId;
+  const ballots = [{ voterId: "u-ana" }, { voterId: "u-ben", picks: {} }];
+  const t = votingTurnout(set, FIVE, ballots);
+  assert.deepEqual(t, { eligible: ["u-cyd", "u-dot", "u-eli"], voted: [] });
+  const done = votingTurnout(set, FIVE, [
+    ...ballots,
+    ...["u-cyd", "u-dot", "u-eli"].map((voterId) => ({ voterId, picks: { [m0]: "sub-ben" } })),
+  ]);
+  assert.deepEqual(done.voted, ["u-cyd", "u-dot", "u-eli"]);
+  assert.equal(everyoneEligibleVoted(done), true);
+
+  // All walkovers / no contests: nobody can vote, so nobody is waited for.
+  const dead: RoundMatchupSet = { matchups: [m(0, ["u-ana", true], ["u-ben", false]), m(1, ["u-cyd", false], ["u-dot", false])] };
+  assert.deepEqual(votingTurnout(dead, FIVE, []), { eligible: [], voted: [] });
+  assert.equal(everyoneEligibleVoted(votingTurnout(dead, FIVE, [])), true);
+  // A two-player league: the one matchup is both players' own.
+  const duo: RoundMatchupSet = { matchups: [m(0, ["u-ana", true], ["u-ben", true])] };
+  assert.deepEqual(votingTurnout(duo, ["u-ana", "u-ben"], [{ voterId: "u-ana", picks: {} }]), { eligible: [], voted: [] });
+});
+
+test("votingTurnout over derived rounds: a departure shrinks a voter's set (an earlier full ballot still counts); a rejoin restores a contest the ballot never picked in (not voted until re-cast)", () => {
+  const subs = FIVE.map((id) => sub(id));
+  const { matchups, bye } = schedule();
+  const [first, second] = matchups as [{ matchupId: string; a: string; b: string }, { matchupId: string; a: string; b: string }];
+  const songOf = (id: string) => `sub-${id.slice(2)}`;
+
+  // Everyone a member: the bye player picks in both contests.
+  const full = deriveRoundMatchups(frozen(), ROUND, subs);
+  const byeBallot = { voterId: bye!, picks: { [first.matchupId]: songOf(first.a), [second.matchupId]: songOf(second.b) } };
+  assert.ok(votingTurnout(full, FIVE, [byeBallot]).voted.includes(bye!));
+
+  // first.b leaves mid-voting: their pair is a walkover, the bye now has one
+  // matchup to pick in, and the ballot they already cast still covers it.
+  const members = FIVE.filter((id) => id !== first.b);
+  const shrunk = deriveRoundMatchups(frozen({ memberIds: members }), ROUND, subs);
+  const t = votingTurnout(shrunk, members, [byeBallot]);
+  assert.ok(t.voted.includes(bye!));
+  assert.equal(t.eligible.includes(first.b), false, "a departed player is nobody the round waits for");
+  assert.equal(t.eligible.includes(second.a), false, "their set emptied: the only contest left is their own");
+
+  // A ballot cast while first.b was gone has no pick in their pair; once they
+  // rejoin, the pair is a contest again and that ballot no longer covers it.
+  const castWhileGone = { voterId: bye!, picks: { [second.matchupId]: songOf(second.a) } };
+  assert.ok(votingTurnout(shrunk, members, [castWhileGone]).voted.includes(bye!));
+  const rejoined = votingTurnout(full, FIVE, [castWhileGone]);
+  assert.ok(rejoined.eligible.includes(bye!));
+  assert.equal(rejoined.voted.includes(bye!), false, "must re-cast to pick in the restored contest");
+});
+
+test("votingPanelNames: everyone eligible (two+ contests) → every member named; one contest → only the viewer, if eligible, so the bye / walkover songs and the contest's pair stay anonymous", () => {
+  const two: RoundMatchupSet = {
+    matchups: [m(0, ["u-ana", true], ["u-ben", true]), m(1, ["u-cyd", true], ["u-dot", true])],
+    bye: side("u-eli", true),
+  };
+  const all = votingTurnout(two, FIVE, []);
+  for (const viewer of [...FIVE, "u-zed"]) assert.deepEqual(votingPanelNames(all, FIVE, viewer), FIVE, viewer);
+
+  // One contest (ana–ben) plus a walkover and the bye: cyd, dot and eli can
+  // vote; naming them would say ana and ben are the contest's pair.
+  const one: RoundMatchupSet = {
+    matchups: [m(0, ["u-ana", true], ["u-ben", true]), m(1, ["u-cyd", true], ["u-dot", false])],
+    bye: side("u-eli", true),
+  };
+  const t = votingTurnout(one, FIVE, []);
+  assert.deepEqual(t.eligible, ["u-cyd", "u-dot", "u-eli"]);
+  assert.deepEqual(votingPanelNames(t, FIVE, "u-eli"), ["u-eli"]);
+  assert.deepEqual(votingPanelNames(t, FIVE, "u-dot"), ["u-dot"]);
+  assert.deepEqual(votingPanelNames(t, FIVE, "u-ana"), [], "the contest's pair: nothing to vote on, in neither list");
+  assert.deepEqual(votingPanelNames(t, FIVE, "u-zed"), [], "a spectator");
+
+  // Nobody can vote: nobody is named.
+  const dead: RoundMatchupSet = { matchups: [m(0, ["u-ana", true], ["u-ben", false])] };
+  assert.deepEqual(votingPanelNames(votingTurnout(dead, ["u-ana", "u-ben"], []), ["u-ana", "u-ben"], "u-ana"), []);
+});
+
+test("ballotAuthorVisible: the feed names other members' ballots only while everyone can vote (votersNameable); otherwise each viewer sees just their own — a three-player round's bye voter isn't attributable", () => {
+  const two: RoundMatchupSet = {
+    matchups: [m(0, ["u-ana", true], ["u-ben", true]), m(1, ["u-cyd", true], ["u-dot", true])],
+    bye: side("u-eli", true),
+  };
+  const all = votingTurnout(two, FIVE, []);
+  assert.equal(votersNameable(all, FIVE), true);
+  for (const viewer of [...FIVE, "u-zed"]) {
+    for (const voter of [...FIVE, "u-zed"]) assert.equal(ballotAuthorVisible(all, FIVE, viewer, voter), true, `${viewer} sees ${voter}`);
+  }
+
+  // Three players: one contest (ana–ben) and eli's bye. Only eli can vote, so
+  // eli's entry next to "1 of 1" would say eli has the bye; ana's comments-only
+  // entry next to "0 of 1" would say ana is in the contest.
+  const TRIO = ["u-ana", "u-ben", "u-eli"];
+  const trio: RoundMatchupSet = { matchups: [m(0, ["u-ana", true], ["u-ben", true])], bye: side("u-eli", true) };
+  const t = votingTurnout(trio, TRIO, [{ voterId: "u-eli", picks: { [trio.matchups[0]!.matchupId]: "sub-ana" } }, { voterId: "u-ana" }]);
+  assert.deepEqual(t, { eligible: ["u-eli"], voted: ["u-eli"] });
+  assert.equal(votersNameable(t, TRIO), false);
+  for (const viewer of [...TRIO, "u-zed"]) {
+    for (const voter of TRIO) {
+      assert.equal(ballotAuthorVisible(t, TRIO, viewer, voter), viewer === voter, `${viewer} sees ${voter}'s ballot?`);
+    }
+  }
+  // A departed voter's ballot is no exception.
+  assert.equal(ballotAuthorVisible(t, TRIO, "u-ben", "u-gone"), false);
+
+  // Nobody can vote: only one's own ballot.
+  const dead: RoundMatchupSet = { matchups: [m(0, ["u-ana", true], ["u-ben", false])] };
+  const none = votingTurnout(dead, ["u-ana", "u-ben"], [{ voterId: "u-ben" }]);
+  assert.equal(votersNameable(none, ["u-ana", "u-ben"]), false);
+  assert.equal(ballotAuthorVisible(none, ["u-ana", "u-ben"], "u-ana", "u-ben"), false);
+  assert.equal(ballotAuthorVisible(none, ["u-ana", "u-ben"], "u-ben", "u-ben"), true);
 });

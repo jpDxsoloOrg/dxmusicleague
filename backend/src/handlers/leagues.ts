@@ -10,8 +10,10 @@ import { badRequest, conflict, forbidden, notFound } from "../domain/errors.ts";
 import { sortStandings } from "../domain/standings.ts";
 import { SEASON_LOCKED_MESSAGE, lockedOutOfSeason, seasonLocked } from "../domain/freeze.ts";
 import type { RandomInt } from "../domain/freeze.ts";
+import { ballotAuthorVisible, membersWithSong, votingPanelNames } from "../domain/matchups.ts";
 import type { Repository, UserDirectory } from "../data/repository.ts";
 import { autoAdvanceRound } from "./progression.ts";
+import { loadVotingTurnout } from "./matchups.ts";
 
 export interface Deps {
   repo: Repository;
@@ -57,16 +59,24 @@ interface Standing {
 /** Who's done vs. pending for the current phase. Names only — no tracks, no
  *  point allocations — so this leaks nothing about anyone's pick or vote. */
 interface RoundParticipation {
+  /** Head-to-head voting: only while every member has a matchup to pick in;
+   *  otherwise just the caller, if they can vote (HTH-08, `votingPanelNames`
+   *  in domain/matchups.ts) — so a member in neither list has nothing to vote
+   *  on this round. */
   submitted: UserView[];
   waiting: UserView[];
   /** Units done vs. expected: songs (members × allowance) while submitting,
-   *  ballots (one per member) while voting. Drives the "X of N in" count. */
+   *  ballots (one per member) while voting. Drives the "X of N in" count.
+   *  Head-to-head: members with their song; members who've picked in every
+   *  matchup they can vote in, of those with one to pick in. */
   doneCount: number;
   totalCount: number;
 }
 
 /** One row of the current round's activity feed — who did what, when. Derived
- *  on read from submission/ballot timestamps (no event log). Names only. */
+ *  on read from submission/ballot timestamps (no event log). Names only.
+ *  Head-to-head voting: other members' ballots are left out while the
+ *  who-voted panel withholds names (HTH-08, `ballotAuthorVisible`). */
 interface ActivityItem {
   id: string;
   user: UserView;
@@ -152,9 +162,12 @@ function timeAgo(iso: string): string {
 }
 
 /** Real completion %: for a voting round, ballots-cast / members; for a
- *  submitting round, submissions / total slots; otherwise 0/100 by status. */
-async function completionPct(repo: Repository, league: League, round: Round | undefined): Promise<number> {
+ *  submitting round, submissions / total slots; otherwise 0/100 by status.
+ *  Head-to-head leagues count people instead (`headToHeadCompletionPct`). */
+async function completionPct(deps: Deps, league: League, round: Round | undefined): Promise<number> {
   if (!round) return 0;
+  if (leagueFormat(league) === "headToHead") return headToHeadCompletionPct(deps, league, round);
+  const repo = deps.repo;
   const members = league.memberIds.length || 1;
   if (round.status === "submitting") {
     const subs = await repo.getSubmissionsForRound(round.id);
@@ -164,6 +177,26 @@ async function completionPct(repo: Repository, league: League, round: Round | un
   if (round.status === "voting") {
     const ballots = await repo.getBallotsForRound(round.id);
     return Math.round((ballots.length / members) * 100);
+  }
+  return round.status === "revealed" || round.status === "complete" ? 100 : 0;
+}
+
+/** Head-to-head completion % (HTH-08) — the same turnout progression waits
+ *  on (domain/matchups.ts): while submitting, the members who have their one
+ *  song (a departed player's withdrawn song doesn't count); while voting, the
+ *  members who've picked in every matchup they can vote in, out of those who
+ *  have one to pick in — members with nothing to vote on are left out, or the
+ *  % could never reach 100. Nobody able to vote → 100 (nothing to wait for).
+ *  Other phases: 0/100 by status, as for points. */
+async function headToHeadCompletionPct(deps: Deps, league: League, round: Round): Promise<number> {
+  const pct = (done: number, total: number) => (total === 0 ? 100 : Math.min(100, Math.round((done / total) * 100)));
+  if (round.status === "submitting") {
+    const subs = await deps.repo.getSubmissionsForRound(round.id);
+    return league.memberIds.length === 0 ? 0 : pct(membersWithSong(league.memberIds, subs).length, league.memberIds.length);
+  }
+  if (round.status === "voting") {
+    const turnout = await loadVotingTurnout(deps, league, round);
+    return pct(turnout.voted.length, turnout.eligible.length);
   }
   return round.status === "revealed" || round.status === "complete" ? 100 : 0;
 }
@@ -444,7 +477,7 @@ export async function listMyLeagues(deps: Deps, caller: string): Promise<LeagueS
         currentRound,
         // The owner's planned count; fall back to created rounds for legacy leagues.
         totalRounds: league.roundCount || rounds.length,
-        completionPct: await completionPct(deps.repo, league, currentRound),
+        completionPct: await completionPct(deps, league, currentRound),
         members: await toUserViews(deps.users, league.memberIds),
         finished: isLeagueFinished(league, rounds),
       };
@@ -489,16 +522,42 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
   // while submitting, ballots while voting. With a multi-song allowance a
   // member counts as done once they've used every slot. The same reads feed
   // the activity list ("X submitted a song", "Y cast their votes").
+  //
+  // Head-to-head (HTH-08) counts people, as progression and the completion %
+  // do (domain/matchups.ts "turnout"): "X of N songs in" counts members with
+  // their one song (a departed player's withdrawn song doesn't count), and
+  // "X of N ballots in" counts the members with a matchup to pick in — done
+  // once they've picked in every one of them. A member with nothing to vote
+  // on (the pair of the round's only contest) isn't counted, rather than
+  // shown waiting on a vote they can't cast. The voting panel's NAMES are
+  // the eligible voters only while that is every member; otherwise naming
+  // them would unmask the bye / walkover songs and each contest player's
+  // opponent, so the panel names just the caller, if eligible
+  // (`votingPanelNames`, see "Anonymity" there). A member in neither list has
+  // nothing to vote on. The activity feed follows the same rule: while the
+  // panel withholds names, its "cast their votes" entries show the caller's
+  // own ballot only — next to the voted / eligible count, any other named
+  // ballot would say which side of the only contest its author is on
+  // (`ballotAuthorVisible`). Otherwise every ballot shows, comments-only
+  // rows included, as for a standard league.
   let submissionProgress: RoundParticipation | undefined;
   let votingProgress: RoundParticipation | undefined;
+  let showBallotBy = (_voterId: string) => true;
   const activity: ActivityItem[] = [];
   if (currentRound && currentRound.status !== "draft") {
     const [subs, ballots] = await Promise.all([
       deps.repo.getSubmissionsForRound(currentRound.id),
       deps.repo.getBallotsForRound(currentRound.id),
     ]);
+    const headToHead = leagueFormat(league) === "headToHead";
 
-    if (currentRound.status === "submitting") {
+    if (currentRound.status === "submitting" && headToHead) {
+      const doneIds = new Set(membersWithSong(league.memberIds, subs));
+      submissionProgress = await splitByDone(deps.users, league.memberIds, doneIds, {
+        done: doneIds.size,
+        total: league.memberIds.length,
+      });
+    } else if (currentRound.status === "submitting") {
       const allowance = league.settings.submissionsPerPlayer || 1;
       const countByUser = new Map<string, number>();
       for (const s of subs) countByUser.set(s.userId, (countByUser.get(s.userId) ?? 0) + 1);
@@ -507,6 +566,14 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
         done: subs.length,
         total: league.memberIds.length * allowance,
       });
+    } else if (currentRound.status === "voting" && headToHead) {
+      const turnout = await loadVotingTurnout(deps, league, currentRound, { submissions: subs, ballots });
+      const named = votingPanelNames(turnout, league.memberIds, caller);
+      votingProgress = await splitByDone(deps.users, named, new Set(turnout.voted), {
+        done: turnout.voted.length,
+        total: turnout.eligible.length,
+      });
+      showBallotBy = (voterId) => ballotAuthorVisible(turnout, league.memberIds, caller, voterId);
     } else if (currentRound.status === "voting") {
       votingProgress = await splitByDone(deps.users, league.memberIds, new Set(ballots.map((b) => b.voterId)), {
         done: ballots.length,
@@ -520,7 +587,7 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
         .filter((s) => s.submittedAt)
         .map((s) => ({ userId: s.userId, text: "submitted a song", at: s.submittedAt! })),
       ...ballots
-        .filter((b) => b.castAt)
+        .filter((b) => b.castAt && showBallotBy(b.voterId))
         .map((b) => ({ userId: b.voterId, text: "cast their votes", at: b.castAt })),
     ]
       .sort((a, b) => b.at.localeCompare(a.at))

@@ -13,6 +13,11 @@ import type { RandomInt } from "../domain/freeze.ts";
 import { DEFAULT_LEAGUE_SETTINGS, H2H_FORCED_SETTINGS, applyFormatSettings, leagueFormat } from "../domain/types.ts";
 import type { League, Round } from "../domain/types.ts";
 import { buildRoutes, matchRoute } from "../http/routes.ts";
+import { votableMatchups } from "../domain/matchups.ts";
+import type { RoundMatchup, RoundMatchupSet } from "../domain/matchups.ts";
+import { submitSong } from "./submissions.ts";
+import { castBallot, getResults, revealRound } from "./voting.ts";
+import { listMatchups, loadRoundMatchups } from "./matchups.ts";
 
 function league(over: Partial<League> & Pick<League, "id" | "name" | "visibility">): League {
   return {
@@ -1037,4 +1042,430 @@ test("standard league: HTH-03 leaves the join window exactly as it was", async (
     assert.equal(stored.h2hParticipants, undefined);
     assert.equal(stored.roundCount, 8); // the owner's count, untouched
   }
+});
+
+// ---- head-to-head progress, departures and the finished flow (HTH-08) ----
+// Driven through the real handlers (create → join → open round 1 = freeze →
+// submit → vote → reveal) over MemoryRepository, seeded freeze RNG, manual
+// leagues (the timed advance is in progression.test.ts). Seed users, so names
+// resolve (u-me = the owner).
+
+const DUEL_OWNER = "u-me";
+const DUELISTS = ["u-me", "u-sarah", "u-james", "u-mia"];
+
+interface Duel {
+  deps: Deps;
+  repo: MemoryRepository;
+  leagueId: string;
+  inviteCode: string;
+}
+
+/** A manual head-to-head league of `players` (owner first). */
+async function duel(players: readonly string[] = DUELISTS): Promise<Duel> {
+  const repo = new MemoryRepository(false);
+  const deps: Deps = { repo, users: new MemoryUserDirectory(), randomInt: seededRng(20261107) };
+  const lg = await createLeague(deps, players[0]!, { name: "Duel Club", musicProvider: "mock", format: "headToHead", roundCount: 3 });
+  for (const p of players.slice(1)) await joinLeague(deps, p, lg.inviteCode);
+  return { deps, repo, leagueId: lg.id, inviteCode: lg.inviteCode };
+}
+
+async function openDuelRound(f: Duel): Promise<Round> {
+  const r = await createRound(f.deps, DUEL_OWNER, f.leagueId, { theme: "Openers" });
+  return updateRound(f.deps, DUEL_OWNER, f.leagueId, r.id, { status: "submitting" });
+}
+
+const duelSubmit = (f: Duel, roundId: string, userId: string) =>
+  submitSong(f.deps, userId, roundId, {
+    track: { id: `t-${userId}-${roundId}`, provider: "mock", providerTrackId: `t-${userId}-${roundId}`, title: `${userId} anthem`, artists: [`Artist ${userId}`] },
+  });
+
+const advance = (f: Duel, roundId: string, status: "previewing" | "voting") =>
+  updateRound(f.deps, DUEL_OWNER, f.leagueId, roundId, { status });
+
+/** The round's server-side matchups (user ids + songs) — the tests' ground truth. */
+async function duelSet(f: Duel, roundId: string): Promise<RoundMatchupSet> {
+  return loadRoundMatchups(f.deps, (await f.repo.getLeague(f.leagueId))!, (await f.repo.getRound(roundId))!);
+}
+
+/** `voter`'s complete picks; `side` chooses per matchup (default side a). */
+const duelPicks = (set: RoundMatchupSet, voter: string, side: (m: RoundMatchup) => "a" | "b" = () => "a") =>
+  Object.fromEntries(votableMatchups(set, voter).map((m) => [m.matchupId, m[side(m)].submission!.id]));
+
+async function duelRecords(f: Duel): Promise<Map<string, string>> {
+  const rows = await f.repo.getStandings(f.leagueId);
+  return new Map(rows.map((r) => [r.userId, `${r.wins}-${r.losses}-${r.draws}`]));
+}
+
+/** The owner's dashboard completion % for the league. */
+async function pctOf(f: Duel, caller = DUEL_OWNER): Promise<number> {
+  return (await listMyLeagues(f.deps, caller)).find((s) => s.league.id === f.leagueId)!.completionPct;
+}
+
+const ids = (users: Array<{ id: string }> | undefined) => users?.map((u) => u.id);
+
+/** The who-voted panel as `viewer` gets it: the names it shows (done /
+ *  waiting) and its "X of N" counts. */
+async function votingPanelAs(f: Duel, viewer: string) {
+  const p = (await getLeagueDetail(f.deps, viewer, f.leagueId)).votingProgress;
+  assert.ok(p, `${viewer} gets a voting panel`);
+  return { done: ids(p.submitted), waiting: ids(p.waiting), counts: [p.doneCount, p.totalCount] };
+}
+
+/** Whose "cast their votes" entries `viewer`'s activity feed shows (sorted). */
+async function ballotFeedAs(f: Duel, viewer: string): Promise<string[]> {
+  const { activity } = await getLeagueDetail(f.deps, viewer, f.leagueId);
+  return activity.filter((a) => a.text === "cast their votes").map((a) => a.user.id).sort();
+}
+
+test("H2H voting progress: completion % and the who-voted counts include only members with a matchup to pick in; with one contest the panel and the activity feed name nobody's ballot but the viewer's (no walkover song attributable, even from one snapshot); a comments-only ballot isn't a vote; every ballot shows once revealed", async () => {
+  const f = await duel();
+  const round = await openDuelRound(f);
+  const [contest, walk] = (await duelSet(f, round.id)).matchups as [RoundMatchup, RoundMatchup];
+  for (const p of [contest.a.userId, contest.b.userId, walk.a.userId]) await duelSubmit(f, round.id, p);
+  await advance(f, round.id, "previewing");
+  await advance(f, round.id, "voting");
+  const set = await duelSet(f, round.id);
+  const voters = DUELISTS.filter((id) => id === walk.a.userId || id === walk.b.userId); // member order
+
+  const detail0 = await getLeagueDetail(f.deps, DUEL_OWNER, f.leagueId);
+  assert.equal(detail0.currentRound?.status, "voting");
+  // Only the walkover pair can vote (in the one contest). Naming them would
+  // name the contest's pair too, and so whose walkover song it is (the
+  // no-show was named by the submissions panel): each voter sees only
+  // themselves; the contest's pair and a spectator see no names. Same counts.
+  for (const viewer of [...DUELISTS, "u-luna"]) {
+    assert.deepEqual(await votingPanelAs(f, viewer), { done: [], waiting: voters.includes(viewer) ? [viewer] : [], counts: [0, 2] }, viewer);
+  }
+  assert.equal(await pctOf(f), 0);
+
+  // One of the contest's players comments on their opponent's song: a ballot row, not a vote.
+  const opponentSong = set.matchups.find((m) => m.matchupId === contest.matchupId)!.b.submission!.id;
+  await castBallot(f.deps, contest.a.userId, round.id, { comments: { [opponentSong]: "may the best song win" } });
+  assert.deepEqual(await votingPanelAs(f, contest.a.userId), { done: [], waiting: [], counts: [0, 2] }, "nothing to vote on: in neither list");
+  assert.equal(await pctOf(f), 0);
+  // Its feed entry would be a ballot that didn't move the count, i.e. a
+  // contest player's: only its author sees it.
+  for (const viewer of [...DUELISTS, "u-luna"]) {
+    assert.deepEqual(await ballotFeedAs(f, viewer), viewer === contest.a.userId ? [viewer] : [], viewer);
+  }
+
+  await castBallot(f.deps, voters[0]!, round.id, { picks: duelPicks(set, voters[0]!) });
+  assert.equal(await pctOf(f), 50);
+  assert.deepEqual(await votingPanelAs(f, voters[0]!), { done: [voters[0]], waiting: [], counts: [1, 2] });
+  assert.deepEqual(await votingPanelAs(f, voters[1]!), { done: [], waiting: [voters[1]], counts: [1, 2] });
+  // One snapshot of "1 of 2" next to "<voter> cast their votes" would name a
+  // member of the walkover pair, and with the no-show named by the
+  // submissions feed, attribute the walkover song. Nobody else sees it.
+  for (const viewer of [...DUELISTS, "u-luna"]) {
+    const detail = await getLeagueDetail(f.deps, viewer, f.leagueId);
+    const seen = detail.activity.filter((a) => a.text === "cast their votes").map((a) => a.user.id);
+    assert.deepEqual(seen, [contest.a.userId, voters[0]!].filter((id) => id === viewer), viewer);
+    if (viewer !== voters[0]) assert.ok(!JSON.stringify(detail.votingProgress).includes(voters[0]!), viewer);
+  }
+  await castBallot(f.deps, voters[1]!, round.id, { picks: duelPicks(set, voters[1]!) });
+  assert.equal(await pctOf(f), 100, "a standard count (2 voted of 4 members) would say 50");
+  for (const viewer of [...DUELISTS, "u-luna"]) {
+    assert.deepEqual(await votingPanelAs(f, viewer), { done: voters.includes(viewer) ? [viewer] : [], waiting: [], counts: [2, 2] }, viewer);
+  }
+  const detail = await getLeagueDetail(f.deps, DUEL_OWNER, f.leagueId);
+  assert.equal(detail.currentRound?.status, "voting", "a manual league waits for the owner's reveal");
+  // Activity: each viewer's own ballot only; the submissions show as ever.
+  for (const viewer of [...DUELISTS, "u-luna"]) {
+    assert.deepEqual(await ballotFeedAs(f, viewer), [contest.a.userId, ...voters].filter((id) => id === viewer), viewer);
+  }
+  assert.equal(detail.activity.filter((a) => a.text === "submitted a song").length, 3);
+  const json = JSON.stringify([detail.activity, detail.votingProgress]);
+  assert.ok(!json.includes("anthem") && !json.includes(contest.matchupId), "no tracks or picks leak");
+
+  await revealRound(f.deps, DUEL_OWNER, round.id);
+  assert.equal(await pctOf(f), 100);
+  // Revealed: the matchups and their voters are public, and so is the feed.
+  for (const viewer of [DUEL_OWNER, "u-luna"]) {
+    assert.deepEqual(await ballotFeedAs(f, viewer), [contest.a.userId, ...voters].sort(), viewer);
+  }
+});
+
+test("H2H submitting progress counts members with their song: a kicked player's withdrawn song inflates neither the count nor the %, and their pair is a walkover at the reveal", async () => {
+  const f = await duel();
+  const round = await openDuelRound(f);
+  const [first] = (await duelSet(f, round.id)).matchups as [RoundMatchup];
+  const kicked = first.a.userId === DUEL_OWNER ? first.b.userId : first.a.userId;
+  const stayer = kicked === first.a.userId ? first.b.userId : first.a.userId;
+  const others = DUELISTS.filter((id) => id !== kicked);
+
+  await duelSubmit(f, round.id, kicked);
+  await duelSubmit(f, round.id, others[0]!);
+  let detail = await getLeagueDetail(f.deps, DUEL_OWNER, f.leagueId);
+  assert.deepEqual([detail.submissionProgress?.doneCount, detail.submissionProgress?.totalCount], [2, 4]);
+  assert.equal(await pctOf(f), 50);
+
+  await leaveLeague(f.deps, DUEL_OWNER, f.leagueId, kicked); // kicked mid-round, song already in
+  detail = await getLeagueDetail(f.deps, DUEL_OWNER, f.leagueId);
+  assert.deepEqual([detail.submissionProgress?.doneCount, detail.submissionProgress?.totalCount], [1, 3], "not 2 of 3");
+  assert.deepEqual(ids(detail.submissionProgress?.submitted), [others[0]]);
+  assert.equal(await pctOf(f), 33);
+
+  for (const p of others.slice(1)) await duelSubmit(f, round.id, p);
+  assert.equal(await pctOf(f), 100);
+  await advance(f, round.id, "previewing");
+  await advance(f, round.id, "voting");
+  const set = await duelSet(f, round.id);
+  for (const voter of others) {
+    const picks = duelPicks(set, voter);
+    if (Object.keys(picks).length > 0) await castBallot(f.deps, voter, round.id, { picks });
+  }
+  const payload = await revealRound(f.deps, DUEL_OWNER, round.id);
+  assert.ok(!Array.isArray(payload));
+  const theirs = payload.matchups.find((m) => m.matchupId === first.matchupId)!;
+  assert.equal(theirs.outcome, "walkover");
+  assert.equal(theirs.winnerUserId, stayer);
+  const board = await duelRecords(f);
+  assert.equal(board.get(stayer), "1-0-0");
+  assert.equal(board.get(kicked), "0-0-0", "a departed player takes no L");
+});
+
+test("H2H kick mid-voting: the kicked player's pair resolves as a walkover at the reveal, and the voters' sets shrink with it — the round waits only for who can still vote; ballots stop being named once only one contest is left", async () => {
+  const f = await duel();
+  const round = await openDuelRound(f);
+  for (const p of DUELISTS) await duelSubmit(f, round.id, p);
+  await advance(f, round.id, "previewing");
+  await advance(f, round.id, "voting");
+  const before = await duelSet(f, round.id);
+  // Two contests: everyone has the other matchup to judge, so the panel names
+  // every member (eligibility says nothing about who plays whom).
+  assert.deepEqual(await votingPanelAs(f, "u-luna"), { done: [], waiting: DUELISTS, counts: [0, 4] });
+
+  // Kick a player from the matchup the owner isn't in.
+  const theirs = before.matchups.find((m) => m.a.userId !== DUEL_OWNER && m.b.userId !== DUEL_OWNER)!;
+  const owners = before.matchups.find((m) => m !== theirs)!;
+  const [kicked, stayer] = [theirs.a.userId, theirs.b.userId];
+  // While everyone can vote, the feed names every ballot.
+  await castBallot(f.deps, DUEL_OWNER, round.id, { picks: duelPicks(before, DUEL_OWNER) });
+  assert.deepEqual(await ballotFeedAs(f, "u-luna"), [DUEL_OWNER]);
+  await leaveLeague(f.deps, DUEL_OWNER, f.leagueId, kicked);
+
+  // Their pair is now a walkover: the owner's pair has nothing left to vote
+  // on, and the stayer's only vote is in the owner's matchup. Only the
+  // stayer is told they're the one the round waits on — naming them to the
+  // league would attribute the walkover song.
+  assert.deepEqual(await votingPanelAs(f, stayer), { done: [], waiting: [stayer], counts: [0, 1] });
+  for (const viewer of [owners.a.userId, owners.b.userId, kicked]) {
+    assert.deepEqual(await votingPanelAs(f, viewer), { done: [], waiting: [], counts: [0, 1] }, viewer);
+  }
+  assert.equal(await pctOf(f), 0, "the owner's ballot picked in the pair that's now a walkover: no vote");
+  const now = await duelSet(f, round.id);
+  await castBallot(f.deps, stayer, round.id, { picks: duelPicks(now, stayer, () => "b") });
+  assert.equal(await pctOf(f), 100);
+  // Now one contest: each viewer's feed names only their own ballot (the
+  // stayer's entry next to "1 of 1" would attribute the walkover song).
+  for (const viewer of [...DUELISTS, "u-luna"]) {
+    assert.deepEqual(await ballotFeedAs(f, viewer), [DUEL_OWNER, stayer].filter((id) => id === viewer), viewer);
+  }
+
+  const payload = await revealRound(f.deps, DUEL_OWNER, round.id);
+  assert.ok(!Array.isArray(payload));
+  const walk = payload.matchups.find((m) => m.matchupId === theirs.matchupId)!;
+  assert.deepEqual([walk.outcome, walk.winnerUserId, walk.a.departed], ["walkover", stayer, true]);
+  const decided = payload.matchups.find((m) => m.matchupId === owners.matchupId)!;
+  assert.deepEqual([decided.outcome, decided.winnerUserId], ["win", owners.b.userId], "the stayer's pick decided it");
+  const board = await duelRecords(f);
+  assert.equal(board.get(stayer), "1-0-0");
+  assert.equal(board.get(kicked), "0-0-0");
+  assert.equal(board.get(owners.b.userId), "1-0-0");
+  assert.equal(board.get(owners.a.userId), "0-1-0");
+});
+
+test("three-player H2H league: the who-voted panel and the activity feed name nobody's ballot but the viewer's, so the bye song and each contest player's opponent stay anonymous until the reveal", async () => {
+  const trio = ["u-me", "u-sarah", "u-james"];
+  const f = await duel(trio);
+  const round = await openDuelRound(f);
+  for (const p of trio) await duelSubmit(f, round.id, p);
+  await advance(f, round.id, "previewing");
+  assert.equal((await advance(f, round.id, "voting")).status, "voting");
+  const set = await duelSet(f, round.id);
+  const [contest] = set.matchups as [RoundMatchup];
+  const byePlayer = set.bye!.userId;
+
+  // GET /matchups: one contest + an anonymous bye song; only `isMine` says anything about identity.
+  const view = await listMatchups(f.deps, contest.a.userId, round.id);
+  assert.deepEqual([view.matchups.length, view.matchups[0]!.isMine, view.bye !== null], [1, true, true]);
+  // The panel must not undo that: only the bye player can vote, and naming
+  // them would attribute the bye song (and tell each contest player who
+  // their opponent is). Only the bye player sees their own name.
+  assert.deepEqual(await votingPanelAs(f, byePlayer), { done: [], waiting: [byePlayer], counts: [0, 1] });
+  for (const viewer of [contest.a.userId, contest.b.userId, "u-luna"]) {
+    const panel = await votingPanelAs(f, viewer);
+    assert.deepEqual(panel, { done: [], waiting: [], counts: [0, 1] }, viewer);
+    const json = JSON.stringify((await getLeagueDetail(f.deps, viewer, f.leagueId)).votingProgress);
+    assert.ok(!json.includes(byePlayer), `${viewer} isn't told who the bye is`);
+  }
+
+  // A contest player's comments-only row: its entry, next to a count that
+  // didn't move, would say its author is in the contest.
+  await castBallot(f.deps, contest.a.userId, round.id, { comments: { [contest.b.submission!.id]: "good luck" } });
+
+  await castBallot(f.deps, byePlayer, round.id, { picks: duelPicks(set, byePlayer) });
+  assert.deepEqual(await votingPanelAs(f, byePlayer), { done: [byePlayer], waiting: [], counts: [1, 1] });
+  assert.deepEqual(await votingPanelAs(f, contest.a.userId), { done: [], waiting: [], counts: [1, 1] });
+  assert.equal(await pctOf(f), 100);
+  // One snapshot: "1 of 1 ballots in" and "<bye player> cast their votes"
+  // side by side would name the bye. Each viewer's feed shows their own ballot only.
+  assert.deepEqual(await ballotFeedAs(f, byePlayer), [byePlayer]);
+  assert.deepEqual(await ballotFeedAs(f, contest.a.userId), [contest.a.userId]);
+  for (const viewer of [contest.b.userId, "u-luna"]) assert.deepEqual(await ballotFeedAs(f, viewer), [], viewer);
+  for (const viewer of [contest.a.userId, contest.b.userId, "u-luna"]) {
+    const detail = await getLeagueDetail(f.deps, viewer, f.leagueId);
+    const ballotsNamed = JSON.stringify([detail.votingProgress, detail.activity.filter((a) => a.text !== "submitted a song")]);
+    assert.ok(!ballotsNamed.includes(byePlayer), `${viewer} isn't told who voted (the bye)`);
+  }
+});
+
+test("H2H manual league, kick mid-voting leaves nobody able to vote: the round stays in voting for the owner (0 of 0, 100%), and the reveal banks the stayer's walkover W with no L for the kicked player", async () => {
+  const trio = ["u-me", "u-sarah", "u-james"];
+  const f = await duel(trio);
+  const round = await openDuelRound(f);
+  for (const p of trio) await duelSubmit(f, round.id, p);
+  await advance(f, round.id, "previewing");
+  await advance(f, round.id, "voting");
+  const [contest] = (await duelSet(f, round.id)).matchups as [RoundMatchup];
+  const kicked = contest.a.userId === DUEL_OWNER ? contest.b.userId : contest.a.userId;
+  const stayer = kicked === contest.a.userId ? contest.b.userId : contest.a.userId;
+  assert.equal(await pctOf(f), 0, "the bye player has the contest to judge");
+
+  await leaveLeague(f.deps, DUEL_OWNER, f.leagueId, kicked);
+  // The only contest is now a walkover: nobody has anything to vote on.
+  const detail = await getLeagueDetail(f.deps, DUEL_OWNER, f.leagueId);
+  assert.equal(detail.currentRound?.status, "voting", "a manual league isn't advanced by reads");
+  for (const viewer of trio.filter((id) => id !== kicked)) {
+    assert.deepEqual(await votingPanelAs(f, viewer), { done: [], waiting: [], counts: [0, 0] }, viewer);
+  }
+  assert.equal(await pctOf(f), 100, "nothing left to wait for: only the reveal");
+
+  const payload = await revealRound(f.deps, DUEL_OWNER, round.id);
+  assert.ok(!Array.isArray(payload));
+  assert.deepEqual([payload.matchups[0]!.outcome, payload.matchups[0]!.winnerUserId], ["walkover", stayer]);
+  const board = await duelRecords(f);
+  assert.equal(board.get(stayer), "1-0-0");
+  assert.equal(board.get(kicked), "0-0-0", "a departed player takes no L");
+});
+
+test("H2H opening voting on a round nobody can vote in, raced by a second open: one PATCH reveals with its edits, the other gets 409 (its edits never landed), and the W/L/D is banked once", async () => {
+  const f = await duel(["u-me", "u-sarah"]);
+  const round = await openDuelRound(f);
+  for (const p of ["u-me", "u-sarah"]) await duelSubmit(f, round.id, p);
+  await advance(f, round.id, "previewing");
+
+  const outcomes = await Promise.allSettled(
+    ["Theme A", "Theme B"].map((theme) => updateRound(f.deps, DUEL_OWNER, f.leagueId, round.id, { status: "voting", theme })),
+  );
+  const won = outcomes.filter((o): o is PromiseFulfilledResult<Round> => o.status === "fulfilled");
+  const lost = outcomes.filter((o): o is PromiseRejectedResult => o.status === "rejected");
+  assert.equal(won.length, 1);
+  assert.equal(lost.length, 1);
+  assert.ok(isStatus(409)(lost[0]!.reason), "not a 200 carrying the other request's round");
+  assert.equal(won[0]!.value.status, "revealed");
+  const stored = (await f.repo.getRound(round.id))!;
+  assert.deepEqual([stored.status, stored.theme], ["revealed", won[0]!.value.theme]);
+  assert.deepEqual(Object.fromEntries(await duelRecords(f)), { "u-me": "0-0-1", "u-sarah": "0-0-1" });
+});
+
+test("two-player H2H league end to end: open → both submit → opening voting goes straight to the reveal (nobody can vote: a 0–0 draw) → finished at 100%, rematch offered", async () => {
+  const f = await duel(["u-me", "u-sarah"]);
+  const round = await openDuelRound(f);
+  assert.equal((await f.repo.getLeague(f.leagueId))!.roundCount, 1, "two players: a one-round season");
+  for (const p of ["u-me", "u-sarah"]) await duelSubmit(f, round.id, p);
+  assert.equal(await pctOf(f), 100);
+  await advance(f, round.id, "previewing");
+
+  const opened = await advance(f, round.id, "voting");
+  assert.equal(opened.status, "revealed", "never sits in voting");
+  assert.equal((await f.repo.getRound(round.id))!.status, "revealed");
+  assert.deepEqual(Object.fromEntries(await duelRecords(f)), { "u-me": "0-0-1", "u-sarah": "0-0-1" });
+  const results = await getResults(f.deps, "u-sarah", round.id);
+  assert.ok(!Array.isArray(results));
+  assert.deepEqual(results.matchups.map((m) => [m.outcome, m.a.votes, m.b.votes]), [["draw", 0, 0]]);
+
+  const detail = await getLeagueDetail(f.deps, DUEL_OWNER, f.leagueId);
+  assert.equal(detail.finished, true);
+  assert.equal(await pctOf(f), 100);
+  assert.equal((await listMyLeagues(f.deps, "u-sarah"))[0]!.finished, true);
+  await assert.rejects(revealRound(f.deps, DUEL_OWNER, round.id), isStatus(400), "already revealed — nothing to bank twice");
+  assert.deepEqual(Object.fromEntries(await duelRecords(f)), { "u-me": "0-0-1", "u-sarah": "0-0-1" });
+  const clone = await rematchLeague(f.deps, DUEL_OWNER, f.leagueId);
+  assert.equal(clone.format, "headToHead");
+});
+
+test("two-player H2H league with a no-show: the owner opening voting reveals it on the spot and banks the walkover W/L", async () => {
+  const f = await duel(["u-me", "u-sarah"]);
+  const round = await openDuelRound(f);
+  await duelSubmit(f, round.id, "u-sarah");
+  assert.equal(await pctOf(f), 50);
+  await advance(f, round.id, "previewing");
+  // The PATCH may carry edits; they land with the reveal.
+  const opened = await updateRound(f.deps, DUEL_OWNER, f.leagueId, round.id, { status: "voting", theme: "Renamed" });
+  assert.equal(opened.status, "revealed");
+  const stored = (await f.repo.getRound(round.id))!;
+  assert.deepEqual([stored.status, stored.theme], ["revealed", "Renamed"]);
+  assert.deepEqual(Object.fromEntries(await duelRecords(f)), { "u-me": "0-1-0", "u-sarah": "1-0-0" });
+  const detail = await getLeagueDetail(f.deps, DUEL_OWNER, f.leagueId);
+  assert.equal(detail.finished, true);
+  assert.equal(detail.standings[0]?.user.id, "u-sarah", "the wrap-up winner");
+});
+
+test("H2H opening voting: a round with someone to vote stays in voting; a standard round with no songs stays in voting as before", async () => {
+  const f = await duel();
+  const round = await openDuelRound(f);
+  const [contest] = (await duelSet(f, round.id)).matchups as [RoundMatchup];
+  for (const p of [contest.a.userId, contest.b.userId]) await duelSubmit(f, round.id, p);
+  await advance(f, round.id, "previewing");
+  assert.equal((await advance(f, round.id, "voting")).status, "voting", "the other pair can judge the contest");
+
+  const std = await depsWith([league({ id: "std", name: "Points", visibility: "private", memberIds: ["u-owner", "u-2"] })], [
+    { id: "std~0001", leagueId: "std", index: 1, theme: "Go", status: "previewing" },
+  ]);
+  const opened = await updateRound(std, "u-owner", "std", "std~0001", { status: "voting" });
+  assert.equal(opened.status, "voting");
+  assert.equal((await std.repo.getRound("std~0001"))!.status, "voting");
+});
+
+test("finished flow: a 4-player H2H league plays its 3 rounds → finished; the wrap-up winner is the best record; the rematch clone is un-frozen and takes players again", async () => {
+  const f = await duel();
+  const star = "u-mia";
+  for (let i = 1; i <= 3; i++) {
+    const round = await openDuelRound(f);
+    for (const p of DUELISTS) await duelSubmit(f, round.id, p);
+    await advance(f, round.id, "previewing");
+    await advance(f, round.id, "voting");
+    const set = await duelSet(f, round.id);
+    // Everyone backs the star when they play; otherwise side a.
+    for (const voter of DUELISTS) {
+      await castBallot(f.deps, voter, round.id, { picks: duelPicks(set, voter, (m) => (m.b.userId === star ? "b" : "a")) });
+    }
+    const detail = await getLeagueDetail(f.deps, DUEL_OWNER, f.leagueId);
+    assert.equal(await pctOf(f), 100, `round ${i}: everyone voted`);
+    // Two contests: everyone can vote, so the feed names every ballot.
+    assert.deepEqual(await ballotFeedAs(f, "u-luna"), [...DUELISTS].sort(), `round ${i}: feed`);
+    assert.equal(detail.finished, false);
+    await revealRound(f.deps, DUEL_OWNER, round.id);
+  }
+
+  const detail = await getLeagueDetail(f.deps, DUEL_OWNER, f.leagueId);
+  assert.equal(detail.finished, true);
+  assert.equal(detail.totalRounds, 3);
+  assert.deepEqual([detail.standings[0]?.user.id, detail.standings[0]?.wins, detail.standings[0]?.losses], [star, 3, 0]);
+  for (const s of detail.standings) assert.equal(s.wins + s.losses + s.draws, 3, `${s.user.id} played every round`);
+  assert.ok((await listMyLeagues(f.deps, "u-sarah")).find((s) => s.league.id === f.leagueId)!.finished);
+  assert.deepEqual(await listBrowseLeagues(f.deps, "u-stranger"), [], "played out: off the browse list");
+  await assert.rejects(createRound(f.deps, DUEL_OWNER, f.leagueId, { theme: "Extra" }), isStatus(400));
+
+  // Run it back: same players, a fresh 0–0–0, un-frozen until its own round 1.
+  const clone = await rematchLeague(f.deps, DUEL_OWNER, f.leagueId);
+  const stored = (await f.repo.getLeague(clone.id))!;
+  assert.equal(stored.format, "headToHead");
+  assert.equal(stored.h2hParticipants, undefined);
+  assert.deepEqual([...stored.memberIds].sort(), [...DUELISTS].sort());
+  const fresh = await getLeagueDetail(f.deps, DUEL_OWNER, clone.id);
+  assert.ok(fresh.standings.every((s) => s.wins === 0 && s.losses === 0 && s.draws === 0));
+  await joinLeague(f.deps, "u-jpop", clone.inviteCode); // the lobby is open again
+  await assert.rejects(joinLeague(f.deps, "u-luna", f.inviteCode), seasonLockedError, "the original stays locked");
 });

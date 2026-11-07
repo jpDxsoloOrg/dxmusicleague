@@ -343,7 +343,7 @@ test("H2H reveal: the L79-guard regression — a 2–0 loss banks the L and a 0�
 });
 
 test("H2H reveal: a walkover banks W and L; a no contest banks nothing; the bye banks nothing", async () => {
-  const { revealRound, castBallot } = await import("./voting.ts");
+  const { getResults } = await import("./voting.ts");
   const five = PLAYERS.slice(0, 5);
   const f = await h2hLeague(five);
   // Find the schedule first (it's frozen when round 1 opens), then choose who submits.
@@ -359,12 +359,13 @@ test("H2H reveal: a walkover banks W and L; a no contest banks nothing; the bye 
     });
   }
   await updateRound(f.deps, OWNER, f.leagueId, round.id, { status: "previewing" });
-  await updateRound(f.deps, OWNER, f.leagueId, round.id, { status: "voting" });
-  // Nothing is votable; a comments-only ballot on the bye's exhibition song still lands.
+  // Nothing is votable, so opening voting reveals the round on the spot
+  // (HTH-08) — banking exactly what an owner's reveal would.
+  const opened = await updateRound(f.deps, OWNER, f.leagueId, round.id, { status: "voting" });
+  assert.equal(opened.status, "revealed");
   const byeSong = (await f.repo.getSubmissionsForUser(round.id, bye))[0]!;
-  await castBallot(f.deps, none.a.userId, round.id, { comments: { [byeSong.id]: "exhibition banger" } });
 
-  const payload = h2h(await revealRound(f.deps, OWNER, round.id));
+  const payload = h2h(await getResults(f.deps, SPECTATOR, round.id));
   const w = byId(payload, walk.matchupId);
   assert.equal(w.outcome, "walkover");
   assert.equal(w.winnerUserId, walk.a.userId);
@@ -379,7 +380,8 @@ test("H2H reveal: a walkover banks W and L; a no contest banks nothing; the bye 
   assert.equal(payload.bye?.player.id, bye);
   assert.equal(payload.bye?.song.id, byeSong.id);
   assert.equal(payload.bye?.song.submitterComment, `${bye}'s note`);
-  assert.deepEqual(payload.bye?.song.comments.map((c) => [c.voter.id, c.text]), [[none.a.userId, "exhibition banger"]]);
+  // (Voter comments on the bye's song: see the results-payload test below.)
+  assert.deepEqual(payload.bye?.song.comments, []);
 
   const board = await records(f);
   assert.equal(board.get(walk.a.userId), "1-0-0");

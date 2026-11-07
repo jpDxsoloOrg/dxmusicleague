@@ -634,7 +634,13 @@ test("a departure mid-voting: the pre-filled re-cast goes through and keeps the 
 
 test("nothing to vote on (a two-player league's only matchup is the voter's own): a ballot with no picks is accepted and still carries comments", async () => {
   const duo = [OWNER, "u-ben"];
-  const { deps, repo, subs } = await h2hRound(duo);
+  // Staged straight into voting: since HTH-08, opening voting through the
+  // handlers reveals a round nobody can vote in on the spot. Such a round can
+  // still be found in voting (one already there, or a smaller league after
+  // departures mid-voting) — and a voter with nothing to vote on, in any
+  // round, is refereed the same way.
+  const { deps, repo, subs } = await h2hRound(duo, { status: "previewing" });
+  await setStatus(repo, "voting");
   await castBallot(deps, OWNER, ROUND, { comments: { [subs.get("u-ben")!.id]: "good luck" } });
   const stored = (await repo.getBallot(ROUND, OWNER))!;
   assert.deepEqual(stored.picks, {});

@@ -9,7 +9,9 @@
 // reader sees the same picture of a round:
 //   - the matchups read API (handlers/matchups.ts, HTH-05) — anonymized;
 //   - H2H ballot validation (HTH-06) — which matchups a voter must pick in;
-//   - the tally and outcomes at reveal (HTH-07) — walkovers, no-contests, byes.
+//   - the tally and outcomes at reveal (HTH-07) — walkovers, no-contests, byes;
+//   - the round's turnout (HTH-08) — who can still vote, for the completion %,
+//     the voting panel and the everyone-voted advance.
 //
 // A side "has no song" when that player didn't submit OR their song is
 // withdrawn because they departed (left or were kicked mid-season). While a
@@ -41,7 +43,7 @@
 
 import { compareMatchupIds, matchupsForRound } from "./schedule.ts";
 import { seasonLocked } from "./freeze.ts";
-import type { League, Round, Submission, Track } from "./types.ts";
+import type { Ballot, League, Round, Submission, Track } from "./types.ts";
 
 type ScheduleLeague = Pick<League, "format" | "memberIds" | "h2hParticipants" | "h2hSalt">;
 
@@ -185,11 +187,167 @@ export function inMatchup(m: RoundMatchup, userId: string): boolean {
  *  vote. A member whose set is empty (e.g. both players of a two-player
  *  league) can still store a comments-only row, and a row cast while a
  *  player was departed has no pick in that pair if the player rejoins. So
- *  count only ballots from voters whose set is non-empty — in the numerator
- *  as well as the denominator — or a round can reveal before an eligible
- *  voter has voted. */
+ *  progress counts only voters whose set is non-empty, and only ballots
+ *  that pick in all of it — see `votingTurnout`. */
 export function votableMatchups(set: RoundMatchupSet, voterId: string): RoundMatchup[] {
   return set.matchups.filter((m) => matchupState(m) === "contest" && !inMatchup(m, voterId));
+}
+
+// ---- turnout: who a head-to-head round is waiting on (HTH-08) --------------
+//
+// Progression (the timed everyone-submitted / everyone-voted advance), the
+// dashboard's completion % and the round's who-submitted / who-voted panels
+// count people, and a head-to-head round counts them differently from a
+// points round in two ways — the only format branches progression needs:
+//
+//   - Submitting: a member is done once they have a song. Only CURRENT
+//     members' songs count: a departed player's song is withdrawn (their pair
+//     plays as a walkover), so it must not stand in for a member who still
+//     hasn't submitted — in H2H that member would lose by walkover the moment
+//     the phase closed early.
+//   - Voting: only members with something to vote on are waited for —
+//     `votableMatchups` non-empty. A member with an empty set (both players of
+//     a two-player league; the pair of a round's only contest) can never cast
+//     a vote, so counting them would keep the round from ever finishing early
+//     and the completion % from ever reaching 100. And a member counts as
+//     voted only when their ballot picks in EVERY matchup they can vote in
+//     now — exactly the picks the tally would count — so a comments-only row,
+//     or a row cast before a departed player rejoined (their pair is a contest
+//     again, with no pick in it), isn't mistaken for a vote.
+//
+// When nobody can vote at all (every pair a walkover / no contest, or a
+// two-player league), the voting phase has nothing to wait for: the round
+// goes straight to the reveal (handlers/progression.ts).
+//
+// Anonymity — the who-voted panel must not name who is eligible. Two or
+// more contests give every member something to judge, and with none nobody
+// can vote, so the case that matters is a round with exactly one contest:
+// the members with nothing to vote on are then precisely that contest's
+// pair. Naming the eligible voters (or marking the others "n/a") would name
+// that pair, and with it the owner of every song outside the contest — the
+// bye song, and any walkover song (a no-show is already named by the
+// submissions panel) — while each of the two contest players would learn
+// who their opponent is, i.e. who wrote the other song in their own matchup
+// (in a three-player league, that attributes every song in the round). That
+// is exactly what GET /matchups hides (`isMine` is its only identity signal,
+// HTH-05). So unless every member is eligible, the panel names nobody but
+// the viewer (`votingPanelNames`); the counts stay, since the number of
+// eligible voters follows from the matchups payload anyway.
+//
+// The same goes for every other place that says who has cast a ballot: the
+// activity feed's "cast their votes" entries. Next to a voted / eligible
+// count, a named ballot is attributable from one snapshot — an entry that
+// moved the count is an eligible voter's (in a three-player league, the bye
+// player's), one that didn't is a contest player's comments-only row. So
+// the rule is one predicate, `votersNameable`: while it's false, nobody but
+// the viewer is named as having voted, in the panel or the feed
+// (`ballotAuthorVisible`). What's left is the count itself, which names
+// nobody. The one residual: names shown while every member could vote
+// remain in a viewer's memory if a departure mid-voting then leaves a
+// single contest, and the count after it can be read against them.
+
+/** The current members who have a song in the round — a head-to-head
+ *  round's submission phase is done when every member is in this set (one
+ *  song each). In member order. */
+export function membersWithSong(
+  memberIds: readonly string[],
+  submissions: ReadonlyArray<Pick<Submission, "userId">>,
+): string[] {
+  const submitted = new Set(submissions.map((s) => s.userId));
+  return memberIds.filter((id) => submitted.has(id));
+}
+
+/** A head-to-head voting round's turnout. */
+export interface VotingTurnout {
+  /** The members with at least one matchup to pick in — the only voters
+   *  the round waits for, in member order. Everyone else can still comment
+   *  (a comments-only ballot), never vote. */
+  eligible: string[];
+  /** The eligible members whose ballot picks one of the two songs in every
+   *  matchup they can vote in now. In member order. */
+  voted: string[];
+}
+
+/**
+ * Who can vote in the round and who has. `set` is the round as it stands —
+ * departed players' songs withdrawn, as ballots are refereed (handlers
+ * `loadRoundMatchups`); `memberIds` the league's current members (a departed
+ * voter's ballot still counts at the tally, but nobody waits for them).
+ */
+export function votingTurnout(
+  set: RoundMatchupSet,
+  memberIds: readonly string[],
+  ballots: ReadonlyArray<Pick<Ballot, "voterId" | "picks">>,
+): VotingTurnout {
+  const picksByVoter = new Map(ballots.map((b) => [b.voterId, b.picks ?? {}]));
+  const eligible: string[] = [];
+  const voted: string[] = [];
+  for (const id of memberIds) {
+    const votable = votableMatchups(set, id);
+    if (votable.length === 0) continue;
+    eligible.push(id);
+    const picks = picksByVoter.get(id);
+    const picked = (m: RoundMatchup) =>
+      picks !== undefined &&
+      Object.hasOwn(picks, m.matchupId) &&
+      (picks[m.matchupId] === m.a.submission!.id || picks[m.matchupId] === m.b.submission!.id);
+    if (votable.every(picked)) voted.push(id);
+  }
+  return { eligible, voted };
+}
+
+/** Has every member who can vote voted? True when nobody can vote at all:
+ *  a round with nothing to vote on waits for nobody. */
+export function everyoneEligibleVoted(turnout: VotingTurnout): boolean {
+  return turnout.voted.length === turnout.eligible.length;
+}
+
+/**
+ * The members a head-to-head who-voted panel may name to `viewerId`, in
+ * member order (each then shown as done = in `turnout.voted`, or waiting).
+ * When every current member can vote (two or more contests), that's everyone:
+ * eligibility says nothing about who is in which matchup. Otherwise the
+ * eligible set is "everyone but the only contest's pair", which would
+ * deanonymize the bye / walkover songs and each contest player's opponent
+ * (see "Anonymity" above), so the panel names only the viewer, and only if
+ * they're eligible — something they already know from their own matchups.
+ * The counts are sent either way. A member named in neither list therefore
+ * has nothing to vote on this round (a comments-only ballot at most).
+ */
+export function votingPanelNames(turnout: VotingTurnout, memberIds: readonly string[], viewerId: string): string[] {
+  if (votersNameable(turnout, memberIds)) return turnout.eligible;
+  return turnout.eligible.filter((id) => id === viewerId);
+}
+
+/**
+ * May a head-to-head voting round say who has voted? Only while every
+ * current member can vote (`eligible` is a subset of `memberIds` in member
+ * order, so equal length means equal). Otherwise the eligible voters are
+ * "everyone but the only contest's pair" (or nobody), and any name tied to a
+ * ballot gives that line away — see "Anonymity" above. The who-voted panel
+ * (`votingPanelNames`) and the activity feed (`ballotAuthorVisible`) both
+ * follow it.
+ */
+export function votersNameable(turnout: VotingTurnout, memberIds: readonly string[]): boolean {
+  return turnout.eligible.length === memberIds.length;
+}
+
+/**
+ * Whether a head-to-head voting round's activity feed may show `viewerId`
+ * the "cast their votes" entry for `voterId`'s ballot: always their own,
+ * anyone's while `votersNameable`. Otherwise another member's entry next to
+ * the voted / eligible count would say which side of the only contest they
+ * are on — in a three-player league, who has the bye — so it's left out
+ * (comments-only rows and departed voters' ballots included). Applies only
+ * while the round is in voting; once it's revealed, so is everything else.
+ */
+export function ballotAuthorVisible(
+  turnout: VotingTurnout,
+  memberIds: readonly string[],
+  viewerId: string,
+  voterId: string,
+): boolean {
+  return voterId === viewerId || votersNameable(turnout, memberIds);
 }
 
 // ---- the voting-phase payload (GET /rounds/:roundId/matchups) --------------

@@ -6,9 +6,12 @@
 //
 // Head-to-head (HTH-06): a ballot is one winner pick per matchup the voter can
 // vote in, stored on the SAME one-row-per-voter Ballot item as a points ballot
-// (`allocations: {}` + `picks`), so everything that counts ballots per voter
-// (completion %, the timed everyone-voted reveal) works unchanged. Reveal and
-// results (HTH-07) dispatch on the format in handlers/results.ts.
+// (`allocations: {}` + `picks`). What counts ballots per voter (completion %,
+// the voting panel, the timed everyone-voted reveal) counts only members who
+// have a matchup to pick in, and only ballots that pick in all of them
+// (HTH-08, domain/matchups.ts `votingTurnout`) — a member with nothing to vote
+// on can still leave a comments-only row. Reveal and results (HTH-07)
+// dispatch on the format in handlers/results.ts.
 
 import type { Ballot, League, Round, Submission } from "../domain/types.ts";
 import { leagueFormat } from "../domain/types.ts";

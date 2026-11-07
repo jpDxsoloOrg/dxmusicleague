@@ -3,7 +3,9 @@
 // league handlers: (deps, caller, ...input) -> result, throwing ApiError.
 //
 // Lifecycle this slice covers: draft -> submitting -> voting. `revealed` is
-// reached only via the (future) reveal endpoint, never a raw status change.
+// reached only via the (future) reveal endpoint, never a raw status change —
+// with one head-to-head exception (HTH-08): opening voting on a round nobody
+// can vote in reveals it on the spot (progression.ts `revealIfNobodyCanVote`).
 //
 // Head-to-head leagues (HTH-03): opening round 1 (draft -> submitting) freezes
 // the season — see `freezeSeasonIfNeeded`. This PATCH is the ONLY place any
@@ -26,6 +28,7 @@ import {
 } from "../domain/freeze.ts";
 import type { RandomInt } from "../domain/freeze.ts";
 import { createPlaylistForRound } from "./providers.ts";
+import { revealIfNobodyCanVote } from "./progression.ts";
 import { phaseDeadline } from "./timing.ts";
 import type { Deps } from "./leagues.ts";
 
@@ -126,6 +129,7 @@ export async function updateRound(
   const round = await deps.repo.getRound(roundId);
   if (!round || round.leagueId !== leagueId) throw notFound("That round doesn't exist.");
   const opening = input.status === "submitting" && round.status === "draft";
+  const openingVoting = input.status === "voting" && round.status === "previewing";
   const settledWhenRead = roundSettled(round);
 
   if (input.status && input.status !== round.status) {
@@ -186,6 +190,16 @@ export async function updateRound(
   // PATCH refused for any other reason freezes nothing; and before the round
   // write, so a refused open leaves the round in draft.
   if (opening && leagueFormat(league) === "headToHead") await freezeSeasonIfNeeded(deps, league, round);
+
+  // Head-to-head (HTH-08): opening voting on a round nobody can vote in (all
+  // walkovers / no contests, or a two-player league's one matchup) reveals it
+  // on the spot instead — its one conditional write stores the round
+  // revealed, this PATCH's edits included, and banks the W/L/D. Otherwise no
+  // ballot could ever arrive and the round would sit in voting. If another
+  // reveal got there first, the edits didn't land: 409, as below.
+  if (openingVoting && leagueFormat(league) === "headToHead" && (await revealIfNobodyCanVote(deps, league, round))) {
+    return round;
+  }
 
   // Head-to-head (HTH-07): an edit built from a round read before its reveal
   // must not be written back over the reveal — it would put the round back

@@ -5,10 +5,12 @@
 // (domain/matchups.ts); nothing here is stored.
 //
 // Its own module (not voting.ts) because `loadRoundMatchups` is shared: the
-// H2H ballot path in voting.ts (HTH-06) and the tally in results.ts (HTH-07)
-// load matchups through it too, and results.ts can't import voting.ts (that
-// is the cycle results.ts was extracted to break). This file imports only
-// domain modules and the Deps type, so anything may import it.
+// H2H ballot path in voting.ts (HTH-06), the tally in results.ts (HTH-07)
+// and the progress counts in progression.ts / leagues.ts (HTH-08,
+// `loadVotingTurnout`) load matchups through it too, and results.ts can't
+// import voting.ts (that is the cycle results.ts was extracted to break).
+// This file imports only domain modules and the Deps type, so anything may
+// import it.
 //
 // Who can read (mirrors the existing reads): before the reveal the matchups
 // are a members-only voting aid, exactly like the anonymous song list —
@@ -25,11 +27,11 @@
 // players the reveal pinned as departed (`Round.h2hDeparted`, HTH-07), so this
 // payload and GET results agree about a revealed round's walkovers.
 
-import type { League, Round } from "../domain/types.ts";
+import type { Ballot, League, Round, Submission } from "../domain/types.ts";
 import { leagueFormat } from "../domain/types.ts";
 import { badRequest, forbidden, notFound } from "../domain/errors.ts";
-import { deriveRoundMatchups, matchupsView, roundSettled } from "../domain/matchups.ts";
-import type { DeriveOptions, RoundMatchupSet, RoundMatchupsView } from "../domain/matchups.ts";
+import { deriveRoundMatchups, matchupsView, roundSettled, votingTurnout } from "../domain/matchups.ts";
+import type { DeriveOptions, RoundMatchupSet, RoundMatchupsView, VotingTurnout } from "../domain/matchups.ts";
 import type { Deps } from "./leagues.ts";
 
 /**
@@ -52,6 +54,28 @@ export async function loadRoundMatchups(
   options?: DeriveOptions,
 ): Promise<RoundMatchupSet> {
   return deriveRoundMatchups(league, round, await deps.repo.getSubmissionsForRound(round.id), options);
+}
+
+/**
+ * A head-to-head voting round's turnout (HTH-08): the members who have a
+ * matchup to pick in, and which of them have voted — domain `votingTurnout`
+ * over the round as it stands (departed players' songs withdrawn, exactly as
+ * ballots are refereed: the derivation's default, as in `loadRoundMatchups`)
+ * and the league's current members. What the timed everyone-voted advance,
+ * the completion % and the voting panel count. Pass the round's submissions
+ * and ballots when they're already read, to skip reading them again.
+ */
+export async function loadVotingTurnout(
+  deps: Deps,
+  league: League,
+  round: Round,
+  read: { submissions?: readonly Submission[]; ballots?: readonly Ballot[] } = {},
+): Promise<VotingTurnout> {
+  const [submissions, ballots] = await Promise.all([
+    read.submissions ?? deps.repo.getSubmissionsForRound(round.id),
+    read.ballots ?? deps.repo.getBallotsForRound(round.id),
+  ]);
+  return votingTurnout(deriveRoundMatchups(league, round, submissions), league.memberIds, ballots);
 }
 
 /** GET /rounds/:roundId/matchups. 400 for a standard league's round (no

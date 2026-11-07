@@ -182,8 +182,14 @@ test("freeze is once: advancing round 1 and opening later rounds never re-shuffl
     assert.equal(lg.roundCount, snapshot.roundCount);
   };
 
+  // Everyone submits, so the round has contests to vote on (HTH-08: opening
+  // voting on a round nobody can vote in would reveal it on the spot).
+  for (const id of FIVE) {
+    await repo.putSubmission({ id: `s-${id}`, roundId: "h2h~0001", userId: id, track: { id: `t-${id}`, provider: "mock", providerTrackId: `t-${id}`, title: id, artists: [id] } });
+  }
   await updateRound(deps, OWNER, "h2h", "h2h~0001", { status: "previewing" });
   await updateRound(deps, OWNER, "h2h", "h2h~0001", { status: "voting" });
+  assert.equal((await repo.getRound("h2h~0001"))?.status, "voting");
   // "Re-open" no-ops: same status again, plus an edit while it's live.
   await updateRound(deps, OWNER, "h2h", "h2h~0001", { status: "voting", theme: "Renamed" });
   await unchanged();
