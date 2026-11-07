@@ -189,14 +189,8 @@
   padding: 10px 8px; border-radius: var(--radius-sm);
 }
 .standings li.top { background: var(--bg-2); }
-.rank { width: 18px; text-align: center; font-weight: 700; color: var(--text-dim); font-size: 14px; }
-.top-1 .rank { color: #f5c518; }
-.top-2 .rank { color: #c0c5ce; }
-.top-3 .rank { color: #cd7f32; }
-.standing-info { display: flex; flex-direction: column; min-width: 0; }
-.standing-info strong { font-size: 14px; }
-.standing-note { font-size: 11px; color: var(--text-dim); }
-.standing-pts { margin-left: auto; font-weight: 700; color: var(--magenta); font-size: 14px; }
+/* the rows themselves (.rank, .standing-info, .standing-pts, …) are styled in
+   components/StandingsTable.css */
 
 @media (max-width: 900px) {
   .ro-grid { grid-template-columns: 1fr; }
@@ -341,4 +335,16 @@
 @media (max-width: 640px) {
   .sub-progress-row { flex-direction: column; gap: 6px; }
   .sub-progress-label { width: auto; padding-top: 0; }
+}
+
+/* head-to-head before round 1 opens: no round count to step through yet */
+.stepper-note {
+  margin: 0;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
 }

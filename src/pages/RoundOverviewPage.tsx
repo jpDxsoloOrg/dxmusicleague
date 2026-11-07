@@ -3,12 +3,15 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { data } from "../data";
 import type { RoundParticipation } from "../data";
 import type { League, Round, RoundStatus } from "../domain/types";
+import { h2hScheduleSet, leagueFormat } from "../domain/types";
 import { getProvider } from "../music";
 import { useAsync } from "../lib/useAsync";
 import { useAuth } from "../auth/AuthContext";
 import { formatCountdown } from "../lib/time";
 import { Avatar } from "../components/Avatar";
 import { TrackArt } from "../components/TrackArt";
+import { StandingsTable } from "../components/StandingsTable";
+import { formatRecord, leagueHasDraws } from "../lib/record";
 import "./RoundOverviewPage.css";
 
 const STATUS_LABEL: Record<RoundStatus, string> = {
@@ -21,13 +24,18 @@ const STATUS_LABEL: Record<RoundStatus, string> = {
 };
 
 // What the active round's primary button does, by status. `previewing` has no
-// action — players just listen until voting opens.
+// action — players just listen until voting opens. Head-to-head voting is
+// picking a winner in each matchup; `canVote` is false for a member with no
+// matchup to pick in (their own pair, walkovers, no contests), who can still
+// look at the matchups.
 function primaryAction(
   leagueId: string,
   round: Round,
   submittedCount: number,
   allowance: number,
   hasVoted: boolean,
+  headToHead = false,
+  canVote = true,
 ): { label: string; to: string } | undefined {
   switch (round.status) {
     case "submitting": {
@@ -44,6 +52,10 @@ function primaryAction(
     case "previewing":
       return undefined;
     case "voting":
+      if (headToHead) {
+        const label = !canVote ? "See the matchups" : hasVoted ? "Edit your picks" : "Pick your winners";
+        return { label, to: `/leagues/${leagueId}/vote` };
+      }
       return { label: hasVoted ? "Edit your votes" : "Vote now", to: `/leagues/${leagueId}/vote` };
     case "revealed":
     case "complete":
@@ -86,6 +98,13 @@ export function RoundOverviewPage() {
   const isOwner = league.ownerId === user?.id;
   // A capped (public) league is full once every slot is taken; uncapped never is.
   const isFull = Boolean(league.maxMembers && league.memberIds.length >= league.maxMembers);
+  const format = leagueFormat(league);
+  const headToHead = format === "headToHead";
+  // Head-to-head: until round 1 opens, the round count is only provisional
+  // (the schedule is drawn then), and from then on the season is locked to
+  // the players already in it.
+  const scheduleSet = !headToHead || h2hScheduleSet(rounds);
+  const seasonLocked = headToHead && scheduleSet;
 
   async function handleLeave() {
     if (!window.confirm(`Leave ${league.name}? You can rejoin later with the invite code.`)) return;
@@ -106,8 +125,12 @@ export function RoundOverviewPage() {
   const myPicks = mySubmissions ?? [];
   // The voting-progress panel already knows who voted — reuse it for the CTA.
   const hasVoted = Boolean(user && votingProgress?.submitted.some((m) => m.id === user.id));
+  // Head-to-head voting progress lists only the members with a matchup to
+  // pick in; anyone else has nothing to vote on this round.
+  const canVote =
+    !votingProgress || [...votingProgress.submitted, ...votingProgress.waiting].some((m) => m.id === user?.id);
   const rawAction = currentRound
-    ? primaryAction(league.id, currentRound, myPicks.length, allowance, hasVoted)
+    ? primaryAction(league.id, currentRound, myPicks.length, allowance, hasVoted, headToHead, canVote)
     : undefined;
   // Spectators only get the read-only action (viewing revealed results).
   const action =
@@ -120,6 +143,17 @@ export function RoundOverviewPage() {
     (currentRound?.status === "submitting" ||
       currentRound?.status === "previewing" ||
       currentRound?.status === "voting");
+
+  // The wrap-up hero's headline: the top of the final board (a head-to-head
+  // champion's record too — the board already ranks by it, wins first). A
+  // head-to-head season in which nobody won a matchup (all no contests or
+  // draws) has no champion to name, just a wrap.
+  const champion = standings[0];
+  const wrapUpHeadline = !champion || (headToHead && champion.wins === 0)
+    ? "That's a wrap!"
+    : headToHead
+      ? `${champion.user.displayName} takes the league with a ${formatRecord(champion, leagueHasDraws(standings))} record!`
+      : `${champion.user.displayName} takes the league!`;
 
   // Build the stepper: one node per round index up to totalRounds. Finished
   // rounds link to their results so past reveals stay reachable.
@@ -167,35 +201,44 @@ export function RoundOverviewPage() {
           {league.inviteCode && !finished && (isOwner || !isFull) && (
             <InvitePanel
               code={league.inviteCode}
+              rejoinOnly={seasonLocked}
               note={
-                isOwner && isFull
-                  ? "Your league is at its player cap, so it's hidden from public discovery — but this code still lets invited friends join."
-                  : undefined
+                seasonLocked
+                  ? "Season locked — only players already in it can rejoin."
+                  : isOwner && isFull
+                    ? "Your league is at its player cap, so it's hidden from public discovery — but this code still lets invited friends join."
+                    : undefined
               }
             />
           )}
 
-          {/* round stepper — finished rounds click through to their results */}
-          <div className="stepper">
-            {steps.map((s) => {
-              const content = (
-                <>
-                  <span className="step-dot">
-                    {s.status === "complete" || s.status === "revealed" ? "✓" : s.idx}
-                  </span>
-                  <span className="step-label">R{s.idx}</span>
-                </>
-              );
-              const cls = `step step-${s.status}${s.isCurrent ? " current" : ""}`;
-              return s.resultsTo ? (
-                <Link key={s.idx} to={s.resultsTo} className={`${cls} step-clickable`} title={`Round ${s.idx} results`}>
-                  {content}
-                </Link>
-              ) : (
-                <div key={s.idx} className={cls}>{content}</div>
-              );
-            })}
-          </div>
+          {/* round stepper — finished rounds click through to their results.
+              A head-to-head league has no round count to show until round 1
+              opens and the schedule is drawn. */}
+          {!scheduleSet ? (
+            <p className="stepper-note">📅 The schedule is set when round 1 opens — everyone plays everyone once.</p>
+          ) : (
+            <div className="stepper">
+              {steps.map((s) => {
+                const content = (
+                  <>
+                    <span className="step-dot">
+                      {s.status === "complete" || s.status === "revealed" ? "✓" : s.idx}
+                    </span>
+                    <span className="step-label">R{s.idx}</span>
+                  </>
+                );
+                const cls = `step step-${s.status}${s.isCurrent ? " current" : ""}`;
+                return s.resultsTo ? (
+                  <Link key={s.idx} to={s.resultsTo} className={`${cls} step-clickable`} title={`Round ${s.idx} results`}>
+                    {content}
+                  </Link>
+                ) : (
+                  <div key={s.idx} className={cls}>{content}</div>
+                );
+              })}
+            </div>
+          )}
 
           {/* active round hero — or the wrap-up card once the league finishes */}
           {finished ? (
@@ -205,7 +248,7 @@ export function RoundOverviewPage() {
                 <span className="pill pill-complete">Finished</span>
               </div>
               <h2 className="hero-theme">
-                🏆 {standings[0] ? `${standings[0].user.displayName} takes the league!` : "That's a wrap!"}
+                🏆 {wrapUpHeadline}
               </h2>
               <p className="hero-desc">
                 All {totalRounds} rounds have been played and the final standings are locked in.
@@ -316,19 +359,7 @@ export function RoundOverviewPage() {
             <h3>Overall Leaderboard</h3>
             <Link to={`/leagues/${league.id}/reveal`} className="link-muted">Full</Link>
           </div>
-          <ol>
-            {standings.map((s) => (
-              <li key={s.user.id} className={s.rank <= 3 ? `top top-${s.rank}` : ""}>
-                <span className="rank">{s.rank}</span>
-                <Avatar name={s.user.displayName} size={34} />
-                <span className="standing-info">
-                  <strong>{s.user.displayName}</strong>
-                  {s.note && <span className="standing-note">{s.note}</span>}
-                </span>
-                <span className="standing-pts">{s.points}</span>
-              </li>
-            ))}
-          </ol>
+          <StandingsTable standings={standings} format={format} avatarSize={34} showNotes />
         </aside>
       </div>
     </div>
@@ -365,8 +396,10 @@ function RematchButton({ leagueId }: { leagueId: string }) {
 }
 
 // Invite strip — shows the league's shareable code and a ready-to-send join
-// link, each with a copy button. Any member can invite a friend.
-function InvitePanel({ code, note }: { code: string; note?: string }) {
+// link, each with a copy button. Any member can invite a friend. Once a
+// head-to-head season is locked (`rejoinOnly`) the code only lets the season's
+// own players back in, so the strip calls it a rejoin code.
+function InvitePanel({ code, note, rejoinOnly }: { code: string; note?: string; rejoinOnly?: boolean }) {
   const joinUrl = `${window.location.origin}/leagues/join?code=${encodeURIComponent(code)}`;
   const [copied, setCopied] = useState<"code" | "link" | null>(null);
 
@@ -383,7 +416,7 @@ function InvitePanel({ code, note }: { code: string; note?: string }) {
   return (
     <div className="invite-panel">
       <div className="invite-info">
-        <span className="invite-label">Invite code</span>
+        <span className="invite-label">{rejoinOnly ? "Rejoin code" : "Invite code"}</span>
         <code className="invite-code">{code}</code>
       </div>
       <div className="invite-actions">
@@ -391,7 +424,7 @@ function InvitePanel({ code, note }: { code: string; note?: string }) {
           {copied === "code" ? "Copied ✓" : "Copy code"}
         </button>
         <button className="btn invite-btn" onClick={() => copy("link", joinUrl)}>
-          {copied === "link" ? "Copied ✓" : "Copy invite link"}
+          {copied === "link" ? "Copied ✓" : rejoinOnly ? "Copy rejoin link" : "Copy invite link"}
         </button>
       </div>
       {note && <p className="invite-note">{note}</p>}
@@ -432,6 +465,8 @@ function OwnerRoundControl({
   const needsNewRound = !currentRound || status === "revealed" || status === "complete";
   // Timed leagues auto-advance the phases; the owner only creates + opens rounds.
   const timed = league.progression === "timed";
+  // Head-to-head: opening round 1 draws the schedule and locks the season.
+  const locksSeason = leagueFormat(league) === "headToHead" && currentRound?.index === 1 && status === "draft";
 
   return (
     <div className="owner-control">
@@ -503,6 +538,9 @@ function OwnerRoundControl({
           everyone finishing) also advances it on its own. */}
       {timed && !needsNewRound && status !== "draft" && (
         <span className="owner-hint">⏱ Auto-advances when the timer ends or everyone's done — or move it on now.</span>
+      )}
+      {locksSeason && (
+        <span className="owner-hint">🔒 Opening round 1 draws the schedule and closes the league to new players.</span>
       )}
       {error && <span className="page-error">{error}</span>}
     </div>

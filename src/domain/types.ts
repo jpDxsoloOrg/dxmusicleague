@@ -130,3 +130,14 @@ export const H2H_FORCED_SETTINGS: Pick<LeagueSettings, "submissionsPerPlayer" | 
   submissionsPerPlayer: 1,
   downvotePoolSize: 0,
 };
+
+/** Has a head-to-head season been scheduled? The server freezes the season
+ *  (player order, round count = everyone plays everyone once) when round 1
+ *  opens, and no later round can exist before that. Seen from the client,
+ *  that is any round past draft, or any round after the first. Until then
+ *  `league.roundCount` is only the provisional number sent at creation, so
+ *  pages say "set when round 1 opens" instead of showing it. Pass every
+ *  round you have (a summary's current round is enough). */
+export function h2hScheduleSet(rounds: ReadonlyArray<Pick<Round, "index" | "status">>): boolean {
+  return rounds.some((r) => r.index > 1 || r.status !== "draft");
+}

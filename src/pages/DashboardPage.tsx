@@ -2,10 +2,13 @@ import { Link } from "react-router-dom";
 import { data } from "../data";
 import type { LeagueSummary, PublicLeagueSummary } from "../data";
 import type { RoundStatus } from "../domain/types";
+import { h2hScheduleSet, leagueFormat } from "../domain/types";
 import { useAsync } from "../lib/useAsync";
 import { Avatar } from "../components/Avatar";
 import "./DashboardPage.css";
 
+// Phase labels read the same for both formats (head-to-head rounds run the
+// same phases), so they stay format-agnostic.
 const STATUS_LABEL: Record<RoundStatus, string> = {
   draft: "Draft",
   submitting: "Submitting",
@@ -92,13 +95,20 @@ export function PublicLeagueCard({ league }: { league: PublicLeagueSummary }) {
 export function LeagueCard({ summary }: { summary: LeagueSummary }) {
   const { league, currentRound, totalRounds, completionPct, members, finished } = summary;
   const status = currentRound?.status ?? "draft";
+  const headToHead = leagueFormat(league) === "headToHead";
+  // Before round 1 opens, a head-to-head league's round count is provisional
+  // (the schedule is drawn then), so the card doesn't count rounds yet.
+  const preSeason = headToHead && !h2hScheduleSet(currentRound ? [currentRound] : []);
+  const roundTag = finished
+    ? `All ${totalRounds} rounds played`
+    : preSeason
+      ? "Pre-season"
+      : `Round ${currentRound?.index ?? 0} of ${totalRounds}`;
 
   return (
     <Link to={`/leagues/${league.id}`} className="league-card">
       <div className="league-card-top">
-        <span className="round-tag">
-          {finished ? `All ${totalRounds} rounds played` : `Round ${currentRound?.index ?? 0} of ${totalRounds}`}
-        </span>
+        <span className="round-tag">{roundTag}</span>
         {finished ? (
           <span className="pill pill-complete">Finished</span>
         ) : (
@@ -106,7 +116,14 @@ export function LeagueCard({ summary }: { summary: LeagueSummary }) {
         )}
       </div>
 
-      <h3 className="league-name">{league.name}</h3>
+      <h3 className="league-name">
+        {league.name}
+        {headToHead && (
+          <span className="format-tag" title="Head-to-head league: 1v1 matchups, W–L standings">
+            H2H
+          </span>
+        )}
+      </h3>
       {finished ? <p className="league-theme">🏁 League complete</p> : currentRound && <p className="league-theme">{currentRound.theme}</p>}
 
       <div className="avatar-stack">

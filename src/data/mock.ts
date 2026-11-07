@@ -623,6 +623,10 @@ export function getStandings(leagueId: string): Standing[] {
 /** Who's done vs. still pending for the live phase. Identities only — no
  *  tracks, no point allocations. */
 export interface RoundParticipation {
+  /** Head-to-head voting names only members with a matchup to pick in (the
+   *  backend may name just the caller, HTH-08 `votingPanelNames`), so a member
+   *  in neither list has nothing to vote on this round. The round overview's
+   *  CTA relies on that; keep MockClient and the API honoring it. */
   submitted: User[];
   waiting: User[];
   /** Units done vs. expected: songs (members × allowance) while submitting,

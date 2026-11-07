@@ -27,3 +27,5 @@
   background: var(--grad); color: white; padding: 2px 8px; border-radius: 999px;
 }
 .leaderboard-list .standing-pts { font-size: 16px; }
+/* head-to-head column header: line up with the rows' padding */
+.leaderboard-panel .standings-colhead { padding: 0 14px 8px; }
