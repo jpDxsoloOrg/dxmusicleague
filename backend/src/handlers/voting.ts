@@ -7,14 +7,15 @@
 // Head-to-head (HTH-06): a ballot is one winner pick per matchup the voter can
 // vote in, stored on the SAME one-row-per-voter Ballot item as a points ballot
 // (`allocations: {}` + `picks`), so everything that counts ballots per voter
-// (completion %, the timed everyone-voted reveal) works unchanged.
+// (completion %, the timed everyone-voted reveal) works unchanged. Reveal and
+// results (HTH-07) dispatch on the format in handlers/results.ts.
 
 import type { Ballot, League, Round, Submission } from "../domain/types.ts";
 import { leagueFormat } from "../domain/types.ts";
 import { badRequest, forbidden, notFound } from "../domain/errors.ts";
 import { validateBallot, validateH2HBallot } from "../domain/rules.ts";
 import type { RoundMatchupSet } from "../domain/matchups.ts";
-import { computeResults, finalizeReveal, type RoundResult } from "./results.ts";
+import { finalizeReveal, roundResults, type RoundResultsPayload } from "./results.ts";
 import { autoAdvanceRound } from "./progression.ts";
 import { loadRoundMatchups } from "./matchups.ts";
 import type { Deps } from "./leagues.ts";
@@ -188,7 +189,10 @@ function cleanComments(raw: unknown, validIds: Set<string>): Record<string, stri
   return out;
 }
 
-export async function revealRound(deps: Deps, caller: string, roundId: string): Promise<RoundResult[]> {
+/** Owner-only reveal. Answers with the round's results: a standard round's
+ *  bare ranked list, exactly as before, or a head-to-head round's
+ *  `{ format: "headToHead", matchups, bye }` (handlers/results.ts). */
+export async function revealRound(deps: Deps, caller: string, roundId: string): Promise<RoundResultsPayload> {
   const round = await deps.repo.getRound(roundId);
   if (!round) throw notFound("That round doesn't exist.");
   const league = await deps.repo.getLeague(round.leagueId);
@@ -199,7 +203,11 @@ export async function revealRound(deps: Deps, caller: string, roundId: string): 
   return finalizeReveal(deps, round);
 }
 
-export async function getResults(deps: Deps, _caller: string, roundId: string): Promise<RoundResult[]> {
+/** A revealed round's results — the same payload the reveal answered with: a
+ *  standard round's bare `RoundResult[]` (byte-identical to before formats
+ *  existed) or a head-to-head round's matchups with submitters, votes per
+ *  side, outcomes, comments and the bye's exhibition song. */
+export async function getResults(deps: Deps, _caller: string, roundId: string): Promise<RoundResultsPayload> {
   // Revealed results are readable by any signed-in user (spectators included) —
   // they're the public outcome of the round, not ballot internals.
   const round = await deps.repo.getRound(roundId);
@@ -207,5 +215,5 @@ export async function getResults(deps: Deps, _caller: string, roundId: string): 
   if (round.status !== "revealed" && round.status !== "complete") {
     throw badRequest("Results aren't available until the round is revealed.");
   }
-  return computeResults(deps, roundId);
+  return roundResults(deps, round);
 }

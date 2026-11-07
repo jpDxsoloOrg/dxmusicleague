@@ -1,9 +1,21 @@
 // Rules-engine unit tests — pure, no infra. Run: `npm test` (node --test).
-// Proves "the server is the referee" logic in isolation.
+// Proves "the server is the referee" logic in isolation: points ballots and
+// their tally, head-to-head ballots (HTH-06), and the head-to-head tally,
+// outcomes and the W/L/D each reveal banks (HTH-07).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateBallot, validateH2HBallot, rankSubmissions, tallyBallots } from "./rules.ts";
+import {
+  matchupOutcome,
+  matchupRecords,
+  rankSubmissions,
+  resolveMatchups,
+  settleMatchups,
+  tallyBallots,
+  tallyMatchups,
+  validateBallot,
+  validateH2HBallot,
+} from "./rules.ts";
 import { DEFAULT_LEAGUE_SETTINGS } from "./types.ts";
 import type { Submission } from "./types.ts";
 import { votableMatchups } from "./matchups.ts";
@@ -238,4 +250,176 @@ test("H2H ballot: nothing votable (a two-player league's only matchup is the vot
   // An un-frozen / standard league derives an empty set: nothing to pick, nothing accepted.
   assert.deepEqual(validateH2HBallot({}, { matchups: [] }, "u-a"), {});
   assert.throws(() => validateH2HBallot({ [M(0)]: "s-a" }, { matchups: [] }, "u-a"), /Unknown matchup/);
+});
+
+// ---- Head-to-head tally, outcomes and records (HTH-07) ----
+
+/** Six players, three contests: every matchup has four eligible voters (the
+ *  players of the other two pairs). */
+const SIX_SET: RoundMatchupSet = {
+  matchups: [
+    { matchupId: M(0), a: side("u-a", "s-a"), b: side("u-b", "s-b") },
+    { matchupId: M(1), a: side("u-c", "s-c"), b: side("u-d", "s-d") },
+    { matchupId: M(2), a: side("u-e", "s-e"), b: side("u-f", "s-f") },
+  ],
+};
+const ballot = (voterId: string, picks?: Record<string, string>) => ({ voterId, ...(picks ? { picks } : {}) });
+
+test("H2H tally: 3v1 → a win and a loss banked; 2v2 → a draw for both; 4v0 → the 0-vote side still banks its L", () => {
+  const ballots = [
+    // M0: u-c, u-d, u-e pick u-a's song, u-f picks u-b's (3–1).
+    // M1: u-a, u-e pick u-c's, u-b, u-f pick u-d's (2–2).
+    // M2: all four of u-a..u-d pick u-e's (4–0).
+    ballot("u-a", { [M(1)]: "s-c", [M(2)]: "s-e" }),
+    ballot("u-b", { [M(1)]: "s-d", [M(2)]: "s-e" }),
+    ballot("u-c", { [M(0)]: "s-a", [M(2)]: "s-e" }),
+    ballot("u-d", { [M(0)]: "s-a", [M(2)]: "s-e" }),
+    ballot("u-e", { [M(0)]: "s-a", [M(1)]: "s-c" }),
+    ballot("u-f", { [M(0)]: "s-b", [M(1)]: "s-d" }),
+  ];
+  assert.deepEqual(tallyMatchups(SIX_SET, ballots), [
+    { matchupId: M(0), votesA: 3, votesB: 1 },
+    { matchupId: M(1), votesA: 2, votesB: 2 },
+    { matchupId: M(2), votesA: 4, votesB: 0 },
+  ]);
+
+  const settled = settleMatchups(SIX_SET, ballots);
+  assert.deepEqual(
+    settled.matchups.map((m) => [m.matchupId, m.outcome, m.winnerUserId, m.a.votes, m.b.votes]),
+    [
+      [M(0), "win", "u-a", 3, 1],
+      [M(1), "draw", undefined, 2, 2],
+      [M(2), "win", "u-e", 4, 0],
+    ],
+  );
+  assert.equal("winnerUserId" in settled.matchups[1]!, false, "a draw has no winner key at all");
+  assert.equal(settled.bye, undefined, "even field: no bye");
+  // The sides keep everything the derivation knew (user, song, departure flag).
+  assert.deepEqual(settled.matchups[0]!.a, { ...SIX_SET.matchups[0]!.a, votes: 3 });
+
+  assert.deepEqual(matchupRecords(settled.matchups), [
+    { userId: "u-a", delta: { wins: 1 } },
+    { userId: "u-b", delta: { losses: 1 } },
+    { userId: "u-c", delta: { draws: 1 } },
+    { userId: "u-d", delta: { draws: 1 } },
+    { userId: "u-e", delta: { wins: 1 } },
+    { userId: "u-f", delta: { losses: 1 } }, // 0 votes — still an L (no `points !== 0`-style skip)
+  ]);
+});
+
+test("H2H tally: a 0–0 contest is a draw that banks a D for both; side b can win", () => {
+  const settled = settleMatchups(SIX_SET, [ballot("u-a", { [M(1)]: "s-d", [M(2)]: "s-f" })]);
+  assert.deepEqual(settled.matchups.map((m) => [m.outcome, m.winnerUserId ?? null]), [
+    ["draw", null], // nobody picked in M0: 0–0
+    ["win", "u-d"],
+    ["win", "u-f"],
+  ]);
+  assert.deepEqual(matchupRecords(settled.matchups).filter((r) => r.userId === "u-a" || r.userId === "u-b"), [
+    { userId: "u-a", delta: { draws: 1 } },
+    { userId: "u-b", delta: { draws: 1 } },
+  ]);
+  assert.deepEqual(matchupOutcome(SIX_SET.matchups[0]!, { votesA: 1, votesB: 2 }), { outcome: "win", winnerUserId: "u-b" });
+  assert.deepEqual(matchupOutcome(SIX_SET.matchups[0]!, { votesA: 0, votesB: 0 }), { outcome: "draw" });
+});
+
+test("H2H tally: only real votes count — own-matchup, walkover / no-contest, foreign-song and unknown-matchup picks are inert", () => {
+  // ROUND_SET: M0 a–b and M1 c–d are contests, M2 is a walkover (u-e has a
+  // song, u-f doesn't), M3 is no contest, u-i has the bye.
+  const ballots = [
+    // The bye player: valid picks in M0 and M1, plus stray picks in the walkover / no contest.
+    ballot("u-i", { [M(0)]: "s-b", [M(1)]: "s-c", [M(2)]: "s-e", [M(3)]: "s-a" }),
+    // u-a picks in their own matchup (inert) and validly in M1.
+    ballot("u-a", { [M(0)]: "s-a", [M(1)]: "s-c" }),
+    // u-e picks another matchup's song in M0 (inert), the bye's song in M1 (inert).
+    ballot("u-e", { [M(0)]: "s-c", [M(1)]: "s-i" }),
+    // Unknown matchup ids and a points-only ballot (no picks) add nothing.
+    ballot("u-g", { [`${R}~M9`]: "s-a", "lg~0002~M0": "s-b" }),
+    ballot("u-h"),
+  ];
+  assert.deepEqual(tallyMatchups(ROUND_SET, ballots), [
+    { matchupId: M(0), votesA: 0, votesB: 1 },
+    { matchupId: M(1), votesA: 2, votesB: 0 },
+    { matchupId: M(2), votesA: 0, votesB: 0 }, // walkover: stray votes ignored
+    { matchupId: M(3), votesA: 0, votesB: 0 },
+  ]);
+  // No ballots: every matchup is still listed, 0–0.
+  assert.deepEqual(tallyMatchups(ROUND_SET, []).map((t) => t.votesA + t.votesB), [0, 0, 0, 0]);
+});
+
+test("H2H outcomes: a walkover banks W for the player with the song and L for the no-show; no contest and the bye bank nothing", () => {
+  const settled = settleMatchups(ROUND_SET, [ballot("u-i", { [M(0)]: "s-a", [M(1)]: "s-d", [M(2)]: "s-f" })]);
+  const [m0, m1, m2, m3] = settled.matchups;
+  assert.deepEqual([m0!.outcome, m0!.winnerUserId], ["win", "u-a"]);
+  assert.deepEqual([m1!.outcome, m1!.winnerUserId], ["win", "u-d"]);
+  assert.deepEqual([m2!.outcome, m2!.winnerUserId, m2!.a.votes, m2!.b.votes], ["walkover", "u-e", 0, 0]);
+  assert.equal(m3!.outcome, "noContest");
+  assert.equal("winnerUserId" in m3!, false);
+  assert.deepEqual(settled.bye, ROUND_SET.bye, "the bye rides along untouched — an exhibition, not a matchup");
+
+  // A walkover where side b has the song: b wins.
+  const flipped = settleMatchups({ matchups: [{ matchupId: M(0), a: side("u-a"), b: side("u-b", "s-b") }] }, []);
+  assert.deepEqual([flipped.matchups[0]!.outcome, flipped.matchups[0]!.winnerUserId], ["walkover", "u-b"]);
+
+  const records = matchupRecords(settled.matchups);
+  assert.deepEqual(records, [
+    { userId: "u-a", delta: { wins: 1 } },
+    { userId: "u-b", delta: { losses: 1 } },
+    { userId: "u-d", delta: { wins: 1 } },
+    { userId: "u-c", delta: { losses: 1 } },
+    { userId: "u-e", delta: { wins: 1 } },
+    { userId: "u-f", delta: { losses: 1 } },
+  ]);
+  const touched = new Set(records.map((r) => r.userId));
+  for (const untouched of ["u-g", "u-h", "u-i"]) assert.ok(!touched.has(untouched), `${untouched} banks nothing`);
+  // Exactly one entry per player: nobody plays twice in a round.
+  assert.equal(touched.size, records.length);
+});
+
+test("H2H outcomes: a departed player's pair is a walkover for whoever stayed — only the stayer's W is banked, the departed side takes no L", () => {
+  // u-d left mid-round (song withdrawn); u-h left without submitting, facing u-g who didn't submit either.
+  const set: RoundMatchupSet = {
+    matchups: [
+      { matchupId: M(0), a: side("u-c", "s-c"), b: side("u-d", undefined, true) },
+      { matchupId: M(1), a: side("u-g"), b: side("u-h", undefined, true) },
+      { matchupId: M(2), a: side("u-a", "s-a"), b: side("u-b", "s-b") },
+    ],
+  };
+  // A pick kept from before u-d departed (naming u-d's withdrawn song) is inert.
+  const settled = settleMatchups(set, [ballot("u-g", { [M(0)]: "s-d", [M(2)]: "s-b" })]);
+  assert.deepEqual(settled.matchups.map((m) => [m.outcome, m.winnerUserId ?? null, m.a.votes, m.b.votes]), [
+    ["walkover", "u-c", 0, 0],
+    ["noContest", null, 0, 0],
+    ["win", "u-b", 0, 1],
+  ]);
+  assert.equal(settled.matchups[0]!.b.departed, true);
+  assert.deepEqual(matchupRecords(settled.matchups), [
+    { userId: "u-c", delta: { wins: 1 } }, // u-d: nothing
+    { userId: "u-b", delta: { wins: 1 } },
+    { userId: "u-a", delta: { losses: 1 } },
+  ]);
+});
+
+test("H2H resolveMatchups: settles from a tally already counted (the one the reveal pinned), ignoring the ballots entirely; settleMatchups = tally + resolve; a matchup missing from the tally is 0–0", () => {
+  const pinned = [
+    { matchupId: M(0), votesA: 0, votesB: 2 },
+    { matchupId: M(2), votesA: 1, votesB: 1 },
+  ];
+  const settled = resolveMatchups(SIX_SET, pinned);
+  assert.deepEqual(
+    settled.matchups.map((m) => [m.matchupId, m.outcome, m.winnerUserId, m.a.votes, m.b.votes]),
+    [
+      [M(0), "win", "u-b", 0, 2],
+      [M(1), "draw", undefined, 0, 0],
+      [M(2), "draw", undefined, 1, 1],
+    ],
+  );
+  const ballots = [ballot("u-c", { [M(0)]: "s-a", [M(2)]: "s-e" }), ballot("u-a", { [M(1)]: "s-c" })];
+  assert.deepEqual(settleMatchups(SIX_SET, ballots), resolveMatchups(SIX_SET, tallyMatchups(SIX_SET, ballots)));
+});
+
+test("H2H outcomes: an un-frozen / standard round settles to nothing; an outcome this version doesn't know banks nothing", () => {
+  assert.deepEqual(settleMatchups({ matchups: [] }, [ballot("u-a", { [M(0)]: "s-a" })]), { matchups: [] });
+  assert.deepEqual(tallyMatchups({ matchups: [] }, []), []);
+  const future = { ...settleMatchups(SIX_SET, []).matchups[0]!, outcome: "forfeit" as never, winnerUserId: "u-a" };
+  assert.deepEqual(matchupRecords([future]), []);
 });

@@ -27,7 +27,7 @@ because every read below is a point-get or a single-partition `Query` — no cro
 |---|---|---|---|
 | League meta | `LEAGUE#<leagueId>` | `META` | `name, ownerId, musicProvider, format, settings{}, roundCount, createdAt`, head-to-head only once frozen: `h2hParticipants[], h2hSalt` |
 | Membership | `LEAGUE#<leagueId>` | `MEMBER#<userId>` | `joinedAt, displayName` |
-| Round | `LEAGUE#<leagueId>` | `ROUND#<index4>` | `roundId, theme, description, status, submissionDeadline, voteDeadline, playlistUrl` |
+| Round | `LEAGUE#<leagueId>` | `ROUND#<index4>` | `roundId, theme, description, status, submissionDeadline, voteDeadline, playlistUrl`; head-to-head once revealed: `h2hDeparted[]` (who had departed at the reveal) and `h2hTally[]` (`{ matchupId, votesA, votesB }` as the reveal counted them) |
 | Submission | `ROUND#<roundId>` | `SUB#<userId>` | `track{}, submittedAt` |
 | Vote ballot | `ROUND#<roundId>` | `BALLOT#<voterId>` | `allocations{subId:pts}, comments{subId:text}, castAt`; head-to-head: `picks{matchupId:subId}` with `allocations` empty |
 | Standing | `LEAGUE#<leagueId>` | `STANDING#<userId>` | `points` (running season total); `wins, losses, draws` (head-to-head record — absent on older rows, read as 0) |
@@ -156,7 +156,10 @@ All routes require a valid Cognito JWT. `:me` denotes the caller's `sub`. Errors
 | `PATCH` | `/leagues/{leagueId}/rounds/{roundId}` | `{ status?, theme?, ...deadlines }` | Drives the `draft → submitting → voting → revealed` lifecycle. |
 
 Status transitions are validated (no skipping/reversing). `revealed` is reached only via the
-reveal endpoint below, not a raw PATCH.
+reveal endpoint below, not a raw PATCH. Head-to-head leagues: a PATCH that read the round before
+it was revealed is written only while the round is still unsettled (`updateRoundUnlessSettled`),
+so it can't put a revealed round back in voting — it answers `409` instead; the timed
+auto-advance writes the same way. Standard leagues write unconditionally, as before.
 
 ### Submissions
 
@@ -175,8 +178,8 @@ list **excluding the caller's own pick**, and only when the round is `voting`.
 |---|---|---|---|
 | `POST` | `/rounds/{roundId}/ballot` | `{ allocations: {submissionId: points}, comments?: {submissionId: text} }` — head-to-head: `{ picks: {matchupId: submissionId}, comments? }` | `{ ok: true }` |
 | `GET` | `/rounds/{roundId}/my-ballot` | — | `{ allocations, downvotes, comments }` (+ `picks` in head-to-head leagues), or `null` before voting |
-| `POST` | `/rounds/{roundId}/reveal` | — (owner-only) | `RoundResult[]` |
-| `GET` | `/rounds/{roundId}/results` | — | `RoundResult[]` |
+| `POST` | `/rounds/{roundId}/reveal` | — (owner-only) | `RoundResult[]` — head-to-head: `{ format: "headToHead", matchups, bye }` |
+| `GET` | `/rounds/{roundId}/results` | — | same as the reveal |
 
 **Ballot validation (the core of the rules engine) — reject the whole ballot if any fail:**
 
@@ -219,6 +222,52 @@ set status `revealed`. `GET /results` is the read side — available only once `
 returns submitters, points, ranks, and all voter comments (matching
 [`getRoundResults`](../src/data/mock.ts)).
 
+**Head-to-head reveal** (same endpoints; `finalizeReveal` / `domain/rules.ts`
+`settleMatchups`): each matchup is tallied from the ballots' `picks` — a pick counts only in a
+matchup that is a contest at the reveal and isn't the voter's own, naming one of its two songs
+(`tallyMatchups`; everything else a ballot holds is inert). Outcomes: most votes wins (`win`,
+`winnerUserId`), equal votes `draw` (0–0 included), one song `walkover` (its player wins; stray
+picks ignored), no songs `noContest`. A player who left / was kicked before the reveal has their
+song withdrawn, so their pair is a walkover for whoever stayed. Banking: one W/L/D increment
+per player whose record changes — win `{wins: 1}`, loss `{losses: 1}` (even on 0 votes), draw
+`{draws: 1}` each, walkover W for the winner and L for the no-show unless they departed (a
+departed player's row takes nothing); `noContest` and the bye bank nothing; points never move.
+**Exactly once:** the claim and the banking are ONE atomic write (`revealRoundOnce` — a
+`TransactWriteItems` of the round `PutItem`, conditioned on
+`attribute_exists(PK) AND #status <> :revealed AND #status <> :complete`, plus one in-place
+W/L/D `Update` per player). The claim also pins `h2hDeparted` (the departed set as it stood) and
+`h2hTally` (the picks it counted). Only the reveal whose write lands banks, so the owner's
+reveal racing a timed auto-advance (or two auto-advancing reads) can't double-bank; the loser
+re-reads the round strongly consistently and answers with it. A write that fails banks nothing
+and leaves the round in voting, so the reveal can be retried. (Above 99 banked rows — DynamoDB's
+100-item transaction cap — it falls back to the conditional round write, then one write per row:
+at most once.) Every later read uses the pins: the pinned players' songs are withdrawn and the
+pinned tally decides the outcomes, so results (and `GET /matchups`) read back as banked whatever
+the member list or a ballot written after the reveal read them does afterwards. (Voter comments
+are still read live from the ballot rows.) A standard round's reveal is unchanged: bank, then an
+unconditional round write.
+
+The payload (readable by any signed-in user once revealed, like standard results):
+
+```ts
+{ format: "headToHead",
+  matchups: [{ matchupId,                       // sorted by matchupId
+    a: { player: {id, displayName}, song: RevealedSong | null, votes, departed },
+    b: { ... },
+    outcome: "win" | "draw" | "walkover" | "noContest",   // open set (playoffs may add more)
+    winnerUserId? }],                            // win / walkover only
+  bye: { player: {id, displayName}, song: RevealedSong } | null }
+// RevealedSong = { id (submissionId), track, submitterComment?, comments: [{ voter, text }] }
+```
+
+`song: null` = that player didn't submit or had departed (`departed: true`). `bye` is the
+sitting-out player's exhibition song, `null` for an even field, or when they didn't submit or
+had departed by the reveal.
+**Wire compatibility:** a standard round still answers with the bare `RoundResult[]` array,
+byte-identical to before formats existed, so an older frontend never breaks; only head-to-head
+rounds answer with the object (discriminate with `Array.isArray`). The frontend data layer
+normalizes both into its own `{ format: "standard", results } | { format: "headToHead", ... }`.
+
 ### Head-to-head matchups
 
 | Method | Path | Body | Returns |
@@ -242,9 +291,9 @@ round; a spectator who never played never does) is the payload's only
 identity signal — no user ids, no submitter notes, never the frozen order.
 
 A revealed (or complete) round is never re-judged against the current member
-list, so a later leave/kick doesn't rewrite it: it shows every submitted song.
-For a round where someone departed *during* play, that means the revealed
-payload is not authoritative about walkovers — `GET /results` is.
+list, so a later leave/kick (or a rejoin) doesn't rewrite it: it withdraws
+exactly the songs of the players the reveal pinned as departed
+(`h2hDeparted`), so it agrees with `GET /results` about its walkovers.
 
 Access: members from `voting` on (403 while `draft` / `submitting` /
 `previewing` — no peeking before voting opens); once `revealed` (or

@@ -4,7 +4,7 @@
 //
 //   League meta   PK=LEAGUE#<id>      SK=META
 //   Membership    PK=LEAGUE#<id>      SK=MEMBER#<userId>   (+ GSI1: USER#<id> / LEAGUE#<id>)
-//   Round         PK=LEAGUE#<id>      SK=ROUND#<index4>
+//   Round         PK=LEAGUE#<id>      SK=ROUND#<index4>   (h2hDeparted + h2hTally once an H2H round is revealed)
 //   Submission    PK=ROUND#<roundId>  SK=SUB#<userId>
 //   Ballot        PK=ROUND#<roundId>  SK=BALLOT#<voterId>   (allocations; picks for H2H)
 //   Standing      PK=LEAGUE#<id>      SK=STANDING#<userId>  (points; wins/losses/draws for H2H)
@@ -26,7 +26,7 @@ import {
   TransactWriteCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
-import type { Ballot, League, LeagueSettings, Round, Submission } from "../domain/types.ts";
+import type { Ballot, League, LeagueSettings, MatchupTally, Round, Submission } from "../domain/types.ts";
 import { leagueFormat } from "../domain/types.ts";
 import type { StandingRecordDelta, StandingTotals } from "../domain/standings.ts";
 import { recordIncrements } from "../domain/standings.ts";
@@ -367,14 +367,20 @@ export class DynamoRepository implements Repository {
   async createRound(round: Round): Promise<void> {
     await this.doc.send(new PutCommand({ TableName: this.tableName, Item: this.roundItem(round) }));
   }
-  async getRound(roundId: string): Promise<Round | undefined> {
+  async getRound(roundId: string, opts?: { consistent?: boolean }): Promise<Round | undefined> {
     // roundId encodes its league + index as `<leagueId>~<index4>` (see roundItem).
     const sep = roundId.lastIndexOf("~");
     if (sep < 0) return undefined;
     const leagueId = roundId.slice(0, sep);
     const idx = roundId.slice(sep + 1);
+    // Strongly consistent only when asked (the head-to-head reveal's re-read
+    // after losing its claim); every other read keeps the default, unchanged.
     const res = await this.doc.send(
-      new GetCommand({ TableName: this.tableName, Key: { PK: `LEAGUE#${leagueId}`, SK: `ROUND#${idx}` } }),
+      new GetCommand({
+        TableName: this.tableName,
+        Key: { PK: `LEAGUE#${leagueId}`, SK: `ROUND#${idx}` },
+        ...(opts?.consistent ? { ConsistentRead: true } : {}),
+      }),
     );
     return res.Item ? this.toRound(res.Item) : undefined;
   }
@@ -391,6 +397,57 @@ export class DynamoRepository implements Repository {
   async updateRound(round: Round): Promise<void> {
     await this.doc.send(new PutCommand({ TableName: this.tableName, Item: this.roundItem(round) }));
   }
+  async updateRoundUnlessSettled(round: Round): Promise<boolean> {
+    // One conditional PutItem: the whole round item lands only while the
+    // stored round isn't settled — roundSettled's definition — so a write
+    // built from a copy read before a reveal can't un-reveal the round, and
+    // of two concurrent reveals exactly one wins. The loser writes nothing.
+    try {
+      await this.doc.send(new PutCommand({ TableName: this.tableName, Item: this.roundItem(round), ...UNSETTLED_ROUND }));
+      return true;
+    } catch (err) {
+      if ((err as { name?: string } | null)?.name === "ConditionalCheckFailedException") return false;
+      throw err;
+    }
+  }
+  async revealRoundOnce(
+    round: Round,
+    records: ReadonlyArray<{ userId: string; delta: StandingRecordDelta }> = [],
+  ): Promise<boolean> {
+    const banked = mergeRecords(records); // validates every increment before any write
+    if (banked.length === 0) return this.updateRoundUnlessSettled(round);
+    if (banked.length + 1 > MAX_TRANSACT_ITEMS) {
+      // Too many standing rows for one transaction (a 100+-player league):
+      // claim first, then bank row by row — at most once (a failure part-way
+      // leaves the round revealed with rows missing) but never twice.
+      if (!(await this.updateRoundUnlessSettled(round))) return false;
+      for (const { userId, inc } of banked) await this.addStandingRecord(round.leagueId, userId, inc);
+      return true;
+    }
+    // One TransactWriteItems: the conditional round write (the claim) plus
+    // every standing row's in-place W/L/D increment — all land or none do.
+    // A refused claim (another reveal settled it) cancels the whole
+    // transaction with ConditionalCheckFailed on item 0: nothing is banked.
+    // Any other failure (throttling, a conflict with a concurrent write)
+    // also writes nothing, and the round is still in voting to reveal again.
+    try {
+      await this.doc.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            { Put: { TableName: this.tableName, Item: this.roundItem(round), ...UNSETTLED_ROUND } },
+            ...banked.map(({ userId, inc }) => ({ Update: this.standingRecordUpdate(round.leagueId, userId, inc) })),
+          ],
+        }),
+      );
+      return true;
+    } catch (err) {
+      const e = err as { name?: string; CancellationReasons?: Array<{ Code?: string }> } | null;
+      if (e?.name === "TransactionCanceledException" && e.CancellationReasons?.[0]?.Code === "ConditionalCheckFailed") {
+        return false;
+      }
+      throw err;
+    }
+  }
   private roundItem(round: Round) {
     return {
       PK: `LEAGUE#${round.leagueId}`,
@@ -406,6 +463,8 @@ export class DynamoRepository implements Repository {
       previewDeadline: round.previewDeadline,
       voteDeadline: round.voteDeadline,
       playlistUrl: round.playlistUrl,
+      h2hDeparted: round.h2hDeparted, // head-to-head, pinned at the reveal (undefined → not stored)
+      h2hTally: round.h2hTally, // head-to-head, pinned at the reveal (undefined → not stored)
     };
   }
   private toRound(it: Record<string, unknown>): Round {
@@ -420,6 +479,10 @@ export class DynamoRepository implements Repository {
       previewDeadline: it.previewDeadline as string | undefined,
       voteDeadline: it.voteDeadline as string | undefined,
       playlistUrl: it.playlistUrl as string | undefined,
+      // Only revealed head-to-head rounds carry it; every other round reads
+      // back without the key, exactly as before.
+      ...(Array.isArray(it.h2hDeparted) ? { h2hDeparted: it.h2hDeparted as string[] } : {}),
+      ...(Array.isArray(it.h2hTally) ? { h2hTally: it.h2hTally as MatchupTally[] } : {}),
     };
   }
 
@@ -577,23 +640,54 @@ export class DynamoRepository implements Repository {
     );
   }
   async addStandingRecord(leagueId: string, userId: string, delta: StandingRecordDelta): Promise<void> {
-    const inc = recordIncrements(delta);
-    // Same item and same atomic in-place increment as addStandingPoints: one
-    // UpdateItem, every counter created at 0 if absent, `points` untouched.
-    // Attribute names go through placeholders so no counter name can ever
-    // collide with a DynamoDB reserved word.
-    await this.doc.send(
-      new UpdateCommand({
-        TableName: this.tableName,
-        Key: { PK: `LEAGUE#${leagueId}`, SK: `STANDING#${userId}` },
-        UpdateExpression:
-          "SET #w = if_not_exists(#w, :zero) + :w, #l = if_not_exists(#l, :zero) + :l, " +
-          "#d = if_not_exists(#d, :zero) + :d, userId = :u, entity = :e",
-        ExpressionAttributeNames: { "#w": "wins", "#l": "losses", "#d": "draws" },
-        ExpressionAttributeValues: {
-          ":zero": 0, ":w": inc.wins, ":l": inc.losses, ":d": inc.draws, ":u": userId, ":e": "standing",
-        },
-      }),
-    );
+    await this.doc.send(new UpdateCommand(this.standingRecordUpdate(leagueId, userId, delta)));
   }
+  /** The W/L/D increment's UpdateItem — sent alone by addStandingRecord, and
+   *  as one item of the head-to-head reveal's transaction. Same item and same
+   *  atomic in-place increment as addStandingPoints: every counter created at
+   *  0 if absent, `points` untouched. Attribute names go through placeholders
+   *  so no counter name can ever collide with a DynamoDB reserved word.
+   *  Validates the delta (recordIncrements) before anything is sent. */
+  private standingRecordUpdate(leagueId: string, userId: string, delta: StandingRecordDelta) {
+    const inc = recordIncrements(delta);
+    return {
+      TableName: this.tableName,
+      Key: { PK: `LEAGUE#${leagueId}`, SK: `STANDING#${userId}` },
+      UpdateExpression:
+        "SET #w = if_not_exists(#w, :zero) + :w, #l = if_not_exists(#l, :zero) + :l, " +
+        "#d = if_not_exists(#d, :zero) + :d, userId = :u, entity = :e",
+      ExpressionAttributeNames: { "#w": "wins", "#l": "losses", "#d": "draws" },
+      ExpressionAttributeValues: {
+        ":zero": 0, ":w": inc.wins, ":l": inc.losses, ":d": inc.draws, ":u": userId, ":e": "standing",
+      },
+    };
+  }
+}
+
+/** DynamoDB's cap on the items of one TransactWriteItems call. */
+const MAX_TRANSACT_ITEMS = 100;
+
+/** The condition every settle-guarded round write carries: the round exists
+ *  (never a phantom item for one that was deleted) and isn't settled —
+ *  roundSettled's definition. `status` is a DynamoDB reserved word, hence the
+ *  placeholder. */
+const UNSETTLED_ROUND = {
+  ConditionExpression: "attribute_exists(PK) AND #status <> :revealed AND #status <> :complete",
+  ExpressionAttributeNames: { "#status": "status" },
+  ExpressionAttributeValues: { ":revealed": "revealed", ":complete": "complete" },
+};
+
+/** A reveal's records as one validated increment per player — a transaction
+ *  can't touch the same standing row twice, so repeated players are summed
+ *  (the reveal never sends any: nobody plays twice in a round). */
+function mergeRecords(
+  records: ReadonlyArray<{ userId: string; delta: StandingRecordDelta }>,
+): Array<{ userId: string; inc: ReturnType<typeof recordIncrements> }> {
+  const byUser = new Map<string, ReturnType<typeof recordIncrements>>();
+  for (const { userId, delta } of records) {
+    const inc = recordIncrements(delta);
+    const prev = byUser.get(userId);
+    byUser.set(userId, prev ? { wins: prev.wins + inc.wins, losses: prev.losses + inc.losses, draws: prev.draws + inc.draws } : inc);
+  }
+  return [...byUser].map(([userId, inc]) => ({ userId, inc }));
 }

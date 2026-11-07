@@ -2,8 +2,9 @@
 // Proves the one shared derivation every H2H reader uses (HTH-05 read API,
 // HTH-06 ballots, HTH-07 tally): pairings come from the frozen order + salt,
 // each side gets its player's song, a departed player's song is withdrawn
-// while the round is in play (never re-judged once it's revealed, unless a
-// pinned set is passed), the walkover / no-contest / votable definitions, and
+// while the round is in play (never re-judged once it's revealed: it reads
+// the departed set the reveal pinned on it, HTH-07), the walkover /
+// no-contest / votable definitions, and
 // that the anonymized view carries songs and `isMine` but never a user id or
 // the frozen order.
 
@@ -119,6 +120,29 @@ test("a revealed round is never re-judged against today's member list; a pinned 
   // Standard and un-frozen leagues have no participants to withdraw.
   assert.equal(departedParticipants(frozen({ format: "standard", memberIds: [] }), ROUND).size, 0);
   assert.equal(departedParticipants(frozen({ h2hParticipants: undefined, memberIds: [] }), ROUND).size, 0);
+});
+
+test("the reveal's pin on the round (h2hDeparted) is what a revealed round withdraws by default — whatever membership says later", () => {
+  const { matchups, bye } = schedule();
+  const leaver = matchups[1]!.b;
+  const subs = FIVE.map((id) => sub(id));
+  const revealed = { ...ROUND, status: "revealed" as const, h2hDeparted: [leaver] };
+
+  // The leaver has since rejoined (full member list) — still withdrawn, nobody else is.
+  assert.deepEqual([...departedParticipants(frozen(), revealed)], [leaver]);
+  const set = deriveRoundMatchups(frozen(), revealed, subs);
+  assert.deepEqual(set.matchups[1]!.b, { userId: leaver, departed: true });
+  assert.equal(set.bye?.submission?.userId, bye);
+  // Identical to passing the pinned set explicitly.
+  assert.deepEqual(set, deriveRoundMatchups(frozen(), { ...ROUND, status: "revealed" }, subs, { departed: [leaver] }));
+  // Someone else leaves after the reveal: the pinned set still decides.
+  const later = frozen({ memberIds: FIVE.filter((id) => id !== bye) });
+  assert.deepEqual(deriveRoundMatchups(later, revealed, subs), set);
+  // An empty pin = nobody withdrawn; a round in play ignores any pin and judges current membership.
+  assert.equal(departedParticipants(later, { ...revealed, h2hDeparted: [] }).size, 0);
+  assert.deepEqual([...departedParticipants(later, { ...revealed, status: "voting" })], [bye]);
+  // No schedule, nothing to withdraw — a pin on a standard round is ignored.
+  assert.equal(departedParticipants(frozen({ format: "standard" }), revealed).size, 0);
 });
 
 test("a player with several submissions (hand-edited data) is represented by the smallest id, whatever the read order", () => {

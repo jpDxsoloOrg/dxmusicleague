@@ -12,6 +12,7 @@
 // revealRound) — this just automates it. See memory: round-automation.
 
 import type { League, Round } from "../domain/types.ts";
+import { leagueFormat } from "../domain/types.ts";
 import { createPlaylistForRound } from "./providers.ts";
 import { finalizeReveal } from "./results.ts";
 import { phaseDeadline } from "./timing.ts";
@@ -79,6 +80,23 @@ export async function autoAdvanceRound(
     }
   }
 
-  if (advanced) await deps.repo.updateRound(round);
+  if (advanced) await persistAdvance(deps, league, round);
   return round;
+}
+
+/** Write an advanced round. A head-to-head league's write lands only while
+ *  the stored round is unsettled (HTH-07): this copy may have been read
+ *  before another request advanced AND revealed the round, and writing it
+ *  back would put the round back in voting — dropping the reveal's pins and
+ *  letting a second reveal bank it twice. If a reveal won, `round` is brought
+ *  up to date with the stored, settled round instead. Standard leagues write
+ *  unconditionally, exactly as before. */
+async function persistAdvance(deps: Deps, league: League, round: Round): Promise<void> {
+  if (leagueFormat(league) !== "headToHead") {
+    await deps.repo.updateRound(round);
+    return;
+  }
+  if (await deps.repo.updateRoundUnlessSettled(round)) return;
+  const stored = await deps.repo.getRound(round.id, { consistent: true });
+  if (stored) Object.assign(round, stored);
 }

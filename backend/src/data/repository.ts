@@ -14,7 +14,8 @@ export interface Repository {
   /** `consistent`: a strongly consistent read (DynamoDB's default reads are
    *  eventually consistent and can miss a write that just landed). Only the
    *  head-to-head freeze asks for it, to see every member right after its
-   *  conditional write; everything else reads as before. */
+   *  conditional write; everything else reads as before (getRound has the
+   *  same option, for the head-to-head reveal). */
   getLeague(leagueId: string, opts?: { consistent?: boolean }): Promise<League | undefined>;
   /** Leagues the user is a member of. */
   getLeaguesForUser(userId: string): Promise<League[]>;
@@ -64,9 +65,34 @@ export interface Repository {
 
   // ---- Rounds ----
   createRound(round: Round): Promise<void>;
-  getRound(roundId: string): Promise<Round | undefined>;
+  /** `consistent`: a strongly consistent read — the head-to-head reveal's
+   *  re-read after another reveal won the claim, so it sees that write. */
+  getRound(roundId: string, opts?: { consistent?: boolean }): Promise<Round | undefined>;
   getRoundsForLeague(leagueId: string): Promise<Round[]>;
   updateRound(round: Round): Promise<void>;
+  /** `updateRound`, but ONLY if the stored round exists and isn't settled
+   *  (`revealed` / `complete`) — one conditional write. Resolves `true` when
+   *  it landed, `false` (writing nothing) otherwise. A head-to-head league's
+   *  round edits and timed advances write through it (HTH-07), so a request
+   *  holding a copy read before the reveal can never put a revealed round
+   *  back to `voting` (dropping its pins) and let it be revealed — and banked
+   *  — a second time. */
+  updateRoundUnlessSettled(round: Round): Promise<boolean>;
+  /** Settle a round, once, and bank its head-to-head records (HTH-07): write
+   *  `round` (the caller has set its status to `revealed`, plus what the
+   *  reveal pins on it) ONLY if the stored round isn't settled already —
+   *  `updateRoundUnlessSettled`'s condition — and, in the SAME atomic write,
+   *  add every `records` entry to its player's standing row (as
+   *  `addStandingRecord`; at most one entry per player). Of two concurrent
+   *  reveals (the owner's and a timed auto-advance, say) exactly one lands
+   *  and banks; and a write that fails part-way banks nothing and leaves the
+   *  round in voting, so the reveal can simply be retried: exactly once.
+   *  Resolves `true` when it landed, `false` (writing and banking nothing)
+   *  when the stored round is already settled or doesn't exist.
+   *  DynamoDB: one TransactWriteItems (round + up to 99 standing rows — a
+   *  99-player league); a larger round falls back to the conditional round
+   *  write followed by one standing write per player (at most once). */
+  revealRoundOnce(round: Round, records?: ReadonlyArray<{ userId: string; delta: StandingRecordDelta }>): Promise<boolean>;
 
   // ---- Submissions ----
   /** Upsert by submission id — a player may hold several per round (the

@@ -14,7 +14,8 @@
 import { randomInt } from "node:crypto";
 import type { League, Round, RoundStatus } from "../domain/types.ts";
 import { leagueFormat } from "../domain/types.ts";
-import { badRequest, forbidden, notFound } from "../domain/errors.ts";
+import { badRequest, conflict, forbidden, notFound } from "../domain/errors.ts";
+import { roundSettled } from "../domain/matchups.ts";
 import {
   H2H_MIN_PLAYERS_MESSAGE,
   H2H_ROUND_ONE_FIRST_MESSAGE,
@@ -125,6 +126,7 @@ export async function updateRound(
   const round = await deps.repo.getRound(roundId);
   if (!round || round.leagueId !== leagueId) throw notFound("That round doesn't exist.");
   const opening = input.status === "submitting" && round.status === "draft";
+  const settledWhenRead = roundSettled(round);
 
   if (input.status && input.status !== round.status) {
     if (input.status === "revealed" || input.status === "complete") {
@@ -185,6 +187,18 @@ export async function updateRound(
   // write, so a refused open leaves the round in draft.
   if (opening && leagueFormat(league) === "headToHead") await freezeSeasonIfNeeded(deps, league, round);
 
+  // Head-to-head (HTH-07): an edit built from a round read before its reveal
+  // must not be written back over the reveal — it would put the round back
+  // in voting, drop the reveal's pins (h2hDeparted / h2hTally) and let a
+  // second reveal bank its W/L/D twice. So such a write lands only while the
+  // round is still unsettled; if a reveal got there first, the edit is
+  // refused. Standard leagues write unconditionally, exactly as before.
+  if (leagueFormat(league) === "headToHead" && !settledWhenRead) {
+    if (!(await deps.repo.updateRoundUnlessSettled(round))) {
+      throw conflict("That round was just revealed. Reload to see the results.");
+    }
+    return round;
+  }
   await deps.repo.updateRound(round);
   return round;
 }

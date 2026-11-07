@@ -295,6 +295,7 @@ test("revealed results are readable by non-members", async () => {
     track: { id: "t1", provider: "spotify", providerTrackId: "sp1", title: "Song A", artists: ["A"] },
   });
   const results = await getResults(deps, "u-me", "lg~1"); // u-me is not a member
+  assert.ok(Array.isArray(results), "a standard round's results are still the bare RoundResult[]");
   assert.equal(results.length, 1);
 });
 

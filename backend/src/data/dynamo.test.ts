@@ -6,15 +6,18 @@
 // the head-to-head freeze's conditional writes (HTH-03): the write-once
 // UpdateItem, its re-plan, the season-gated join transaction, and the
 // strongly consistent read the freeze checks itself with; plus the W/L/D
-// counters on the existing STANDING# item (HTH-04) and head-to-head `picks` on
-// the existing BALLOT# item (HTH-06).
+// counters on the existing STANDING# item (HTH-04), head-to-head `picks` on
+// the existing BALLOT# item (HTH-06), and the once-only reveal (HTH-07): its
+// transaction (conditional round write with the pinned `h2hDeparted` /
+// `h2hTally` + every W/L/D increment), the settle-guarded round write, and
+// the strongly consistent round read.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { DynamoRepository } from "./dynamo.ts";
 import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types.ts";
-import type { Ballot, League } from "../domain/types.ts";
+import type { Ballot, League, Round } from "../domain/types.ts";
 
 type Item = Record<string, unknown>;
 
@@ -41,17 +44,25 @@ function splitTop(expr: string, op: "AND" | "OR"): string[] {
  *  item, with DynamoDB's semantics: clauses joined by OR / AND (AND binds
  *  tighter; parentheses group), each one of `attribute_exists(a)`,
  *  `attribute_not_exists(a)`, `size(a) = :v`, `contains(a, :v)` (list
- *  membership) or `a = :v`. A function over a missing attribute is false. */
-function conditionHolds(expression: string | undefined, item: Item | undefined, values: Item = {}): boolean {
+ *  membership), `a = :v` or `a <> :v` (`#name` placeholders resolved through
+ *  `names`). A function over a missing attribute is false; so is any
+ *  comparison with one here (the repo never compares a possibly-missing
+ *  attribute, so the fake needn't model DynamoDB's rule for `<>` there). */
+function conditionHolds(
+  expression: string | undefined,
+  item: Item | undefined,
+  values: Item = {},
+  names: Record<string, string> = {},
+): boolean {
   if (!expression) return true;
   const expr = expression.trim();
   const ors = splitTop(expr, "OR");
-  if (ors.length > 1) return ors.some((e) => conditionHolds(e, item, values));
+  if (ors.length > 1) return ors.some((e) => conditionHolds(e, item, values, names));
   const ands = splitTop(expr, "AND");
-  if (ands.length > 1) return ands.every((e) => conditionHolds(e, item, values));
-  if (expr.startsWith("(") && expr.endsWith(")")) return conditionHolds(expr.slice(1, -1), item, values);
+  if (ands.length > 1) return ands.every((e) => conditionHolds(e, item, values, names));
+  if (expr.startsWith("(") && expr.endsWith(")")) return conditionHolds(expr.slice(1, -1), item, values, names);
 
-  const attr = (name: string) => (item === undefined ? undefined : item[name]);
+  const attr = (name: string) => (item === undefined ? undefined : item[names[name] ?? name]);
   let m = expr.match(/^(attribute_exists|attribute_not_exists)\((\w+)\)$/);
   if (m) return (attr(m[2]!) !== undefined) === (m[1] === "attribute_exists");
   m = expr.match(/^size\((\w+)\)\s*=\s*(:\w+)$/);
@@ -64,8 +75,12 @@ function conditionHolds(expression: string | undefined, item: Item | undefined, 
     const v = attr(m[1]!);
     return Array.isArray(v) && v.includes(values[m[2]!]);
   }
-  m = expr.match(/^(\w+)\s*=\s*(:\w+)$/);
-  if (m) return attr(m[1]!) !== undefined && attr(m[1]!) === values[m[2]!];
+  m = expr.match(/^([#\w]+)\s*(=|<>)\s*(:\w+)$/);
+  if (m) {
+    const v = attr(m[1]!);
+    if (v === undefined) return false;
+    return m[2] === "=" ? v === values[m[3]!] : v !== values[m[3]!];
+  }
   throw new Error(`fake doc client: unsupported condition ${expr}`);
 }
 
@@ -86,7 +101,7 @@ function fakeRepo(): { repo: DynamoRepository; table: Map<string, Item>; sent: u
       // and writes nothing.
       const k = key(cmd.input.Key?.PK, cmd.input.Key?.SK);
       const existing = table.get(k);
-      if (!conditionHolds(cmd.input.ConditionExpression, existing, cmd.input.ExpressionAttributeValues)) {
+      if (!conditionHolds(cmd.input.ConditionExpression, existing, cmd.input.ExpressionAttributeValues, cmd.input.ExpressionAttributeNames)) {
         throw Object.assign(new Error("The conditional request failed"), { name: "ConditionalCheckFailedException" });
       }
       const next: Item = { ...(existing ?? { PK: cmd.input.Key?.PK, SK: cmd.input.Key?.SK }) };
@@ -100,14 +115,24 @@ function fakeRepo(): { repo: DynamoRepository; table: Map<string, Item>; sent: u
       return {};
     }
     if (cmd instanceof TransactWriteCommand) {
-      // All-or-nothing, like DynamoDB: every ConditionCheck is evaluated
-      // first; one failure cancels the whole transaction (writing nothing)
-      // with a reason per item.
+      // All-or-nothing, like DynamoDB: every item's condition (ConditionCheck,
+      // or a conditional Put / Update) is evaluated first; one failure
+      // cancels the whole transaction (writing nothing) with a reason per
+      // item. Then the Puts (JSON round-trip = removeUndefinedValues) and the
+      // Updates (applySetExpression) apply. Like DynamoDB, it refuses more
+      // than 100 items or two operations on the same item.
       const items = cmd.input.TransactItems ?? [];
+      if (items.length > 100) throw Object.assign(new Error("Too many items"), { name: "ValidationException" });
+      const target = (t: (typeof items)[number]) => {
+        const op = t.ConditionCheck ?? t.Update ?? t.Put;
+        const k = t.Put ? { PK: t.Put.Item?.PK, SK: t.Put.Item?.SK } : (op as { Key?: Item }).Key;
+        return { op: op as { ConditionExpression?: string; ExpressionAttributeValues?: Item; ExpressionAttributeNames?: Record<string, string> }, k: key(k?.PK, k?.SK) };
+      };
+      const keys = items.map((t) => target(t).k);
+      if (new Set(keys).size !== keys.length) throw Object.assign(new Error("Duplicate item"), { name: "ValidationException" });
       const reasons = items.map((t) => {
-        const check = t.ConditionCheck;
-        if (!check) return "None";
-        const holds = conditionHolds(check.ConditionExpression, table.get(key(check.Key?.PK, check.Key?.SK)), check.ExpressionAttributeValues);
+        const { op, k } = target(t);
+        const holds = conditionHolds(op.ConditionExpression, table.get(k), op.ExpressionAttributeValues, op.ExpressionAttributeNames);
         return holds ? "None" : "ConditionalCheckFailed";
       });
       if (reasons.some((code) => code !== "None")) {
@@ -117,8 +142,18 @@ function fakeRepo(): { repo: DynamoRepository; table: Map<string, Item>; sent: u
         });
       }
       for (const t of items) {
-        const it = t.Put?.Item as Item | undefined;
-        if (it) table.set(key(it.PK, it.SK), structuredClone(it));
+        if (t.Put) {
+          const it = JSON.parse(JSON.stringify(t.Put.Item ?? {})) as Item;
+          table.set(key(it.PK, it.SK), it);
+        } else if (t.Update) {
+          const k = key(t.Update.Key?.PK, t.Update.Key?.SK);
+          const next: Item = { ...(table.get(k) ?? { PK: t.Update.Key?.PK, SK: t.Update.Key?.SK }) };
+          applySetExpression(
+            next, t.Update.UpdateExpression ?? "", t.Update.ExpressionAttributeNames ?? {},
+            structuredClone(t.Update.ExpressionAttributeValues ?? {}),
+          );
+          table.set(k, next);
+        }
       }
       return {};
     }
@@ -126,7 +161,7 @@ function fakeRepo(): { repo: DynamoRepository; table: Map<string, Item>; sent: u
       // A whole-item write. JSON round-trip = the real client's
       // removeUndefinedValues: an undefined attribute is never stored.
       const it = JSON.parse(JSON.stringify(cmd.input.Item ?? {})) as Item;
-      if (!conditionHolds(cmd.input.ConditionExpression, table.get(key(it.PK, it.SK)), cmd.input.ExpressionAttributeValues)) {
+      if (!conditionHolds(cmd.input.ConditionExpression, table.get(key(it.PK, it.SK)), cmd.input.ExpressionAttributeValues, cmd.input.ExpressionAttributeNames)) {
         throw Object.assign(new Error("The conditional request failed"), { name: "ConditionalCheckFailedException" });
       }
       table.set(key(it.PK, it.SK), it);
@@ -473,4 +508,197 @@ test("an H2H ballot's picks round-trip on the same BALLOT#<voterId> item; a poin
   await repo.putBallot({ ...h2h, picks: { "lg-1~0001~M0": "sub-b" }, castAt: "2026-11-07T13:00:00.000Z" });
   assert.deepEqual((await repo.getBallot("lg-1~0001", "u-me"))?.picks, { "lg-1~0001~M0": "sub-b" });
   assert.equal((await repo.getBallotsForRound("lg-1~0001")).length, 2);
+});
+
+// ---- Rounds: the once-only head-to-head reveal (HTH-07) ----
+
+test("revealRoundOnce without records: one conditional PutItem — lands while the round is unsettled and pins h2hDeparted / h2hTally; refused (writing nothing) once revealed / complete, or for a missing round", async () => {
+  const { repo, table, sent } = fakeRepo();
+  const voting: Round = { id: "lg-1~0001", leagueId: "lg-1", index: 1, theme: "Openers", status: "voting" };
+  await repo.createRound(voting);
+  // Rounds without the attributes (every standard round, any unrevealed one) read back without the keys.
+  assert.equal("h2hDeparted" in table.get("LEAGUE#lg-1|ROUND#0001")!, false);
+  assert.equal("h2hDeparted" in (await repo.getRound(voting.id))!, false);
+  assert.equal("h2hTally" in (await repo.getRound(voting.id))!, false);
+
+  const tally = [{ matchupId: "lg-1~0001~M0", votesA: 2, votesB: 1 }];
+  sent.length = 0;
+  assert.equal(await repo.revealRoundOnce({ ...voting, status: "revealed", h2hDeparted: ["u-gone"], h2hTally: tally }), true);
+  assert.equal(sent.length, 1);
+  const put = sent[0] as PutCommand;
+  assert.ok(put instanceof PutCommand);
+  assert.match(put.input.ConditionExpression ?? "", /attribute_exists\(PK\)/);
+  assert.match(put.input.ConditionExpression ?? "", /#status <> :revealed AND #status <> :complete/);
+  assert.deepEqual(put.input.ExpressionAttributeNames, { "#status": "status" });
+  const item = table.get("LEAGUE#lg-1|ROUND#0001")!;
+  assert.equal(item.status, "revealed");
+  assert.deepEqual(item.h2hDeparted, ["u-gone"]);
+  assert.deepEqual(item.h2hTally, tally);
+  assert.deepEqual((await repo.getRound(voting.id))?.h2hDeparted, ["u-gone"]);
+  assert.deepEqual((await repo.getRound(voting.id))?.h2hTally, tally);
+  assert.deepEqual((await repo.getRoundsForLeague("lg-1"))[0]?.h2hTally, tally);
+
+  // A second reveal (e.g. the loser of a race, holding a stale "voting" copy) writes nothing.
+  assert.equal(await repo.revealRoundOnce({ ...voting, status: "revealed", h2hDeparted: [] }), false);
+  assert.deepEqual(table.get("LEAGUE#lg-1|ROUND#0001")?.h2hDeparted, ["u-gone"]);
+
+  // An ordinary round write (an owner's theme edit) keeps the pinned sets.
+  await repo.updateRound({ ...(await repo.getRound(voting.id))!, theme: "Renamed" });
+  assert.deepEqual((await repo.getRound(voting.id))?.h2hDeparted, ["u-gone"]);
+  assert.deepEqual((await repo.getRound(voting.id))?.h2hTally, tally);
+
+  // complete counts as settled too; an empty pinned set round-trips as an empty list.
+  await repo.createRound({ ...voting, id: "lg-1~0002", index: 2, status: "complete" });
+  assert.equal(await repo.revealRoundOnce({ ...voting, id: "lg-1~0002", index: 2, status: "revealed" }), false);
+  await repo.createRound({ ...voting, id: "lg-1~0003", index: 3, status: "previewing" });
+  assert.equal(await repo.revealRoundOnce({ ...voting, id: "lg-1~0003", index: 3, status: "revealed", h2hDeparted: [] }), true);
+  assert.deepEqual((await repo.getRound("lg-1~0003"))?.h2hDeparted, []);
+
+  // A missing round: no phantom item.
+  assert.equal(await repo.revealRoundOnce({ ...voting, id: "lg-1~0009", index: 9, status: "revealed" }), false);
+  assert.equal(table.has("LEAGUE#lg-1|ROUND#0009"), false);
+
+  // Anything but a failed condition propagates.
+  const boom = fakeRepo();
+  Object.assign(boom.repo, {
+    doc: { send: async () => { throw Object.assign(new Error("throttled"), { name: "ProvisionedThroughputExceededException" }); } },
+  });
+  await assert.rejects(boom.repo.revealRoundOnce({ ...voting, status: "revealed" }), /throttled/);
+});
+
+/** Each STANDING# row's W/L/D in the fake table, by user. */
+function storedRecords(table: Map<string, Item>): Record<string, string> {
+  return Object.fromEntries(
+    [...table.values()]
+      .filter((it) => String(it.SK).startsWith("STANDING#"))
+      .map((it) => [it.userId as string, `${it.wins ?? 0}-${it.losses ?? 0}-${it.draws ?? 0}`]),
+  );
+}
+
+test("revealRoundOnce with records: ONE TransactWriteItems — the conditional round put plus every W/L/D increment — so the claim and the banking land together or not at all", async () => {
+  const { repo, table, sent } = fakeRepo();
+  const voting: Round = { id: "lg-1~0001", leagueId: "lg-1", index: 1, theme: "Openers", status: "voting" };
+  await repo.createRound(voting);
+  await repo.addStandingPoints("lg-1", "u-a", 0); // an existing row (joined earlier)
+  const recs = [
+    { userId: "u-a", delta: { wins: 1 } },
+    { userId: "u-b", delta: { losses: 1 } },
+    { userId: "u-c", delta: { draws: 1 } },
+  ];
+  const claimed: Round = { ...voting, status: "revealed", h2hDeparted: [], h2hTally: [] };
+
+  sent.length = 0;
+  assert.equal(await repo.revealRoundOnce(claimed, recs), true);
+  assert.equal(sent.length, 1, "one request");
+  const tx = sent[0] as TransactWriteCommand;
+  assert.ok(tx instanceof TransactWriteCommand);
+  const items = tx.input.TransactItems!;
+  assert.equal(items.length, 4);
+  assert.match(items[0]!.Put?.ConditionExpression ?? "", /attribute_exists\(PK\) AND #status <> :revealed AND #status <> :complete/);
+  assert.equal(items[0]!.Put?.Item?.status, "revealed");
+  assert.deepEqual(items.slice(1).map((t) => t.Update?.Key?.SK), ["STANDING#u-a", "STANDING#u-b", "STANDING#u-c"]);
+  assert.ok(items.slice(1).every((t) => /if_not_exists/.test(t.Update?.UpdateExpression ?? "")), "in-place increments, like addStandingRecord");
+  assert.equal(table.get("LEAGUE#lg-1|ROUND#0001")?.status, "revealed");
+  assert.deepEqual(storedRecords(table), { "u-a": "1-0-0", "u-b": "0-1-0", "u-c": "0-0-1" });
+
+  // The loser of a race: the claim fails, the whole transaction is cancelled, nothing banks twice.
+  assert.equal(await repo.revealRoundOnce(claimed, recs), false);
+  assert.deepEqual(storedRecords(table), { "u-a": "1-0-0", "u-b": "0-1-0", "u-c": "0-0-1" });
+
+  // A failure that isn't the claim (throttling, a conflicting write) propagates
+  // and leaves NOTHING written: the round stays in voting, ready to retry.
+  const flaky = fakeRepo();
+  await flaky.repo.createRound(voting);
+  const realSend = (flaky.repo as unknown as { doc: { send: (c: unknown) => Promise<unknown> } }).doc.send;
+  Object.assign(flaky.repo, {
+    doc: {
+      send: async (c: unknown) => {
+        if (c instanceof TransactWriteCommand) {
+          throw Object.assign(new Error("Transaction cancelled"), {
+            name: "TransactionCanceledException",
+            CancellationReasons: [{ Code: "None" }, { Code: "ThrottlingError" }],
+          });
+        }
+        return realSend(c);
+      },
+    },
+  });
+  await assert.rejects(flaky.repo.revealRoundOnce(claimed, recs), /cancelled/);
+  assert.equal(flaky.table.get("LEAGUE#lg-1|ROUND#0001")?.status, "voting");
+  assert.deepEqual(storedRecords(flaky.table), {});
+
+  // A bad increment is refused before anything is sent.
+  const strict = fakeRepo();
+  await strict.repo.createRound(voting);
+  strict.sent.length = 0;
+  await assert.rejects(strict.repo.revealRoundOnce(claimed, [{ userId: "u-a", delta: { wins: Number.NaN } }]), /integer/);
+  assert.equal(strict.sent.length, 0);
+});
+
+test("revealRoundOnce: one entry per player (repeats summed — a transaction can't touch a row twice); past DynamoDB's 100-item cap it claims first, then banks row by row", async () => {
+  const { repo, table, sent } = fakeRepo();
+  const voting: Round = { id: "lg-1~0001", leagueId: "lg-1", index: 1, theme: "Openers", status: "voting" };
+  await repo.createRound(voting);
+  assert.equal(
+    await repo.revealRoundOnce({ ...voting, status: "revealed" }, [
+      { userId: "u-a", delta: { wins: 1 } },
+      { userId: "u-a", delta: { draws: 1 } },
+    ]),
+    true,
+  );
+  assert.deepEqual(storedRecords(table), { "u-a": "1-0-1" });
+
+  // 99 rows + the round = 100 items: still one transaction.
+  const players = (n: number) => Array.from({ length: n }, (_, i) => ({ userId: `u-${i}`, delta: { wins: 1 } }));
+  await repo.createRound({ ...voting, id: "lg-1~0002", index: 2 });
+  sent.length = 0;
+  assert.equal(await repo.revealRoundOnce({ ...voting, id: "lg-1~0002", index: 2, status: "revealed" }, players(99)), true);
+  assert.deepEqual(sent.map((c) => (c as object).constructor.name), ["TransactWriteCommand"]);
+
+  // 100 rows: the conditional round put, then one UpdateItem per row.
+  await repo.createRound({ ...voting, id: "lg-1~0003", index: 3 });
+  sent.length = 0;
+  assert.equal(await repo.revealRoundOnce({ ...voting, id: "lg-1~0003", index: 3, status: "revealed" }, players(100)), true);
+  assert.ok(sent[0] instanceof PutCommand);
+  assert.equal(sent.length, 101);
+  assert.ok(sent.slice(1).every((c) => c instanceof UpdateCommand));
+  assert.equal(storedRecords(table)["u-99"], "1-0-0");
+  assert.equal(storedRecords(table)["u-0"], "2-0-0", "rounds 2 and 3 each banked once");
+  // …and a refused claim there banks nothing either.
+  sent.length = 0;
+  assert.equal(await repo.revealRoundOnce({ ...voting, id: "lg-1~0003", index: 3, status: "revealed" }, players(100)), false);
+  assert.equal(sent.length, 1);
+});
+
+test("updateRoundUnlessSettled: the same conditional PutItem as the claim — lands on an unsettled round, refused (writing nothing) on a settled or missing one", async () => {
+  const { repo, table, sent } = fakeRepo();
+  const previewing: Round = { id: "lg-1~0001", leagueId: "lg-1", index: 1, theme: "Openers", status: "previewing" };
+  await repo.createRound(previewing);
+  sent.length = 0;
+  assert.equal(await repo.updateRoundUnlessSettled({ ...previewing, status: "voting" }), true);
+  const put = sent[0] as PutCommand;
+  assert.ok(put instanceof PutCommand);
+  assert.match(put.input.ConditionExpression ?? "", /attribute_exists\(PK\) AND #status <> :revealed AND #status <> :complete/);
+  assert.equal(table.get("LEAGUE#lg-1|ROUND#0001")?.status, "voting");
+
+  await repo.revealRoundOnce({ ...previewing, status: "revealed", h2hDeparted: ["u-x"] });
+  // A stale "voting" copy can't un-reveal the round or drop its pins.
+  assert.equal(await repo.updateRoundUnlessSettled({ ...previewing, status: "voting", theme: "Stale" }), false);
+  assert.deepEqual(
+    [table.get("LEAGUE#lg-1|ROUND#0001")?.status, table.get("LEAGUE#lg-1|ROUND#0001")?.h2hDeparted],
+    ["revealed", ["u-x"]],
+  );
+  assert.equal(await repo.updateRoundUnlessSettled({ ...previewing, id: "lg-1~0009", index: 9 }), false);
+  assert.equal(table.has("LEAGUE#lg-1|ROUND#0009"), false);
+});
+
+test("getRound({ consistent: true }) is a strongly consistent GetItem; the default read is unchanged", async () => {
+  const { repo, sent } = fakeRepo();
+  await repo.createRound({ id: "lg-1~0001", leagueId: "lg-1", index: 1, theme: "Openers", status: "voting" });
+  sent.length = 0;
+  await repo.getRound("lg-1~0001");
+  await repo.getRound("lg-1~0001", { consistent: true });
+  const [plain, strong] = sent as [GetCommand, GetCommand];
+  assert.equal("ConsistentRead" in plain.input, false);
+  assert.equal(strong.input.ConsistentRead, true);
 });

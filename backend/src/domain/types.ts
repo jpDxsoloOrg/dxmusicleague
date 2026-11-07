@@ -108,6 +108,35 @@ export interface Round {
   previewDeadline?: string;
   voteDeadline?: string;
   playlistUrl?: string;
+  /** Head-to-head only: the frozen participants who had departed (left or
+   *  were kicked) when this round was revealed — pinned by the reveal
+   *  (`finalizeReveal`, handlers/results.ts) in the same conditional write
+   *  that settles the round. Every later read of the revealed round
+   *  withdraws exactly these players' songs (domain/matchups.ts
+   *  `departedParticipants`), so its walkovers read back exactly as they were
+   *  banked whatever the member list says afterwards. Unset before the reveal
+   *  and on standard rounds (an empty list = nobody had departed). Not
+   *  secret — it names only former members, whom the revealed results name
+   *  anyway — so it rides along on round payloads; the frontend ignores it. */
+  h2hDeparted?: string[];
+  /** Head-to-head only: the picks each matchup won, as the reveal counted
+   *  them — pinned in the same write as `h2hDeparted` (and the W/L/D it
+   *  banked). GET results reads these instead of re-tallying the ballot
+   *  rows, so a ballot that lands after the reveal read them (one that
+   *  passed castBallot's status check just before the reveal) can never make
+   *  the results disagree with the banked records. Unset before the reveal
+   *  and on standard rounds; a revealed round without it (hand-made data)
+   *  re-tallies. Public once revealed, like `h2hDeparted`. */
+  h2hTally?: MatchupTally[];
+}
+
+/** Picks counted for each side of one head-to-head matchup (HTH-07; the
+ *  domain tally is `tallyMatchups` in domain/rules.ts). */
+export interface MatchupTally {
+  /** `<roundId>~M<n>` — the id ballots key their picks by. */
+  matchupId: string;
+  votesA: number;
+  votesB: number;
 }
 
 export interface Submission {

@@ -7,6 +7,7 @@ import { DEFAULT_LEAGUE_SETTINGS, leagueFormat } from "../domain/types.ts";
 import type { StandingRecordDelta, StandingTotals } from "../domain/standings.ts";
 import { recordIncrements } from "../domain/standings.ts";
 import type { SeasonFreeze } from "../domain/freeze.ts";
+import { roundSettled } from "../domain/matchups.ts";
 import type { Repository, UserDirectory } from "./repository.ts";
 
 /** Fixed display-name directory, mirroring the frontend mock's `users`. */
@@ -161,7 +162,8 @@ export class MemoryRepository implements Repository {
   async createRound(round: Round): Promise<void> {
     this.rounds.set(round.id, structuredClone(round));
   }
-  async getRound(roundId: string): Promise<Round | undefined> {
+  async getRound(roundId: string, _opts?: { consistent?: boolean }): Promise<Round | undefined> {
+    // Every read here is strongly consistent; `consistent` changes nothing.
     const r = this.rounds.get(roundId);
     return r ? structuredClone(r) : undefined;
   }
@@ -172,6 +174,29 @@ export class MemoryRepository implements Repository {
   }
   async updateRound(round: Round): Promise<void> {
     this.rounds.set(round.id, structuredClone(round));
+  }
+  async updateRoundUnlessSettled(round: Round): Promise<boolean> {
+    // Same contract as DynamoRepository's conditional put: the check and the
+    // write happen together (synchronously here — no await in between).
+    const stored = this.rounds.get(round.id);
+    if (!stored || roundSettled(stored)) return false;
+    this.rounds.set(round.id, structuredClone(round));
+    return true;
+  }
+  async revealRoundOnce(
+    round: Round,
+    records: ReadonlyArray<{ userId: string; delta: StandingRecordDelta }> = [],
+  ): Promise<boolean> {
+    // Atomic like DynamoRepository's transaction: every increment is
+    // validated before anything is touched, then the claim and the banking
+    // happen together (synchronously), so of two racing reveals only the
+    // first lands and banks.
+    const increments = records.map((r) => ({ userId: r.userId, inc: recordIncrements(r.delta) }));
+    const stored = this.rounds.get(round.id);
+    if (!stored || roundSettled(stored)) return false;
+    this.rounds.set(round.id, structuredClone(round));
+    for (const { userId, inc } of increments) this.bankRecord(round.leagueId, userId, inc);
+    return true;
   }
 
   // ---- Submissions ----
@@ -232,7 +257,9 @@ export class MemoryRepository implements Repository {
     row.points = (row.points ?? 0) + delta;
   }
   async addStandingRecord(leagueId: string, userId: string, delta: StandingRecordDelta): Promise<void> {
-    const inc = recordIncrements(delta); // validate before touching the row
+    this.bankRecord(leagueId, userId, recordIncrements(delta)); // validated before touching the row
+  }
+  private bankRecord(leagueId: string, userId: string, inc: ReturnType<typeof recordIncrements>): void {
     const row = this.standingRow(leagueId, userId);
     row.wins = (row.wins ?? 0) + inc.wins;
     row.losses = (row.losses ?? 0) + inc.losses;

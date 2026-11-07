@@ -21,10 +21,9 @@
 // Departures: while the round is in play a departed player's song is
 // withdrawn (their pair reads as a walkover); a revealed round is never
 // re-judged against today's member list, so a later leave/kick can't rewrite
-// it (domain/matchups.ts header). Until HTH-07 pins the departed set at the
-// reveal, a revealed round's payload shows every submitted song — so for the
-// rare round where someone departed mid-round it is NOT authoritative about
-// walkovers; GET results (HTH-07) is.
+// it (domain/matchups.ts header): it withdraws exactly the songs of the
+// players the reveal pinned as departed (`Round.h2hDeparted`, HTH-07), so this
+// payload and GET results agree about a revealed round's walkovers.
 
 import type { League, Round } from "../domain/types.ts";
 import { leagueFormat } from "../domain/types.ts";
@@ -41,12 +40,10 @@ import type { Deps } from "./leagues.ts";
  *
  * Departures are judged by `round.status` (domain `departedParticipants`):
  * against the member list as it is NOW while the round is in play — right for
- * casting ballots and for the tally inside `finalizeReveal` (it runs before
- * the status flips) — and not at all once the round is revealed. HTH-07:
- * `computeResults` re-runs on every GET results, so a revealed round must not
- * lean on that default — pin the departed set when `finalizeReveal` banks and
- * pass it as `options.departed` on every later read, or a mid-round departure
- * (walkover banked at reveal) reads back as a contest afterwards.
+ * casting ballots — and, once the round is revealed, as the reveal pinned them
+ * (`round.h2hDeparted`), so GET results re-derives exactly what was banked.
+ * The reveal itself (`finalizeReveal`, handlers/results.ts) passes the
+ * current set explicitly, then pins it.
  */
 export async function loadRoundMatchups(
   deps: Deps,

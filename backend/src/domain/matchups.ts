@@ -25,12 +25,14 @@
 // re-judged against today's member list: that list can't tell a departure
 // before the reveal from one after it, so a later leave/kick would rewrite a
 // contest that was actually voted on into a walkover and contradict the W/L
-// banked at reveal. So by default a revealed round withdraws nobody (every
-// submitted song shows, as standard results do). The departed set that held
-// AT the reveal is not derivable from current data — HTH-07 must pin it in
-// `finalizeReveal` (the moment it banks) and pass it back as
-// `options.departed` on every later read, so a revealed round reads exactly
-// as it was settled. See `departedParticipants`.
+// banked at reveal. The departed set that held AT the reveal isn't derivable
+// from current data, so the reveal pins it on the round (`Round.h2hDeparted`,
+// written by `finalizeReveal` in handlers/results.ts in the same conditional
+// write that settles the round) and every later read withdraws exactly those
+// songs: a revealed round reads exactly as it was settled. A revealed round
+// without a pinned set (none exist outside hand-made data) withdraws nobody —
+// every submitted song shows, as standard results do. See
+// `departedParticipants`.
 //
 // Anonymity: the derived set carries submitter ids and stays server-side.
 // `matchupsView` is the only shape that leaves the server before the reveal —
@@ -97,22 +99,28 @@ export function roundSettled(round: Pick<Round, "status">): boolean {
 /**
  * The participants whose songs a round withdraws because they departed, by
  * default: while the round is in play, every frozen participant who isn't a
- * member now; once it's revealed, nobody (see the module header — a revealed
- * round is never re-judged against today's member list). Empty for standard
- * and un-frozen leagues. The one definition behind the matchups, the
- * anonymous song list's H2H filter (handlers/submissions.ts) and ballots.
+ * member now; once it's revealed, exactly the set the reveal pinned on it
+ * (`round.h2hDeparted`; nobody when unpinned) — a revealed round is never
+ * re-judged against today's member list (see the module header). Empty for
+ * standard and un-frozen leagues. The one definition behind the matchups, the
+ * anonymous song list's H2H filter (handlers/submissions.ts), ballots and the
+ * results (HTH-07).
  */
-export function departedParticipants(league: ScheduleLeague, round: Pick<Round, "status">): Set<string> {
-  if (!seasonLocked(league) || roundSettled(round)) return new Set();
+export function departedParticipants(
+  league: ScheduleLeague,
+  round: Pick<Round, "status" | "h2hDeparted">,
+): Set<string> {
+  if (!seasonLocked(league)) return new Set();
+  if (roundSettled(round)) return new Set(round.h2hDeparted ?? []);
   const members = new Set(league.memberIds);
   return new Set(league.h2hParticipants!.filter((id) => !members.has(id)));
 }
 
 export interface DeriveOptions {
-  /** Override who counts as departed (songs withdrawn) — for HTH-07: the set
-   *  pinned at the round's reveal, so a revealed round reads exactly as it
-   *  was settled whatever the member list says later. Default:
-   *  `departedParticipants(league, round)`. */
+  /** Override who counts as departed (songs withdrawn). The reveal passes the
+   *  set it is about to pin; HTH-06 passes `[]` to see the round as
+   *  scheduled. Default: `departedParticipants(league, round)` — which
+   *  already reads a revealed round's pinned set. */
   departed?: Iterable<string>;
 }
 
@@ -128,7 +136,7 @@ export interface DeriveOptions {
  */
 export function deriveRoundMatchups(
   league: ScheduleLeague,
-  round: Pick<Round, "id" | "index" | "status">,
+  round: Pick<Round, "id" | "index" | "status" | "h2hDeparted">,
   submissions: readonly Submission[],
   options: DeriveOptions = {},
 ): RoundMatchupSet {

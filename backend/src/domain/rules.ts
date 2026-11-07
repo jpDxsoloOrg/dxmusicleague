@@ -2,10 +2,11 @@
 // referee": the same rules the frontend mirrors for UX are enforced here so a
 // hand-crafted request can't break the game. See docs/data-model-and-api.md §2.
 
-import type { LeagueSettings } from "./types.ts";
+import type { Ballot, LeagueSettings, MatchupTally } from "./types.ts";
 import { badRequest } from "./errors.ts";
 import { inMatchup, matchupState, votableMatchups } from "./matchups.ts";
-import type { RoundMatchup, RoundMatchupSet } from "./matchups.ts";
+import type { MatchupSide, RoundMatchup, RoundMatchupSet } from "./matchups.ts";
+import type { StandingRecordDelta } from "./standings.ts";
 
 export interface BallotInput {
   allocations: Record<string, number>;
@@ -243,4 +244,170 @@ export function tallyBallots(
     }
   }
   return tally;
+}
+
+// ---- Head-to-head: the matchup tally and outcomes (HTH-07) -----------------
+//
+// Most votes wins the pair; equal votes are a draw (a deliberate product call:
+// small voter pools make ties common and an arbitrary tie-break feels unfair);
+// a player without a song loses by walkover; a pair with no songs is no
+// contest. The bye isn't a matchup — the sitting-out player's song is an
+// exhibition with no result. All of it works over the round's derived matchups
+// (domain/matchups.ts) AS THEY STAND AT THE REVEAL — departed players' songs
+// withdrawn — so the tally, the outcomes and the W/L/D banked agree with
+// every later read of the revealed round.
+
+/** How a revealed matchup ended. Deliberately an open set: playoffs (HTH-13)
+ *  may add outcomes, so a consumer should read an outcome it doesn't know as
+ *  "no record". The bye has no outcome — it isn't a matchup. */
+export type MatchupOutcome = "win" | "draw" | "walkover" | "noContest";
+
+/** Picks counted for each side of one matchup — defined in types.ts because
+ *  the reveal pins it on the round (`Round.h2hTally`). */
+export type { MatchupTally } from "./types.ts";
+
+/**
+ * Count head-to-head picks: one entry per matchup of the round (in the set's
+ * order) with the number of ballots that picked side a's song and side b's.
+ *
+ * A pick counts only where it is a vote: in a matchup the voter can vote in at
+ * the reveal — `votableMatchups`, the same set ballot completeness uses (a
+ * contest that isn't the voter's own) — naming one of that matchup's two
+ * songs. Everything else a stored ballot may hold is inert: a pick kept from
+ * before a departure turned its pair into a walkover, a stray pick in a
+ * walkover / no-contest, a pick in the voter's own matchup, an id that isn't
+ * one of the pair's songs. So walkovers and no-contests always tally 0–0.
+ * Every ballot row of the round is counted, including one cast by a voter who
+ * has since departed (as a standard reveal counts it: it was cast while they
+ * were a member).
+ */
+export function tallyMatchups(
+  matchups: RoundMatchupSet,
+  ballots: ReadonlyArray<Pick<Ballot, "voterId" | "picks">>,
+): MatchupTally[] {
+  const tally = new Map<string, MatchupTally>(
+    matchups.matchups.map((m) => [m.matchupId, { matchupId: m.matchupId, votesA: 0, votesB: 0 }]),
+  );
+  for (const ballot of ballots) {
+    const picks = ballot.picks ?? {};
+    for (const m of votableMatchups(matchups, ballot.voterId)) {
+      if (!Object.hasOwn(picks, m.matchupId)) continue;
+      const pick = picks[m.matchupId];
+      const entry = tally.get(m.matchupId)!;
+      if (pick === m.a.submission!.id) entry.votesA += 1;
+      else if (pick === m.b.submission!.id) entry.votesB += 1;
+    }
+  }
+  return [...tally.values()];
+}
+
+/** One matchup's outcome from its tally:
+ *  - both songs → most votes wins (`win`, `winnerUserId`); equal → `draw`;
+ *  - one song → `walkover`, won by the player who has it (votes ignored);
+ *  - no songs → `noContest`. */
+export function matchupOutcome(
+  m: RoundMatchup,
+  votes: Pick<MatchupTally, "votesA" | "votesB">,
+): { outcome: MatchupOutcome; winnerUserId?: string } {
+  switch (matchupState(m)) {
+    case "noContest":
+      return { outcome: "noContest" };
+    case "walkover":
+      return { outcome: "walkover", winnerUserId: (m.a.submission ? m.a : m.b).userId };
+    case "contest":
+      if (votes.votesA === votes.votesB) return { outcome: "draw" };
+      return { outcome: "win", winnerUserId: votes.votesA > votes.votesB ? m.a.userId : m.b.userId };
+  }
+}
+
+/** A matchup side once tallied: the derived side plus the picks it won. */
+export interface SettledSide extends MatchupSide {
+  votes: number;
+}
+
+/** A matchup once tallied and resolved. */
+export interface SettledMatchup {
+  matchupId: string;
+  a: SettledSide;
+  b: SettledSide;
+  outcome: MatchupOutcome;
+  /** The winner's user id — set for `win` and `walkover`, absent otherwise. */
+  winnerUserId?: string;
+}
+
+/** A round's settled matchups (in the set's order) plus the bye side, if the
+ *  field is odd — an exhibition with no result. */
+export interface SettledRound {
+  matchups: SettledMatchup[];
+  bye?: MatchupSide;
+}
+
+/** Tally the ballots and resolve every matchup of the round. */
+export function settleMatchups(
+  matchups: RoundMatchupSet,
+  ballots: ReadonlyArray<Pick<Ballot, "voterId" | "picks">>,
+): SettledRound {
+  return resolveMatchups(matchups, tallyMatchups(matchups, ballots));
+}
+
+/** Resolve every matchup of the round from a tally already counted — the
+ *  reveal's own, or the one it pinned on the round (`Round.h2hTally`), so a
+ *  revealed round re-reads exactly as it was banked. A matchup missing from
+ *  `tally` counts 0–0. */
+export function resolveMatchups(matchups: RoundMatchupSet, tally: readonly MatchupTally[]): SettledRound {
+  const tallies = new Map(tally.map((t) => [t.matchupId, t]));
+  const settled = matchups.matchups.map((m): SettledMatchup => {
+    const t = tallies.get(m.matchupId) ?? { matchupId: m.matchupId, votesA: 0, votesB: 0 };
+    return {
+      matchupId: m.matchupId,
+      a: { ...m.a, votes: t.votesA },
+      b: { ...m.b, votes: t.votesB },
+      ...matchupOutcome(m, t),
+    };
+  });
+  return matchups.bye === undefined ? { matchups: settled } : { matchups: settled, bye: matchups.bye };
+}
+
+/** One player's W/L/D increment from a round. */
+export interface RecordEntry {
+  userId: string;
+  delta: StandingRecordDelta;
+}
+
+/**
+ * The W/L/D each player banks from a settled round — exactly one entry per
+ * player whose record changes (nobody plays twice in a round):
+ *   - win: the winner `{wins: 1}`, the loser `{losses: 1}` — even on 0 votes;
+ *   - draw: both `{draws: 1}` — a 0–0 draw too;
+ *   - walkover: the player with the song `{wins: 1}`, the no-show
+ *     `{losses: 1}` — unless they departed (left / were kicked before the
+ *     reveal): a departed player's record takes nothing, only the player who
+ *     stayed banks the W;
+ *   - noContest (and any outcome this version doesn't know): nothing;
+ *   - the bye: nothing (it isn't in `matchups`).
+ * The reveal banks every entry unconditionally — unlike the standard
+ * reveal's points, a zero-vote result still banks its L (or D).
+ */
+export function matchupRecords(matchups: readonly SettledMatchup[]): RecordEntry[] {
+  const out: RecordEntry[] = [];
+  const bank = (side: SettledSide, delta: StandingRecordDelta) => {
+    if (!side.departed) out.push({ userId: side.userId, delta });
+  };
+  for (const m of matchups) {
+    const [winner, loser] = m.winnerUserId === m.b.userId ? [m.b, m.a] : [m.a, m.b];
+    switch (m.outcome) {
+      case "win":
+      case "walkover":
+        bank(winner, { wins: 1 });
+        bank(loser, { losses: 1 });
+        break;
+      case "draw":
+        bank(m.a, { draws: 1 });
+        bank(m.b, { draws: 1 });
+        break;
+      default: // noContest — no result for either player
+        break;
+    }
+  }
+  return out;
 }
