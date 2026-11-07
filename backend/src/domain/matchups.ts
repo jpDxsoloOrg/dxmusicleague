@@ -387,3 +387,53 @@ export function matchupsView(set: RoundMatchupSet, viewerId: string): RoundMatch
     bye: songOf(set.bye),
   };
 }
+
+// ---- reading the view back (the vote page, HTH-10) -------------------------
+// The vote page only ever holds the anonymous view, yet its submit gate must
+// demand exactly what `validateH2HBallot` will: a pick in every votable
+// matchup. These read that off the view alone (`isMine` + which songs are
+// present), and for the viewer a view was built for they agree with
+// `votableMatchups` by construction (`isMine` IS `inMatchup`, and a side's
+// song is null exactly when the side has none) — matchups.test.ts pins it.
+// Structural types, so the frontend's own view-model types (src/data/mock.ts)
+// fit them as they are.
+
+/** The parts of a matchup view the helpers below read. */
+export interface PickableMatchupView {
+  matchupId: string;
+  a: { id: string } | null;
+  b: { id: string } | null;
+  isMine: boolean;
+}
+
+/** `matchupState` read off a view: by which songs the payload carries. */
+export function viewMatchupState(m: Pick<PickableMatchupView, "a" | "b">): MatchupState {
+  const songs = Number(m.a !== null) + Number(m.b !== null);
+  return songs === 2 ? "contest" : songs === 1 ? "walkover" : "noContest";
+}
+
+/** Can the viewer pick a winner here? A contest that isn't their own — the
+ *  view's twin of `votableMatchups`. */
+export function canPickInView(m: PickableMatchupView): boolean {
+  return !m.isMine && viewMatchupState(m) === "contest";
+}
+
+/** The pick a ballot holds for a matchup, if it is one of the matchup's two
+ *  songs (a stale or foreign id is no pick). */
+export function viewPick(m: PickableMatchupView, picks: Readonly<Record<string, string>>): string | undefined {
+  const pick = Object.hasOwn(picks, m.matchupId) ? picks[m.matchupId] : undefined;
+  return pick !== undefined && (pick === m.a?.id || pick === m.b?.id) ? pick : undefined;
+}
+
+/** How far a ballot is against a view: the matchups the viewer must pick in
+ *  (`votable`) and how many of those hold a valid pick (`picked`). Picks
+ *  anywhere else — the viewer's own matchup, a walkover, an id that isn't one
+ *  of the pair's songs — count for nothing. Complete when they're equal (a
+ *  viewer with nothing votable is complete at 0 of 0, as the referee agrees). */
+export function viewPickProgress(
+  view: { matchups: readonly PickableMatchupView[] },
+  picks: Readonly<Record<string, string>>,
+): { votable: number; picked: number } {
+  const votable = view.matchups.filter(canPickInView);
+  return { votable: votable.length, picked: votable.filter((m) => viewPick(m, picks) !== undefined).length };
+}

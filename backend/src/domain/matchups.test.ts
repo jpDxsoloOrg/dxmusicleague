@@ -5,15 +5,18 @@
 // while the round is in play (never re-judged once it's revealed: it reads
 // the departed set the reveal pinned on it, HTH-07), the walkover /
 // no-contest / votable definitions, that the anonymized view carries songs
-// and `isMine` but never a user id or the frozen order, and the round's
-// turnout (HTH-08): who can vote and who has, and whom the who-voted panel
-// and the activity feed may name as having voted.
+// and `isMine` but never a user id or the frozen order, the round's turnout
+// (HTH-08): who can vote and who has, and whom the who-voted panel and the
+// activity feed may name as having voted — and that the vote page's view-side
+// helpers (HTH-10) read the same votable set off that view as the ballot
+// referee demands.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   anonymousSong,
   ballotAuthorVisible,
+  canPickInView,
   departedParticipants,
   deriveRoundMatchups,
   everyoneEligibleVoted,
@@ -21,11 +24,15 @@ import {
   matchupState,
   matchupsView,
   membersWithSong,
+  viewMatchupState,
+  viewPick,
+  viewPickProgress,
   votableMatchups,
   votersNameable,
   votingPanelNames,
   votingTurnout,
 } from "./matchups.ts";
+import { validateH2HBallot } from "./rules.ts";
 import type { RoundMatchup, RoundMatchupSet } from "./matchups.ts";
 import { matchupsForRound } from "./schedule.ts";
 import type { League, Submission } from "./types.ts";
@@ -370,4 +377,104 @@ test("ballotAuthorVisible: the feed names other members' ballots only while ever
   assert.equal(votersNameable(none, ["u-ana", "u-ben"]), false);
   assert.equal(ballotAuthorVisible(none, ["u-ana", "u-ben"], "u-ana", "u-ben"), false);
   assert.equal(ballotAuthorVisible(none, ["u-ana", "u-ben"], "u-ben", "u-ben"), true);
+});
+
+// ---- the vote page's view-side helpers (HTH-10) ----------------------------
+
+/** Every user id a view can be built for in `set`: its players, the bye, and
+ *  a spectator who isn't in the round at all. */
+const viewers = (set: RoundMatchupSet): string[] => [
+  ...set.matchups.flatMap((x) => [x.a.userId, x.b.userId]),
+  ...(set.bye ? [set.bye.userId] : []),
+  "u-zed",
+];
+
+test("view helpers: the matchups a view offers a pick in are exactly votableMatchups for its viewer, and the state reads the same", () => {
+  const handMade: RoundMatchupSet = {
+    matchups: [
+      m(0, ["u-ana", true], ["u-ben", true]),
+      m(1, ["u-cyd", true], ["u-dot", false]),
+      m(2, ["u-eli", true], ["u-fay", true]),
+      m(3, ["u-gus", false], ["u-hal", false]),
+    ],
+    bye: side("u-ivy", true),
+  };
+  // A real derived round too: one player never submitted, one has left.
+  const { matchups: pairs } = schedule();
+  const derived = deriveRoundMatchups(
+    frozen({ memberIds: FIVE.filter((id) => id !== pairs[1]!.b) }),
+    ROUND,
+    FIVE.filter((id) => id !== pairs[0]!.a).map((id) => sub(id)),
+  );
+  for (const set of [handMade, derived]) {
+    for (const viewer of viewers(set)) {
+      const view = matchupsView(set, viewer);
+      assert.deepEqual(
+        view.matchups.filter(canPickInView).map((x) => x.matchupId),
+        votableMatchups(set, viewer).map((x) => x.matchupId),
+        viewer,
+      );
+      for (const x of view.matchups) {
+        const source = set.matchups.find((y) => y.matchupId === x.matchupId)!;
+        assert.equal(viewMatchupState(x), matchupState(source));
+      }
+    }
+  }
+  // Own contest: locked. Own walkover / anyone's no contest: nothing to pick.
+  const ana = matchupsView(handMade, "u-ana").matchups;
+  assert.deepEqual(ana.map(canPickInView), [false, false, true, false]);
+  assert.deepEqual(ana.map(viewMatchupState), ["contest", "walkover", "contest", "noContest"]);
+});
+
+test("viewPickProgress: counts valid picks in votable matchups only — the gate the vote page holds submit behind", () => {
+  const set: RoundMatchupSet = {
+    matchups: [
+      m(0, ["u-ana", true], ["u-ben", true]),
+      m(1, ["u-cyd", true], ["u-dot", false]),
+      m(2, ["u-eli", true], ["u-fay", true]),
+    ],
+    bye: side("u-ivy", true),
+  };
+  const id = (i: number) => `${ROUND.id}~M${i}`;
+  const bye = matchupsView(set, "u-ivy"); // votes on both contests
+  assert.deepEqual(viewPickProgress(bye, {}), { votable: 2, picked: 0 });
+  assert.deepEqual(viewPickProgress(bye, { [id(0)]: "sub-ana" }), { votable: 2, picked: 1 }); // partial
+  assert.deepEqual(viewPickProgress(bye, { [id(0)]: "sub-ana", [id(2)]: "sub-fay" }), { votable: 2, picked: 2 }); // full
+  // Foreign / stale ids and picks on the walkover count for nothing.
+  assert.deepEqual(viewPickProgress(bye, { [id(0)]: "sub-eli", [id(1)]: "sub-cyd", [id(2)]: "nope" }), { votable: 2, picked: 0 });
+  assert.equal(viewPick(bye.matchups[0]!, { [id(0)]: "sub-ben" }), "sub-ben");
+  assert.equal(viewPick(bye.matchups[0]!, { [id(0)]: "sub-fay" }), undefined);
+  assert.equal(viewPick(bye.matchups[0]!, {}), undefined);
+  // A pick on the viewer's own matchup never counts toward the gate.
+  const ana = matchupsView(set, "u-ana");
+  assert.deepEqual(viewPickProgress(ana, { [id(0)]: "sub-ana" }), { votable: 1, picked: 0 });
+  assert.deepEqual(viewPickProgress(ana, { [id(0)]: "sub-ana", [id(2)]: "sub-eli" }), { votable: 1, picked: 1 });
+  // Nothing votable (a two-player league): complete at 0 of 0.
+  const duo: RoundMatchupSet = { matchups: [m(0, ["u-ana", true], ["u-ben", true])] };
+  assert.deepEqual(viewPickProgress(matchupsView(duo, "u-ana"), {}), { votable: 0, picked: 0 });
+});
+
+test("viewPickProgress agrees with validateH2HBallot: complete by the gate ⇔ accepted by the referee", () => {
+  const { matchups: pairs } = schedule();
+  // Five players, one never submitted (their pair is a walkover), so voters
+  // differ: the bye player picks in every contest, a paired player in all but
+  // their own, the walkover's players in every contest.
+  const set = deriveRoundMatchups(frozen(), ROUND, FIVE.filter((id) => id !== pairs[0]!.a).map((id) => sub(id)));
+  let dropped = 0;
+  for (const viewer of FIVE) {
+    const view = matchupsView(set, viewer);
+    const full: Record<string, string> = {};
+    for (const x of view.matchups.filter(canPickInView)) full[x.matchupId] = x.b!.id;
+    const progress = viewPickProgress(view, full);
+    assert.equal(progress.picked, progress.votable, viewer);
+    assert.deepEqual(validateH2HBallot(full, set, viewer), full, viewer);
+    // Drop any one pick: the gate blocks it, and so does the referee.
+    for (const matchupId of Object.keys(full)) {
+      const { [matchupId]: _dropped, ...partial } = full;
+      assert.equal(viewPickProgress(view, partial).picked, progress.votable - 1);
+      assert.throws(() => validateH2HBallot(partial, set, viewer), /Pick a winner in every matchup you can vote in/);
+      dropped++;
+    }
+  }
+  assert.ok(dropped >= 3, "the bye player and the walkover's two players each had a pick to drop");
 });

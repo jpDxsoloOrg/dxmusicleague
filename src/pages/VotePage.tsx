@@ -1,16 +1,44 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { data } from "../data";
+import type { LeagueDetail } from "../data";
+import { leagueFormat } from "../domain/types";
 import { formatDuration } from "../music";
 import { useAsync } from "../lib/useAsync";
 import { TrackArt } from "../components/TrackArt";
+import { MatchupBallot } from "../components/MatchupBallot";
 import "./VotePage.css";
 
 export function VotePage() {
   const { leagueId = "" } = useParams();
   const { data: detail, loading: detailLoading } = useAsync(() => data.getLeagueDetail(leagueId), [leagueId]);
+
+  if (detailLoading) {
+    return <div className="vote-page"><p className="page-loading">Loading…</p></div>;
+  }
+
+  if (!detail) {
+    return (
+      <div className="vote-page">
+        <h2>League not found</h2>
+        <Link to="/" className="link-muted">← Back to dashboard</Link>
+      </div>
+    );
+  }
+
+  // Head-to-head leagues pick a winner in each matchup instead of spending
+  // points (HTH-10): a ballot of their own. The points ballot below is the
+  // standard path, unchanged. Keyed by round so a new round starts blank.
+  if (leagueFormat(detail.league) === "headToHead") {
+    return <MatchupBallot key={detail.currentRound?.id ?? ""} detail={detail} />;
+  }
+  return <PointsBallot detail={detail} />;
+}
+
+/** The standard (points) ballot. */
+function PointsBallot({ detail }: { detail: LeagueDetail }) {
   // Voting always targets the league's current round.
-  const roundId = detail?.currentRound?.id ?? "";
+  const roundId = detail.currentRound?.id ?? "";
   const { data: subs } = useAsync(
     () => (roundId ? data.getVotableSubmissions(roundId) : Promise.resolve([])),
     [roundId],
@@ -43,19 +71,6 @@ export function VotePage() {
       setComments(myBallot.comments);
     }
   }, [myBallot]);
-
-  if (detailLoading) {
-    return <div className="vote-page"><p className="page-loading">Loading…</p></div>;
-  }
-
-  if (!detail) {
-    return (
-      <div className="vote-page">
-        <h2>League not found</h2>
-        <Link to="/" className="link-muted">← Back to dashboard</Link>
-      </div>
-    );
-  }
 
   const { league, currentRound } = detail;
   const pool = league.settings.votePoolSize;
