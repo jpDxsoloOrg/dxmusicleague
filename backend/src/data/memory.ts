@@ -9,6 +9,7 @@ import { recordIncrements } from "../domain/standings.ts";
 import type { SeasonFreeze } from "../domain/freeze.ts";
 import { roundSettled } from "../domain/matchups.ts";
 import type { Repository, UserDirectory } from "./repository.ts";
+import { headToHeadSeed } from "./seedHeadToHead.ts";
 
 /** Fixed display-name directory, mirroring the frontend mock's `users`. */
 const SEED_USERS: Record<string, string> = {
@@ -321,5 +322,17 @@ export class MemoryRepository implements Repository {
     for (const [leagueId, rows] of Object.entries(seedStandings)) {
       for (const [userId, points] of rows) this.standings.set(`${leagueId}/${userId}`, { points });
     }
+
+    // The head-to-head league (HTH-09): mid-season, frozen, round 1 revealed
+    // and banked, round 2 in voting — the same fixture module the frontend
+    // mock loads (data/seedHeadToHead.ts), so both modes show one league.
+    // Its timestamps are relative to now (activity feed only; no deadlines).
+    const h2h = headToHeadSeed();
+    this.leagues.set(h2h.league.id, h2h.league);
+    this.invites.set(h2h.league.inviteCode, h2h.league.id);
+    for (const r of h2h.rounds) this.rounds.set(r.id, r);
+    for (const s of h2h.submissions) this.submissions.set(`${s.roundId}/${s.userId}/${s.id}`, s);
+    for (const b of h2h.ballots) this.ballots.set(`${b.roundId}/${b.voterId}`, b);
+    for (const { userId, ...row } of h2h.standings) this.standings.set(`${h2h.league.id}/${userId}`, row);
   }
 }

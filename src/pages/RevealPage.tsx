@@ -28,12 +28,14 @@ export function RevealPage() {
   const status = round?.status;
   const revealed = status === "revealed" || status === "complete";
 
-  // Results only exist once a round is revealed.
+  // Results only exist once a round is revealed. Head-to-head rounds resolve
+  // to matchup results (format "headToHead"); this page renders the ranked
+  // list of a standard round — the H2H view is HTH-11.
   const { data: resultsData, reload: reloadResults } = useAsync(
-    () => (roundId && revealed ? data.getResults(roundId) : Promise.resolve([])),
+    () => (roundId && revealed ? data.getResults(roundId) : Promise.resolve(null)),
     [roundId, revealed],
   );
-  const results = resultsData ?? [];
+  const results = resultsData?.format === "standard" ? resultsData.results : [];
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

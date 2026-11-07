@@ -7,6 +7,12 @@
 // Round/submission/vote operations are round-centric (they take a roundId — the
 // league's current round, resolved from the league detail), matching the REST
 // API. Return shapes match the view-model types in src/data/mock.ts.
+//
+// Head-to-head leagues (HTH-09) add matchups (`getMatchups`), winner-pick
+// ballots (`castMatchupBallot`, `MyBallot.picks`) and matchup results: both
+// results methods resolve to the `RoundResults` union — `format: "standard"`
+// with the ranked list, or `format: "headToHead"` with matchups + bye — so
+// pages branch on `results.format` (and on `leagueFormat(league)` elsewhere).
 
 import type { League, LeagueSettings, Round, RoundStatus, Submission } from "../domain/types";
 import type { Track } from "../music";
@@ -16,9 +22,11 @@ import type {
   JoinResult,
   LeagueDetail,
   LeagueSummary,
+  MyBallot,
   PublicLeaguePreview,
   PublicLeagueSummary,
-  RoundResult,
+  RoundMatchups,
+  RoundResults,
   Standing,
   VotableSubmission,
 } from "./mock";
@@ -66,7 +74,9 @@ export interface DataClient {
   // ---- Rounds (league owner) ----
   createRound(leagueId: string, input: CreateRoundInput): Promise<Round>;
   advanceRound(leagueId: string, roundId: string, status: RoundStatus): Promise<Round>;
-  revealRound(roundId: string): Promise<RoundResult[]>;
+  /** Owner-only: close voting and reveal — resolves to the round's results
+   *  (same union as `getResults`). */
+  revealRound(roundId: string): Promise<RoundResults>;
 
   // ---- Submissions ----
   /** Submit a pick. Allowance 1 → replaces the existing pick; larger → adds
@@ -79,18 +89,27 @@ export interface DataClient {
   removeSubmission(roundId: string, submissionId: string): Promise<void>;
 
   // ---- Voting + results ----
+  /** Standard (points) ballot. A head-to-head round refuses it. */
   castBallot(
     roundId: string,
     allocations: Record<string, number>,
     comments?: Record<string, string>,
     downvotes?: Record<string, number>,
   ): Promise<void>;
+  /** Head-to-head ballot: `picks` maps each matchupId to the submission id
+   *  picked to win it — one per votable matchup (both songs present, not the
+   *  caller's own). Comments may go on any song of the round. Re-casting
+   *  overwrites. The server referees (400 with a readable message); a
+   *  standard round refuses it. */
+  castMatchupBallot(roundId: string, picks: Record<string, string>, comments?: Record<string, string>): Promise<void>;
   /** The caller's cast ballot for a round (null before voting) — pre-fills the
-   *  vote page so an edit doesn't silently wipe earlier points/comments. */
-  getMyBallot(roundId: string): Promise<{
-    allocations: Record<string, number>;
-    downvotes: Record<string, number>;
-    comments: Record<string, string>;
-  } | null>;
-  getResults(roundId: string): Promise<RoundResult[]>;
+   *  vote page so an edit doesn't silently wipe earlier points/comments (or,
+   *  head-to-head, picks). */
+  getMyBallot(roundId: string): Promise<MyBallot | null>;
+  /** Head-to-head only: the round's matchups, anonymous, with the caller's
+   *  own flagged `isMine`, plus the bye's exhibition song. Members from
+   *  voting on; anyone once revealed. Rejects for a standard round. */
+  getMatchups(roundId: string): Promise<RoundMatchups>;
+  /** A revealed round's results, either format. */
+  getResults(roundId: string): Promise<RoundResults>;
 }

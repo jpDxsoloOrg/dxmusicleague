@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { data } from "../data";
+import { leagueFormat } from "../domain/types";
 import { useAsync } from "../lib/useAsync";
 import { useAuth } from "../auth/AuthContext";
 import { Avatar } from "../components/Avatar";
@@ -9,6 +10,13 @@ import "./LeagueSettingsPage.css";
 // Owner-only screen to edit a league's voting rules and delete the league.
 // Design generated with Google Stitch (Sonic Syndicate system), built to the
 // app's existing CSS conventions.
+//
+// Head-to-head leagues (HTH-09): the format shows as a read-only badge (it is
+// fixed at creation), and the rules the format forces — one song per player,
+// no anti-votes — show as locked values instead of controls (the server
+// rejects any other value anyway, HTH-01). The points-pool rules don't apply
+// to a winner-pick ballot, so they aren't offered either, which leaves
+// nothing to save: the Save button is hidden. Standard leagues are unchanged.
 export function LeagueSettingsPage() {
   const { leagueId = "" } = useParams();
   const { user } = useAuth();
@@ -59,6 +67,11 @@ export function LeagueSettingsPage() {
     );
   }
 
+  const headToHead = leagueFormat(league) === "headToHead";
+  // A head-to-head season locks when round 1 opens (the server freezes the
+  // field then — HTH-03): from that point only players already in its
+  // schedule can join, and a removed player's matchups go to walkovers.
+  const seasonLocked = headToHead && detail.rounds.some((r) => r.index === 1 && r.status !== "draft");
   const poolInvalid = votePoolSize < 1;
   const capInvalid = maxPointsPerSong < 1 || maxPointsPerSong > votePoolSize;
   const canSave = !poolInvalid && !capInvalid && !busy;
@@ -85,7 +98,10 @@ export function LeagueSettingsPage() {
   }
 
   async function handleKick(userId: string, displayName: string) {
-    if (!window.confirm(`Remove ${displayName} from ${league.name}? They can rejoin with the invite code.`)) return;
+    const walkovers = seasonLocked && !detail?.finished
+      ? " Until they do, their matchups this season go to their opponents as walkovers."
+      : "";
+    if (!window.confirm(`Remove ${displayName} from ${league.name}? They can rejoin with the invite code.${walkovers}`)) return;
     setError(null);
     try {
       await data.kickMember(league.id, userId);
@@ -123,79 +139,120 @@ export function LeagueSettingsPage() {
       <Link to={`/leagues/${league.id}`} className="link-muted">← {league.name}</Link>
       <h1 className="settings-title">League settings</h1>
 
-      <section className="settings-card">
-        <h3 className="settings-card-title">Submissions</h3>
-        <Stepper
-          label="Songs per player"
-          hint="How many songs each player submits per round. More than one helps small leagues fill a playlist out."
-          value={submissionsPerPlayer}
-          min={1}
-          max={5}
-          onChange={setSubmissionsPerPlayer}
-        />
-      </section>
+      {headToHead ? (
+        <>
+          <section className="settings-card">
+            <h3 className="settings-card-title">Format</h3>
+            <div className="setting-row">
+              <div className="setting-text">
+                <span className="setting-label">Scoring format</span>
+                <span className="field-hint">
+                  1v1 matchups each round — most votes wins, W/L standings. Chosen when the league was
+                  created; it can't be changed.
+                </span>
+              </div>
+              <span className="format-badge">Head-to-Head</span>
+            </div>
+          </section>
 
-      <section className="settings-card">
-        <h3 className="settings-card-title">Voting rules</h3>
+          <section className="settings-card">
+            <h3 className="settings-card-title">Head-to-head rules</h3>
+            <LockedSetting
+              label="Songs per player"
+              hint="Each matchup is one song against one song, so every player brings exactly one."
+              value="1"
+            />
+            <LockedSetting
+              label="Anti-votes"
+              hint="Not used — every ballot picks a winner in each matchup instead of spending points."
+              value="Off"
+            />
+          </section>
 
-        <Stepper
-          label="Points to spend"
-          hint="Total points each player spreads across songs every round."
-          value={votePoolSize}
-          min={1}
-          onChange={setVotePoolSize}
-        />
-        <Stepper
-          label="Max points per song"
-          hint="The most points a player can place on any single song."
-          value={maxPointsPerSong}
-          min={1}
-          max={votePoolSize}
-          onChange={setMaxPointsPerSong}
-        />
-        {capInvalid && (
-          <span className="field-error">Max points per song must be between 1 and the vote pool ({votePoolSize}).</span>
-        )}
+          {/* Nothing to save here; kick / invite errors still surface. */}
+          {error && <span className="field-error">{error}</span>}
+        </>
+      ) : (
+        <>
+          <section className="settings-card">
+            <h3 className="settings-card-title">Submissions</h3>
+            <Stepper
+              label="Songs per player"
+              hint="How many songs each player submits per round. More than one helps small leagues fill a playlist out."
+              value={submissionsPerPlayer}
+              min={1}
+              max={5}
+              onChange={setSubmissionsPerPlayer}
+            />
+          </section>
 
-        <Stepper
-          label="Anti-votes per player"
-          hint="Each anti-vote subtracts a point from a song. 0 turns them off; spending them is optional. Scores can go negative."
-          value={downvotePoolSize}
-          min={0}
-          max={2}
-          onChange={setDownvotePoolSize}
-        />
+          <section className="settings-card">
+            <h3 className="settings-card-title">Voting rules</h3>
 
-        <div className="setting-row">
-          <div className="setting-text">
-            <span className="setting-label">Allow self-voting</span>
-            <span className="field-hint">Let players put points on their own submission.</span>
-          </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={allowSelfVote}
-            className={`toggle${allowSelfVote ? " on" : ""}`}
-            onClick={() => setAllowSelfVote((v) => !v)}
-          >
-            <span className="toggle-knob" />
+            <Stepper
+              label="Points to spend"
+              hint="Total points each player spreads across songs every round."
+              value={votePoolSize}
+              min={1}
+              onChange={setVotePoolSize}
+            />
+            <Stepper
+              label="Max points per song"
+              hint="The most points a player can place on any single song."
+              value={maxPointsPerSong}
+              min={1}
+              max={votePoolSize}
+              onChange={setMaxPointsPerSong}
+            />
+            {capInvalid && (
+              <span className="field-error">Max points per song must be between 1 and the vote pool ({votePoolSize}).</span>
+            )}
+
+            <Stepper
+              label="Anti-votes per player"
+              hint="Each anti-vote subtracts a point from a song. 0 turns them off; spending them is optional. Scores can go negative."
+              value={downvotePoolSize}
+              min={0}
+              max={2}
+              onChange={setDownvotePoolSize}
+            />
+
+            <div className="setting-row">
+              <div className="setting-text">
+                <span className="setting-label">Allow self-voting</span>
+                <span className="field-hint">Let players put points on their own submission.</span>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={allowSelfVote}
+                className={`toggle${allowSelfVote ? " on" : ""}`}
+                onClick={() => setAllowSelfVote((v) => !v)}
+              >
+                <span className="toggle-knob" />
+              </button>
+            </div>
+          </section>
+
+          {error && <span className="field-error">{error}</span>}
+          {saved && !error && <span className="settings-saved">Settings saved ✓</span>}
+
+          <button className="btn btn-primary settings-save" disabled={!canSave} onClick={handleSave}>
+            {busy ? "Saving…" : "Save changes"}
           </button>
-        </div>
-      </section>
-
-      {error && <span className="field-error">{error}</span>}
-      {saved && !error && <span className="settings-saved">Settings saved ✓</span>}
-
-      <button className="btn btn-primary settings-save" disabled={!canSave} onClick={handleSave}>
-        {busy ? "Saving…" : "Save changes"}
-      </button>
+        </>
+      )}
 
       <section className="settings-card">
         <h3 className="settings-card-title">Invite code</h3>
         <div className="setting-row">
           <div className="setting-text">
             <span className="invite-code-value">{league.inviteCode}</span>
-            <span className="field-hint">Share this code (or the invite link) to bring players in.</span>
+            <span className="field-hint">
+              {seasonLocked
+                ? "Season locked — only players already in it can rejoin."
+                : "Share this code (or the invite link) to bring players in."}
+            </span>
           </div>
           <button type="button" className="btn" onClick={handleRegenerateInvite}>
             Generate new code
@@ -253,6 +310,21 @@ export function LeagueSettingsPage() {
           </button>
         )}
       </section>
+    </div>
+  );
+}
+
+/** A setting the league's format fixes: shown with its value, not editable. */
+function LockedSetting({ label, hint, value }: { label: string; hint: string; value: string }) {
+  return (
+    <div className="setting-row">
+      <div className="setting-text">
+        <span className="setting-label">{label}</span>
+        <span className="field-hint">{hint}</span>
+      </div>
+      <span className="setting-locked" title="Locked by the head-to-head format">
+        <span aria-hidden>🔒</span> {value}
+      </span>
     </div>
   );
 }

@@ -83,6 +83,34 @@
 .settings-save:disabled { opacity: 0.5; cursor: not-allowed; filter: none; }
 .settings-saved { display: block; margin-top: 12px; color: var(--status-revealed); font-size: 14px; font-weight: 600; }
 
+/* head-to-head: the read-only format badge + locked values */
+.format-badge {
+  flex: none;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--magenta);
+  background: rgba(224, 64, 251, 0.12);
+  border: 1px solid rgba(224, 64, 251, 0.35);
+  padding: 6px 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.setting-locked {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  padding: 6px 14px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
 /* danger zone */
 .settings-card.danger { margin-top: 28px; border-color: var(--error-container, #93000a); }
 .danger-title { color: var(--error, #ffb4ab); }
