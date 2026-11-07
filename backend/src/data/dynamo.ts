@@ -27,13 +27,19 @@ import {
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import type { Ballot, League, LeagueSettings, Round, Submission } from "../domain/types.ts";
+import { leagueFormat } from "../domain/types.ts";
 import type { Repository } from "./repository.ts";
 
 const index4 = (n: number) => String(n).padStart(4, "0");
 
 export class DynamoRepository implements Repository {
+  // Plain fields (no constructor parameter properties) so this module also
+  // loads under `node --experimental-strip-types`, which the offline unit
+  // tests run with.
+  private tableName: string;
   private doc: DynamoDBDocumentClient;
-  constructor(private tableName: string, client = new DynamoDBClient({})) {
+  constructor(tableName: string, client = new DynamoDBClient({})) {
+    this.tableName = tableName;
     this.doc = DynamoDBDocumentClient.from(client, { marshallOptions: { removeUndefinedValues: true } });
   }
 
@@ -49,6 +55,7 @@ export class DynamoRepository implements Repository {
         name: league.name,
         ownerId: league.ownerId,
         musicProvider: league.musicProvider,
+        format: leagueFormat(league),
         settings: league.settings,
         inviteCode: league.inviteCode,
         visibility: league.visibility,
@@ -88,6 +95,9 @@ export class DynamoRepository implements Repository {
       name: meta.Item.name,
       ownerId: meta.Item.ownerId,
       musicProvider: meta.Item.musicProvider,
+      // Older leagues predate formats (no attribute) — they read as standard.
+      // No migration: the default is applied on every read.
+      format: leagueFormat(meta.Item),
       settings: meta.Item.settings,
       memberIds,
       // Older leagues created before invite codes were stored on META fall back to "".

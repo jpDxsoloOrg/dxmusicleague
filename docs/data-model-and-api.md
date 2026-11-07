@@ -25,7 +25,7 @@ because every read below is a point-get or a single-partition `Query` — no cro
 
 | Entity | PK | SK | Key attributes |
 |---|---|---|---|
-| League meta | `LEAGUE#<leagueId>` | `META` | `name, ownerId, musicProvider, settings{}, createdAt` |
+| League meta | `LEAGUE#<leagueId>` | `META` | `name, ownerId, musicProvider, format, settings{}, createdAt` |
 | Membership | `LEAGUE#<leagueId>` | `MEMBER#<userId>` | `joinedAt, displayName` |
 | Round | `LEAGUE#<leagueId>` | `ROUND#<index4>` | `roundId, theme, description, status, submissionDeadline, voteDeadline, playlistUrl` |
 | Submission | `ROUND#<roundId>` | `SUB#<userId>` | `track{}, submittedAt` |
@@ -56,6 +56,18 @@ The per-league knobs live in the `settings` map on the League META item, mirrori
 The **tie-break is not a setting** — it is fixed algorithm in the reveal handler
 (points desc → distinct-voter count desc → title A→Z).
 
+### League format
+
+`format` on the League META item is `"standard"` (points) or `"headToHead"`
+(round-robin 1v1 matchups, W/L/D standings). It is chosen at creation
+(`POST /leagues` body `format`, omitted → `"standard"`, unknown → 400) and is
+**immutable** — no route writes it afterwards (the settings PATCH ignores it).
+Leagues stored before formats existed have no attribute and read as
+`"standard"` via `leagueFormat()` on every read — no migration. Head-to-head
+leagues are locked to `submissionsPerPlayer: 1` and `downvotePoolSize: 0`:
+creation and rematch clamp to those values, and a settings PATCH that changes
+either is rejected with a 400.
+
 ### Why submission/vote keys are what they are
 
 - `SUB#<userId>` as the sort key means a player physically *cannot* have two submissions in a
@@ -76,7 +88,7 @@ All routes require a valid Cognito JWT. `:me` denotes the caller's `sub`. Errors
 
 | Method | Path | Body | Returns | Replaces |
 |---|---|---|---|---|
-| `POST` | `/leagues` | `{ name, musicProvider }` | `League` | `createLeague` |
+| `POST` | `/leagues` | `{ name, musicProvider, roundCount, format?, … }` (see [League format](#league-format)) | `League` | `createLeague` |
 | `GET` | `/leagues` | — | `LeagueSummary[]` | `getMyLeagueSummaries` |
 | `GET` | `/leagues/{leagueId}` | — | `LeagueDetail` | `getLeagueDetail` |
 | `POST` | `/leagues/join` | `{ code }` | `{ league }` \| 4xx | `joinLeague` |

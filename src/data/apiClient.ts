@@ -62,6 +62,8 @@ export class ApiClient implements DataClient {
   }
 
   createLeague(input: CreateLeagueInput): Promise<League> {
+    // The whole input is forwarded, `format` included (omitted → the server
+    // defaults to "standard"; an unknown value is a 400).
     return request<League>("/leagues", { method: "POST", body: JSON.stringify(input) });
   }
 

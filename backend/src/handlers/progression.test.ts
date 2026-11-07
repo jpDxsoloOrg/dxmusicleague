@@ -15,7 +15,7 @@ const ahead = (ms: number) => new Date(Date.now() + ms).toISOString();
 
 function timedLeague(over: Partial<League> = {}): League {
   return {
-    id: "lg", name: "Timed", ownerId: "u-owner", musicProvider: "spotify",
+    id: "lg", name: "Timed", ownerId: "u-owner", musicProvider: "spotify", format: "standard",
     settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-owner", "u-2"], inviteCode: "C",
     visibility: "private", roundCount: 3, progression: "timed", phaseDays: 1, ...over,
   };

@@ -38,12 +38,23 @@ export type LeagueVisibility = "private" | "public";
  *  `timed` = phases auto-advance after `phaseDays` days. */
 export type RoundProgression = "manual" | "timed";
 
+/** How a league is scored. `standard` = every voter spreads a points pool over
+ *  every song, standings by total points. `headToHead` = round-robin 1v1
+ *  matchups each round, most votes wins, standings by W/L/D record. Chosen at
+ *  creation and immutable afterwards. Mirror of the backend's LeagueFormat —
+ *  always read it through `leagueFormat()`, never raw (older leagues and older
+ *  API responses carry no field). */
+export type LeagueFormat = "standard" | "headToHead";
+
 export interface League {
   id: string;
   name: string;
   ownerId: string;
   /** Music service this league runs on, chosen at creation. */
   musicProvider: MusicProviderId;
+  /** Scoring format, fixed at creation. Read it with `leagueFormat(league)`,
+   *  which defaults to "standard" when the field is absent. */
+  format: LeagueFormat;
   settings: LeagueSettings;
   memberIds: string[];
   /** Shareable code players enter to join. Minted at creation, case-insensitive. */
@@ -101,6 +112,21 @@ export const DEFAULT_LEAGUE_SETTINGS: LeagueSettings = {
   votePoolSize: 10,
   maxPointsPerSong: 5,
   allowSelfVote: false,
+  submissionsPerPlayer: 1,
+  downvotePoolSize: 0,
+};
+
+/** A league's format, back-compat safe: a league without the field (legacy
+ *  record, or a response from a backend that predates formats) — or anything
+ *  unrecognised — reads as "standard". Mirrors backend/src/domain/types.ts. */
+export function leagueFormat(league: { format?: LeagueFormat | null }): LeagueFormat {
+  return league.format === "headToHead" ? "headToHead" : "standard";
+}
+
+/** Settings a head-to-head league is locked to (one song per player, no
+ *  anti-votes). The server clamps these at creation and 400s a settings edit
+ *  that changes them. Mirrors backend/src/domain/types.ts. */
+export const H2H_FORCED_SETTINGS: Pick<LeagueSettings, "submissionsPerPlayer" | "downvotePoolSize"> = {
   submissionsPerPlayer: 1,
   downvotePoolSize: 0,
 };

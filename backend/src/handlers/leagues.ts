@@ -4,8 +4,8 @@
 // frontend's mock functions exactly (src/data/mock.ts) so the pages don't change.
 
 import { randomInt, randomUUID } from "node:crypto";
-import type { League, LeagueSettings, LeagueVisibility, RoundProgression, Round } from "../domain/types.ts";
-import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types.ts";
+import type { League, LeagueFormat, LeagueSettings, LeagueVisibility, RoundProgression, Round } from "../domain/types.ts";
+import { DEFAULT_LEAGUE_SETTINGS, H2H_FORCED_SETTINGS, LEAGUE_FORMATS, applyFormatSettings, leagueFormat } from "../domain/types.ts";
 import { badRequest, conflict, forbidden, notFound } from "../domain/errors.ts";
 import type { Repository, UserDirectory } from "../data/repository.ts";
 import { autoAdvanceRound } from "./progression.ts";
@@ -185,12 +185,25 @@ export interface CreateLeagueInput {
   /** Timed mode: ISO start time (defaults to now) and days per phase (1–30). */
   startAt?: string;
   phaseDays?: number;
+  /** Scoring format; defaults to "standard" when omitted. Fixed for the
+   *  league's lifetime — no route can change it after creation. */
+  format?: LeagueFormat;
+}
+
+/** Resolve the requested format: absent → "standard"; anything that isn't a
+ *  known format is a 400 rather than a silent fallback, so a typo can't
+ *  quietly create a points league the owner didn't ask for. */
+function parseFormat(raw: unknown): LeagueFormat {
+  if (raw === undefined || raw === null) return "standard";
+  if (typeof raw === "string" && (LEAGUE_FORMATS as readonly string[]).includes(raw)) return raw as LeagueFormat;
+  throw badRequest("Pick a league format: standard (points) or head-to-head.");
 }
 
 export async function createLeague(deps: Deps, caller: string, input: CreateLeagueInput): Promise<League> {
   const name = (input?.name ?? "").trim();
   if (!name) throw badRequest("Give your league a name.");
   if (!input?.musicProvider) throw badRequest("Pick a music service.");
+  const format = parseFormat(input?.format);
 
   const roundCount = asInt(input?.roundCount);
   if (!(roundCount >= MIN_ROUNDS)) throw badRequest(`A league needs at least ${MIN_ROUNDS} round.`);
@@ -224,7 +237,10 @@ export async function createLeague(deps: Deps, caller: string, input: CreateLeag
     name,
     ownerId: caller,
     musicProvider: input.musicProvider,
-    settings: { ...DEFAULT_LEAGUE_SETTINGS },
+    format,
+    // Head-to-head clamps to its forced settings (1 song, no anti-votes);
+    // standard gets the plain defaults, exactly as before formats existed.
+    settings: applyFormatSettings(format, DEFAULT_LEAGUE_SETTINGS),
     memberIds: [caller],
     inviteCode: newInviteCode(),
     visibility,
@@ -594,6 +610,8 @@ export async function updateLeagueSettings(
   input: UpdateSettingsInput,
 ): Promise<League> {
   const league = await ownedLeague(deps, caller, leagueId);
+  // Format itself is never read from the input: it's immutable after creation.
+  const headToHead = leagueFormat(league) === "headToHead";
 
   const votePoolSize = asInt(input?.votePoolSize);
   const maxPointsPerSong = asInt(input?.maxPointsPerSong);
@@ -609,6 +627,11 @@ export async function updateLeagueSettings(
     input?.submissionsPerPlayer === undefined
       ? league.settings.submissionsPerPlayer || 1
       : asInt(input.submissionsPerPlayer);
+  // Head-to-head pairs players, so each must bring exactly one song. Reject
+  // (not clamp): the server is the referee and the owner should see why.
+  if (headToHead && submissionsPerPlayer !== H2H_FORCED_SETTINGS.submissionsPerPlayer) {
+    throw badRequest("Head-to-head leagues are locked to 1 song per player.");
+  }
   if (!(submissionsPerPlayer >= 1 && submissionsPerPlayer <= 5)) {
     throw badRequest("Songs per player must be between 1 and 5.");
   }
@@ -618,6 +641,10 @@ export async function updateLeagueSettings(
     input?.downvotePoolSize === undefined
       ? league.settings.downvotePoolSize ?? 0
       : asInt(input.downvotePoolSize);
+  // A matchup ballot picks a winner — there's no points pool to subtract from.
+  if (headToHead && downvotePoolSize !== H2H_FORCED_SETTINGS.downvotePoolSize) {
+    throw badRequest("Head-to-head leagues don't use anti-votes.");
+  }
   if (!(downvotePoolSize >= 0 && downvotePoolSize <= 2)) {
     throw badRequest("Anti-votes per player must be between 0 and 2.");
   }
@@ -657,12 +684,16 @@ export async function rematchLeague(deps: Deps, caller: string, leagueId: string
   }
 
   const name = rematchName(league.name);
+  // Copy the format explicitly (fields are copied one by one, so a missing
+  // line here would silently revert a head-to-head rematch to points).
+  const format = leagueFormat(league);
   const next: League = {
     id: newLeagueId(name),
     name,
     ownerId: caller,
     musicProvider: league.musicProvider,
-    settings: { ...league.settings },
+    format,
+    settings: applyFormatSettings(format, league.settings),
     memberIds: [...league.memberIds],
     inviteCode: newInviteCode(),
     visibility: league.visibility,

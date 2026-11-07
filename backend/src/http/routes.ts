@@ -46,6 +46,8 @@ export function buildRoutes(deps: Deps): Route[] {
           progression: body.progression as never,
           startAt: asOptString(body.startAt),
           phaseDays: typeof body.phaseDays === "number" ? body.phaseDays : undefined,
+          // Passed through raw — the handler 400s on anything but a known format.
+          format: body.format as never,
         });
       },
     },
@@ -114,6 +116,8 @@ export function buildRoutes(deps: Deps): Route[] {
       handler: (req) => leagues.rematchLeague(deps, req.caller, req.params.leagueId!),
     },
     {
+      // Explicit field list on purpose: `format` is creation-time only and
+      // must never be forwarded here (it's immutable once the league exists).
       method: "PATCH",
       pattern: "/leagues/:leagueId/settings",
       handler: (req) => {

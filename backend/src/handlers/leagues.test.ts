@@ -5,16 +5,18 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MemoryRepository, MemoryUserDirectory } from "../data/memory.ts";
 import type { Deps } from "./leagues.ts";
-import { claimPublicSpot, getLeagueDetail, getPublicLeaguePreview, leaveLeague, listBrowseLeagues, listOpenPublicLeagues, rematchLeague } from "./leagues.ts";
+import { claimPublicSpot, createLeague, getLeagueDetail, getPublicLeaguePreview, leaveLeague, listBrowseLeagues, listMyLeagues, listOpenPublicLeagues, rematchLeague, updateLeagueSettings } from "./leagues.ts";
 import { createRound } from "./rounds.ts";
 import { ApiError } from "../domain/errors.ts";
-import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types.ts";
+import { DEFAULT_LEAGUE_SETTINGS, applyFormatSettings, leagueFormat } from "../domain/types.ts";
 import type { League, Round } from "../domain/types.ts";
+import { buildRoutes, matchRoute } from "../http/routes.ts";
 
 function league(over: Partial<League> & Pick<League, "id" | "name" | "visibility">): League {
   return {
     ownerId: "u-owner",
     musicProvider: "spotify",
+    format: "standard",
     settings: DEFAULT_LEAGUE_SETTINGS,
     memberIds: ["u-owner"],
     inviteCode: `C-${over.id}`,
@@ -400,4 +402,218 @@ test("no round can be created beyond the league's planned roundCount", async () 
     createRound(deps, "u-owner", "cap", { theme: "Two" }),
     (e: unknown) => e instanceof ApiError && e.statusCode === 400,
   );
+});
+
+// ---- league format (HTH-01): creation-time, immutable, back-compat ----
+
+const isStatus = (code: number) => (e: unknown) => e instanceof ApiError && e.statusCode === code;
+
+/** Drive a request through the real route table (the same one the Lambda and
+ *  the local server use), so route-level field lists are under test too. */
+async function callRoute(deps: Deps, method: string, path: string, caller: string, body?: unknown): Promise<unknown> {
+  const match = matchRoute(buildRoutes(deps), method, path);
+  assert.ok(match, `no route for ${method} ${path}`);
+  return match.route.handler({ caller, params: match.params, query: {}, body });
+}
+
+const baseCreate = { name: "Format Test", musicProvider: "mock" as const, roundCount: 3 };
+
+test("leagueFormat() defaults a missing / null / unknown field to standard", () => {
+  assert.equal(leagueFormat({}), "standard");
+  assert.equal(leagueFormat({ format: undefined }), "standard");
+  assert.equal(leagueFormat({ format: null }), "standard");
+  assert.equal(leagueFormat({ format: "foo" as never }), "standard");
+  assert.equal(leagueFormat({ format: "standard" }), "standard");
+  assert.equal(leagueFormat({ format: "headToHead" }), "headToHead");
+});
+
+test("create with format headToHead → detail returns it; create without → standard", async () => {
+  const deps = await depsWith([]);
+  const h2h = await createLeague(deps, "u-owner", { ...baseCreate, format: "headToHead" });
+  assert.equal(h2h.format, "headToHead");
+  assert.equal((await getLeagueDetail(deps, "u-owner", h2h.id)).league.format, "headToHead");
+
+  const plain = await createLeague(deps, "u-owner", { ...baseCreate });
+  assert.equal(plain.format, "standard");
+  const detail = await getLeagueDetail(deps, "u-owner", plain.id);
+  assert.equal(detail.league.format, "standard");
+  // Explicit "standard" is accepted too.
+  assert.equal((await createLeague(deps, "u-owner", { ...baseCreate, format: "standard" })).format, "standard");
+
+  // Same through the HTTP route table (POST /leagues forwards `format`).
+  const viaRoute = (await callRoute(deps, "POST", "/leagues", "u-owner", { ...baseCreate, format: "headToHead" })) as League;
+  assert.equal(viaRoute.format, "headToHead");
+  const viaRouteDefault = (await callRoute(deps, "POST", "/leagues", "u-owner", { ...baseCreate })) as League;
+  assert.equal(viaRouteDefault.format, "standard");
+});
+
+test("invalid format 'foo' → 400 (handler and route); nothing is created", async () => {
+  const deps = await depsWith([]);
+  await assert.rejects(createLeague(deps, "u-owner", { ...baseCreate, format: "foo" as never }), isStatus(400));
+  await assert.rejects(callRoute(deps, "POST", "/leagues", "u-owner", { ...baseCreate, format: "foo" }), isStatus(400));
+  await assert.rejects(callRoute(deps, "POST", "/leagues", "u-owner", { ...baseCreate, format: 7 }), isStatus(400));
+  await assert.rejects(callRoute(deps, "POST", "/leagues", "u-owner", { ...baseCreate, format: "HeadToHead" }), isStatus(400));
+  assert.equal((await deps.repo.getAllLeagues()).length, 0);
+});
+
+test("applyFormatSettings clamps head-to-head to 1 song / 0 anti-votes; standard untouched", () => {
+  const loose = { ...DEFAULT_LEAGUE_SETTINGS, submissionsPerPlayer: 3, downvotePoolSize: 2, votePoolSize: 12 };
+  assert.deepEqual(applyFormatSettings("headToHead", loose), {
+    ...loose,
+    submissionsPerPlayer: 1,
+    downvotePoolSize: 0,
+  });
+  assert.deepEqual(applyFormatSettings("standard", loose), loose);
+  assert.notEqual(applyFormatSettings("standard", loose), loose); // a copy, never the caller's object
+});
+
+test("create H2H with submissionsPerPlayer: 3 → forced to 1 song / 0 anti-votes", async () => {
+  const deps = await depsWith([]);
+  // A hand-crafted create body trying to smuggle settings in, both flat and
+  // nested: the route drops them and the handler clamps H2H to its forced values.
+  const created = (await callRoute(deps, "POST", "/leagues", "u-owner", {
+    ...baseCreate,
+    format: "headToHead",
+    submissionsPerPlayer: 3,
+    downvotePoolSize: 2,
+    settings: { ...DEFAULT_LEAGUE_SETTINGS, submissionsPerPlayer: 3, downvotePoolSize: 2 },
+  })) as League;
+  assert.equal(created.settings.submissionsPerPlayer, 1);
+  assert.equal(created.settings.downvotePoolSize, 0);
+  const stored = await deps.repo.getLeague(created.id);
+  assert.equal(stored?.settings.submissionsPerPlayer, 1);
+  assert.equal(stored?.settings.downvotePoolSize, 0);
+  // Standard creation still gets the plain defaults, unchanged.
+  const plain = await createLeague(deps, "u-owner", { ...baseCreate });
+  assert.deepEqual(plain.settings, DEFAULT_LEAGUE_SETTINGS);
+});
+
+test("create H2H still clamps if DEFAULT_LEAGUE_SETTINGS drifts from the forced values", async () => {
+  // Today the defaults already equal H2H_FORCED_SETTINGS (1 song, 0 anti-votes),
+  // so the create-path clamp is defensive and the test above can't tell it
+  // apart from the coincidence. Drift the shared defaults for the duration of
+  // this test only (a file's top-level tests run one at a time; restored in
+  // `finally`) so a create handler that skips the clamp fails here.
+  const original = { ...DEFAULT_LEAGUE_SETTINGS };
+  Object.assign(DEFAULT_LEAGUE_SETTINGS, { submissionsPerPlayer: 3, downvotePoolSize: 2 });
+  try {
+    const deps = await depsWith([]);
+    const h2h = await createLeague(deps, "u-owner", { ...baseCreate, format: "headToHead" });
+    assert.equal(h2h.settings.submissionsPerPlayer, 1);
+    assert.equal(h2h.settings.downvotePoolSize, 0);
+    assert.equal((await deps.repo.getLeague(h2h.id))?.settings.downvotePoolSize, 0);
+    // Standard takes the (drifted) defaults as-is: the clamp is H2H-only.
+    const plain = await createLeague(deps, "u-owner", { ...baseCreate });
+    assert.equal(plain.settings.submissionsPerPlayer, 3);
+    assert.equal(plain.settings.downvotePoolSize, 2);
+  } finally {
+    Object.assign(DEFAULT_LEAGUE_SETTINGS, original);
+  }
+  assert.equal(DEFAULT_LEAGUE_SETTINGS.submissionsPerPlayer, 1);
+  assert.equal(DEFAULT_LEAGUE_SETTINGS.downvotePoolSize, 0);
+});
+
+test("PATCH settings to downvotePoolSize: 1 (or 2 songs) on an H2H league → 400", async () => {
+  const deps = await depsWith([
+    league({ id: "h2h", name: "H2H", visibility: "private", format: "headToHead" }),
+  ]);
+  const path = "/leagues/h2h/settings";
+  const ok = { votePoolSize: 10, maxPointsPerSong: 5, allowSelfVote: false, submissionsPerPlayer: 1, downvotePoolSize: 0 };
+
+  await assert.rejects(callRoute(deps, "PATCH", path, "u-owner", { ...ok, downvotePoolSize: 1 }), isStatus(400));
+  await assert.rejects(
+    updateLeagueSettings(deps, "u-owner", "h2h", { ...ok, downvotePoolSize: 1 }),
+    (e: unknown) => isStatus(400)(e) && /anti-votes/.test((e as Error).message),
+  );
+  await assert.rejects(
+    updateLeagueSettings(deps, "u-owner", "h2h", { ...ok, submissionsPerPlayer: 2 }),
+    (e: unknown) => isStatus(400)(e) && /1 song per player/.test((e as Error).message),
+  );
+  // Nothing was written by the rejected edits.
+  assert.equal((await deps.repo.getLeague("h2h"))?.settings.downvotePoolSize, 0);
+  assert.equal((await deps.repo.getLeague("h2h"))?.settings.submissionsPerPlayer, 1);
+
+  // The forced values (explicit or omitted) still save, so the other knobs stay editable.
+  const saved = (await callRoute(deps, "PATCH", path, "u-owner", { ...ok, votePoolSize: 12 })) as League;
+  assert.equal(saved.settings.votePoolSize, 12);
+  const omitted = await updateLeagueSettings(deps, "u-owner", "h2h", { votePoolSize: 8, maxPointsPerSong: 4, allowSelfVote: true });
+  assert.equal(omitted.settings.submissionsPerPlayer, 1);
+  assert.equal(omitted.settings.downvotePoolSize, 0);
+});
+
+test("standard leagues keep their settings freedom (anti-votes + multi-song still allowed)", async () => {
+  const deps = await depsWith([league({ id: "std", name: "Std", visibility: "private" })]);
+  const saved = await updateLeagueSettings(deps, "u-owner", "std", {
+    votePoolSize: 10, maxPointsPerSong: 5, allowSelfVote: false, submissionsPerPlayer: 3, downvotePoolSize: 2,
+  });
+  assert.equal(saved.settings.submissionsPerPlayer, 3);
+  assert.equal(saved.settings.downvotePoolSize, 2);
+  assert.equal(saved.format, "standard");
+});
+
+test("format is immutable: a settings PATCH carrying `format` changes nothing", async () => {
+  const deps = await depsWith([
+    league({ id: "std", name: "Std", visibility: "private" }),
+    league({ id: "h2h", name: "H2H", visibility: "private", format: "headToHead" }),
+  ]);
+  const body = { votePoolSize: 10, maxPointsPerSong: 5, allowSelfVote: false, submissionsPerPlayer: 1, downvotePoolSize: 0 };
+  const std = (await callRoute(deps, "PATCH", "/leagues/std/settings", "u-owner", { ...body, format: "headToHead" })) as League;
+  assert.equal(std.format, "standard");
+  assert.equal((await deps.repo.getLeague("std"))?.format, "standard");
+  const h2h = (await callRoute(deps, "PATCH", "/leagues/h2h/settings", "u-owner", { ...body, format: "standard" })) as League;
+  assert.equal(h2h.format, "headToHead");
+  assert.equal((await deps.repo.getLeague("h2h"))?.format, "headToHead");
+});
+
+test("rematch of an H2H league keeps format headToHead (and its forced settings)", async () => {
+  // The source row carries non-forced settings (a hand-edited or legacy row),
+  // so the rematch clamp is what turns them back into 1 song / 0 anti-votes.
+  const deps = await depsWith(
+    [
+      league({
+        id: "h1", name: "Duel 1", visibility: "private", format: "headToHead", roundCount: 1, memberIds: ["u-owner", "u-2"],
+        settings: { ...DEFAULT_LEAGUE_SETTINGS, submissionsPerPlayer: 3, downvotePoolSize: 2, votePoolSize: 12 },
+      }),
+    ],
+    [{ id: "h1~1", leagueId: "h1", index: 1, theme: "One", status: "revealed" }],
+  );
+  const next = await rematchLeague(deps, "u-owner", "h1");
+  assert.equal(next.format, "headToHead");
+  assert.equal(next.settings.submissionsPerPlayer, 1);
+  assert.equal(next.settings.downvotePoolSize, 0);
+  assert.equal(next.settings.votePoolSize, 12); // the other knobs carry over
+  assert.equal((await deps.repo.getLeague(next.id))?.settings.downvotePoolSize, 0);
+  assert.equal((await deps.repo.getLeague(next.id))?.format, "headToHead");
+  assert.equal((await getLeagueDetail(deps, "u-owner", next.id)).league.format, "headToHead");
+});
+
+test("rematch of a standard league stays standard", async () => {
+  const deps = await depsWith(
+    [league({ id: "s1", name: "Szn 1", visibility: "private", roundCount: 1 })],
+    [{ id: "s1~1", leagueId: "s1", index: 1, theme: "One", status: "revealed" }],
+  );
+  assert.equal((await rematchLeague(deps, "u-owner", "s1")).format, "standard");
+});
+
+test("a legacy league stored without `format` reads as standard everywhere (no undefined leaks)", async () => {
+  const legacy = league({ id: "old", name: "Old Szn 1", visibility: "public", roundCount: 1, memberIds: ["u-owner", "u-me"] });
+  delete (legacy as Partial<League>).format; // a pre-format record, as an old Dynamo row would be
+  const deps = await depsWith([legacy], [{ id: "old~1", leagueId: "old", index: 1, theme: "One", status: "revealed" }]);
+
+  assert.equal((await deps.repo.getLeague("old"))?.format, "standard");
+  assert.equal((await getLeagueDetail(deps, "u-me", "old")).league.format, "standard");
+  assert.equal((await getLeagueDetail(deps, "u-stranger", "old")).league.format, "standard"); // spectator copy
+  const mine = await listMyLeagues(deps, "u-me");
+  assert.equal(mine.find((s) => s.league.id === "old")?.league.format, "standard");
+  assert.ok((await deps.repo.getAllLeagues()).every((lg) => lg.format === "standard"));
+  assert.ok((await deps.repo.getPublicLeagues()).every((lg) => lg.format === "standard"));
+  // The rematch of a legacy league is written with an explicit standard format.
+  const next = await rematchLeague(deps, "u-owner", "old");
+  assert.equal(next.format, "standard");
+  // Settings edits on a legacy league behave exactly as before (no H2H rules).
+  const saved = await updateLeagueSettings(deps, "u-owner", "old", {
+    votePoolSize: 10, maxPointsPerSong: 5, allowSelfVote: false, downvotePoolSize: 2,
+  });
+  assert.equal(saved.settings.downvotePoolSize, 2);
+  assert.equal(saved.format, "standard");
 });

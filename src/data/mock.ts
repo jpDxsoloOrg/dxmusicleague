@@ -1,8 +1,8 @@
 // Mock data so the UI is fully clickable before any backend exists.
 // Swap these reads for API calls in Phase 2+ without touching the components.
 
-import type { League, LeagueSettings, LeagueVisibility, RoundProgression, Round, RoundStatus, User } from "../domain/types";
-import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types";
+import type { League, LeagueFormat, LeagueSettings, LeagueVisibility, RoundProgression, Round, RoundStatus, User } from "../domain/types";
+import { DEFAULT_LEAGUE_SETTINGS, H2H_FORCED_SETTINGS, leagueFormat } from "../domain/types";
 import type { MusicProviderId, Track } from "../music";
 import { trackKey } from "../music";
 
@@ -26,6 +26,7 @@ export const leagues: League[] = [
     name: "Synthwave Souls",
     ownerId: "u-me",
     musicProvider: "youtube-music",
+    format: "standard",
     settings: DEFAULT_LEAGUE_SETTINGS,
     memberIds: ["u-me", "u-sarah", "u-james", "u-mia", "u-luna"],
     inviteCode: "SYNTH-23",
@@ -38,6 +39,7 @@ export const leagues: League[] = [
     name: "Vaporwave Vibes",
     ownerId: "u-sarah",
     musicProvider: "youtube-music",
+    format: "standard",
     settings: { ...DEFAULT_LEAGUE_SETTINGS, votePoolSize: 12 },
     memberIds: ["u-me", "u-sarah", "u-jpop", "u-luna"],
     inviteCode: "VAPOR-88",
@@ -50,6 +52,7 @@ export const leagues: League[] = [
     name: "Bassline Battle",
     ownerId: "u-james",
     musicProvider: "youtube-music",
+    format: "standard",
     settings: DEFAULT_LEAGUE_SETTINGS,
     memberIds: ["u-me", "u-james", "u-mia", "u-jpop", "u-sarah", "u-luna"],
     inviteCode: "BASS-42",
@@ -63,6 +66,7 @@ export const leagues: League[] = [
     name: "Indie Anthems",
     ownerId: "u-luna",
     musicProvider: "youtube-music",
+    format: "standard",
     settings: DEFAULT_LEAGUE_SETTINGS,
     memberIds: ["u-luna", "u-mia", "u-jpop"],
     inviteCode: "INDIE-25",
@@ -76,6 +80,7 @@ export const leagues: League[] = [
     name: "Midnight Drives",
     ownerId: "u-sarah",
     musicProvider: "spotify",
+    format: "standard",
     settings: DEFAULT_LEAGUE_SETTINGS,
     memberIds: ["u-sarah", "u-james", "u-luna"],
     inviteCode: "NIGHT-1",
@@ -89,6 +94,7 @@ export const leagues: League[] = [
     name: "Retro Futures",
     ownerId: "u-jpop",
     musicProvider: "spotify",
+    format: "standard",
     settings: DEFAULT_LEAGUE_SETTINGS,
     memberIds: ["u-jpop", "u-mia"],
     inviteCode: "RETRO-1",
@@ -102,6 +108,7 @@ export const leagues: League[] = [
     name: "Urban Beats",
     ownerId: "u-luna",
     musicProvider: "spotify",
+    format: "standard",
     settings: DEFAULT_LEAGUE_SETTINGS,
     memberIds: ["u-luna", "u-james", "u-sarah", "u-mia"],
     inviteCode: "URBAN-1",
@@ -314,10 +321,17 @@ export interface CreateLeagueInput {
   /** Timed mode: ISO start (defaults to now) and days per phase. */
   startAt?: string;
   phaseDays?: number;
+  /** Scoring format; defaults to "standard". Immutable after creation. */
+  format?: LeagueFormat;
 }
 
 /** Create a league owned by the current user and return it. */
 export function createLeague(input: CreateLeagueInput): League {
+  // Mirrors the backend: absent → standard, unknown → the server's 400 message.
+  const format: LeagueFormat = input.format ?? "standard";
+  if (format !== "standard" && format !== "headToHead") {
+    throw new Error("Pick a league format: standard (points) or head-to-head.");
+  }
   createdLeagueSeq += 1;
   const visibility: LeagueVisibility = input.visibility === "public" ? "public" : "private";
   const progression: RoundProgression = input.progression === "timed" ? "timed" : "manual";
@@ -326,7 +340,9 @@ export function createLeague(input: CreateLeagueInput): League {
     name: input.name.trim(),
     ownerId: currentUser.id,
     musicProvider: input.musicProvider,
-    settings: DEFAULT_LEAGUE_SETTINGS,
+    format,
+    // Head-to-head is clamped to its forced settings, like the server does.
+    settings: format === "headToHead" ? { ...DEFAULT_LEAGUE_SETTINGS, ...H2H_FORCED_SETTINGS } : DEFAULT_LEAGUE_SETTINGS,
     memberIds: [currentUser.id],
     // Mint a shareable invite code so the new league is joinable too.
     inviteCode: `NEW-${100 + createdLeagueSeq}`,
@@ -409,13 +425,29 @@ export function regenerateInvite(leagueId: string): League {
   return league;
 }
 
-/** Owner edits a league's voting settings (mock: mutate in place). */
+/** Owner edits a league's voting settings (mock: mutate in place). The format
+ *  is never part of the payload — it can't change after creation. */
 export function updateLeagueSettings(
   leagueId: string,
-  settings: Pick<LeagueSettings, "votePoolSize" | "maxPointsPerSong" | "allowSelfVote" | "submissionsPerPlayer">,
+  settings: Pick<
+    LeagueSettings,
+    "votePoolSize" | "maxPointsPerSong" | "allowSelfVote" | "submissionsPerPlayer" | "downvotePoolSize"
+  >,
 ): League {
   const league = leagues.find((lg) => lg.id === leagueId);
   if (!league) throw new Error("That league doesn't exist.");
+  // Same referee rule (and messages) as the backend's settings PATCH,
+  // including its "omitted → keep the league's current value" resolution.
+  if (leagueFormat(league) === "headToHead") {
+    const songs = settings.submissionsPerPlayer ?? (league.settings.submissionsPerPlayer || 1);
+    const antiVotes = settings.downvotePoolSize ?? league.settings.downvotePoolSize ?? 0;
+    if (songs !== H2H_FORCED_SETTINGS.submissionsPerPlayer) {
+      throw new Error("Head-to-head leagues are locked to 1 song per player.");
+    }
+    if (antiVotes !== H2H_FORCED_SETTINGS.downvotePoolSize) {
+      throw new Error("Head-to-head leagues don't use anti-votes.");
+    }
+  }
   league.settings = { ...league.settings, ...settings };
   return league;
 }
@@ -711,7 +743,13 @@ export function rematchLeague(leagueId: string): League {
     ...league,
     id: `lg-rematch-${createdLeagueSeq}`,
     name: (numbered ? `${numbered[1]}${Number(numbered[2]) + 1}` : `${league.name} 2`).slice(0, 50),
-    settings: { ...league.settings },
+    // A rematch keeps the format (head-to-head stays head-to-head) and, like
+    // the backend's applyFormatSettings, re-applies the H2H forced settings.
+    format: leagueFormat(league),
+    settings:
+      leagueFormat(league) === "headToHead"
+        ? { ...league.settings, ...H2H_FORCED_SETTINGS }
+        : { ...league.settings },
     memberIds: [...league.memberIds],
     inviteCode: `NEW-${100 + createdLeagueSeq}`,
     startAt: league.progression === "timed" ? new Date().toISOString() : undefined,

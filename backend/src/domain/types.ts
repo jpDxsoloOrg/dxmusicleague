@@ -42,11 +42,23 @@ export type LeagueVisibility = "private" | "public";
  *  `timed` = phases auto-advance after `phaseDays` days (see League). */
 export type RoundProgression = "manual" | "timed";
 
+/** How a league is scored. `standard` = every voter spreads a points pool over
+ *  every song, standings by total points. `headToHead` = round-robin 1v1
+ *  matchups each round, most votes wins, standings by W/L/D record. Chosen at
+ *  creation and immutable afterwards. Older records (no field) are standard —
+ *  always read it through `leagueFormat()`, never raw. */
+export type LeagueFormat = "standard" | "headToHead";
+
+export const LEAGUE_FORMATS: readonly LeagueFormat[] = ["standard", "headToHead"];
+
 export interface League {
   id: string;
   name: string;
   ownerId: string;
   musicProvider: MusicProviderId;
+  /** Scoring format, fixed at creation. Legacy rows lack it — read it with
+   *  `leagueFormat(league)`, which defaults to "standard". */
+  format: LeagueFormat;
   settings: LeagueSettings;
   memberIds: string[];
   /** Shareable code players enter to join. Minted at creation, case-insensitive. */
@@ -112,3 +124,26 @@ export const DEFAULT_LEAGUE_SETTINGS: LeagueSettings = {
   submissionsPerPlayer: 1,
   downvotePoolSize: 0,
 };
+
+/** A league's format, back-compat safe: leagues stored before formats existed
+ *  (no field) — or anything unrecognised — read as "standard". This accessor
+ *  is the single read path for the field; a raw `league.format` on a legacy
+ *  row is `undefined` and would fail an `=== "standard"` check. */
+export function leagueFormat(league: { format?: LeagueFormat | null }): LeagueFormat {
+  return league.format === "headToHead" ? "headToHead" : "standard";
+}
+
+/** Settings a head-to-head league is locked to: one song per player (so a
+ *  pairing of players is a pairing of songs) and no anti-votes (a matchup
+ *  ballot picks a winner; there is no points pool to subtract from). Creation
+ *  and rematch apply these; the settings PATCH rejects anything else. */
+export const H2H_FORCED_SETTINGS: Pick<LeagueSettings, "submissionsPerPlayer" | "downvotePoolSize"> = {
+  submissionsPerPlayer: 1,
+  downvotePoolSize: 0,
+};
+
+/** Overlay the format's forced settings onto a settings object (a no-op for
+ *  standard leagues). Used by the create and rematch paths to clamp. */
+export function applyFormatSettings(format: LeagueFormat, settings: LeagueSettings): LeagueSettings {
+  return format === "headToHead" ? { ...settings, ...H2H_FORCED_SETTINGS } : { ...settings };
+}

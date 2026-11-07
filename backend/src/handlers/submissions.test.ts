@@ -14,7 +14,7 @@ const ROUND = "r-test"; // an open round with no deadline (created fresh per tes
 async function deps(submissionsPerPlayer = 1): Promise<Deps> {
   const repo = new MemoryRepository(false); // no seed — fully isolated
   await repo.createLeague({
-    id: "lg-test", name: "Test", ownerId: "u-sarah", musicProvider: "youtube-music",
+    id: "lg-test", name: "Test", ownerId: "u-sarah", musicProvider: "youtube-music", format: "standard",
     settings: { ...DEFAULT_LEAGUE_SETTINGS, submissionsPerPlayer }, memberIds: ["u-sarah", "u-james"], inviteCode: "TEST-1",
     visibility: "private", roundCount: 5, progression: "manual",
   });

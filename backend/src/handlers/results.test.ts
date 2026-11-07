@@ -13,7 +13,7 @@ const ROUND = "r-test";
 async function deps(): Promise<Deps> {
   const repo = new MemoryRepository(false);
   await repo.createLeague({
-    id: "lg-test", name: "Test", ownerId: "u-sarah", musicProvider: "spotify",
+    id: "lg-test", name: "Test", ownerId: "u-sarah", musicProvider: "spotify", format: "standard",
     settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-sarah", "u-james"], inviteCode: "TEST-1",
     visibility: "private", roundCount: 3, progression: "manual",
   });

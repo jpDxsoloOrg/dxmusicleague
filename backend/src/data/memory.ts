@@ -3,7 +3,7 @@
 // app behaves identically whether it talks to this or to DynamoDB.
 
 import type { Ballot, League, LeagueSettings, Round, Submission } from "../domain/types.ts";
-import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types.ts";
+import { DEFAULT_LEAGUE_SETTINGS, leagueFormat } from "../domain/types.ts";
 import type { Repository, UserDirectory } from "./repository.ts";
 
 /** Fixed display-name directory, mirroring the frontend mock's `users`. */
@@ -35,31 +35,37 @@ export class MemoryRepository implements Repository {
   }
 
   // ---- Leagues ----
+  /** A detached copy of a stored league, with the same read-time defaults as
+   *  DynamoRepository.getLeague (a legacy record without `format` reads as
+   *  "standard"), so tests over this repo see what production would. */
+  private readLeague(lg: League): League {
+    return { ...structuredClone(lg), format: leagueFormat(lg) };
+  }
   async createLeague(league: League): Promise<void> {
     this.leagues.set(league.id, structuredClone(league));
   }
   async getLeague(leagueId: string): Promise<League | undefined> {
     const lg = this.leagues.get(leagueId);
-    return lg ? structuredClone(lg) : undefined;
+    return lg ? this.readLeague(lg) : undefined;
   }
   async getLeaguesForUser(userId: string): Promise<League[]> {
     return [...this.leagues.values()]
       .filter((lg) => lg.memberIds.includes(userId))
-      .map((lg) => structuredClone(lg));
+      .map((lg) => this.readLeague(lg));
   }
   async getPublicLeagues(): Promise<League[]> {
     return [...this.leagues.values()]
       .filter((lg) => lg.visibility === "public")
-      .map((lg) => structuredClone(lg));
+      .map((lg) => this.readLeague(lg));
   }
   async getAllLeagues(): Promise<League[]> {
-    return [...this.leagues.values()].map((lg) => structuredClone(lg));
+    return [...this.leagues.values()].map((lg) => this.readLeague(lg));
   }
   async addMember(leagueId: string, userId: string): Promise<League> {
     const lg = this.leagues.get(leagueId);
     if (!lg) throw new Error(`League not found: ${leagueId}`);
     if (!lg.memberIds.includes(userId)) lg.memberIds.push(userId);
-    return structuredClone(lg);
+    return this.readLeague(lg);
   }
   async removeMember(leagueId: string, userId: string): Promise<void> {
     // Standing deliberately kept (mirrors DynamoRepository) — points survive a
@@ -71,7 +77,7 @@ export class MemoryRepository implements Repository {
     const lg = this.leagues.get(leagueId);
     if (!lg) throw new Error(`League not found: ${leagueId}`);
     lg.settings = { ...settings };
-    return structuredClone(lg);
+    return this.readLeague(lg);
   }
   async deleteLeague(leagueId: string): Promise<void> {
     const lg = this.leagues.get(leagueId);
@@ -181,20 +187,20 @@ export class MemoryRepository implements Repository {
     };
 
     const seedLeagues: League[] = [
-      { id: "lg-synthwave", name: "Synthwave Souls", ownerId: "u-me", musicProvider: "youtube-music",
+      { id: "lg-synthwave", name: "Synthwave Souls", ownerId: "u-me", musicProvider: "youtube-music", format: "standard",
         settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-me", "u-sarah", "u-james", "u-mia", "u-luna"], inviteCode: "SYNTH-23", visibility: "private", roundCount: 12, progression: "manual" },
-      { id: "lg-vaporwave", name: "Vaporwave Vibes", ownerId: "u-sarah", musicProvider: "youtube-music",
+      { id: "lg-vaporwave", name: "Vaporwave Vibes", ownerId: "u-sarah", musicProvider: "youtube-music", format: "standard",
         settings: { ...DEFAULT_LEAGUE_SETTINGS, votePoolSize: 12 }, memberIds: ["u-me", "u-sarah", "u-jpop", "u-luna"], inviteCode: "VAPOR-88", visibility: "private", roundCount: 8, progression: "manual" },
-      { id: "lg-bassline", name: "Bassline Battle", ownerId: "u-james", musicProvider: "youtube-music",
+      { id: "lg-bassline", name: "Bassline Battle", ownerId: "u-james", musicProvider: "youtube-music", format: "standard",
         settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-me", "u-james", "u-mia", "u-jpop", "u-sarah", "u-luna"], inviteCode: "BASS-42", visibility: "private", roundCount: 8, progression: "manual" },
-      { id: "lg-indie", name: "Indie Anthems", ownerId: "u-luna", musicProvider: "youtube-music",
+      { id: "lg-indie", name: "Indie Anthems", ownerId: "u-luna", musicProvider: "youtube-music", format: "standard",
         settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-luna", "u-mia", "u-jpop"], inviteCode: "INDIE-25", visibility: "private", roundCount: 8, progression: "manual" },
       // Public, not-yet-started leagues with open slots — discoverable by u-me (not a member).
-      { id: "lg-midnight", name: "Midnight Drives", ownerId: "u-sarah", musicProvider: "spotify",
+      { id: "lg-midnight", name: "Midnight Drives", ownerId: "u-sarah", musicProvider: "spotify", format: "standard",
         settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-sarah", "u-james", "u-luna"], inviteCode: "NIGHT-1", visibility: "public", maxMembers: 8, roundCount: 8, progression: "manual" },
-      { id: "lg-retro", name: "Retro Futures", ownerId: "u-jpop", musicProvider: "spotify",
+      { id: "lg-retro", name: "Retro Futures", ownerId: "u-jpop", musicProvider: "spotify", format: "standard",
         settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-jpop", "u-mia"], inviteCode: "RETRO-1", visibility: "public", maxMembers: 6, roundCount: 6, progression: "manual" },
-      { id: "lg-urban", name: "Urban Beats", ownerId: "u-luna", musicProvider: "spotify",
+      { id: "lg-urban", name: "Urban Beats", ownerId: "u-luna", musicProvider: "spotify", format: "standard",
         settings: DEFAULT_LEAGUE_SETTINGS, memberIds: ["u-luna", "u-james", "u-sarah", "u-mia"], inviteCode: "URBAN-1", visibility: "public", maxMembers: 10, roundCount: 10, progression: "manual" },
     ];
     for (const lg of seedLeagues) {
