@@ -1,9 +1,10 @@
-// Standings rules tests — the pure, format-aware board order and the W/L/D
-// increment normalizer (domain/standings.ts). No repository, no handlers.
+// Standings rules tests — the pure, format-aware board order, the W/L/D
+// increment normalizer and the standard reveal's per-player points
+// increments (BUG-04) (domain/standings.ts). No repository, no handlers.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compareStandings, recordIncrements, sortStandings } from "./standings.ts";
+import { compareStandings, mergePointDeltas, recordIncrements, revealPointDeltas, sortStandings } from "./standings.ts";
 import type { RankableStanding } from "./standings.ts";
 
 const row = (userId: string, displayName: string, over: Partial<RankableStanding> = {}): RankableStanding => ({
@@ -69,4 +70,45 @@ test("recordIncrements fills omitted fields with 0 and rejects non-integers", ()
     assert.throws(() => recordIncrements({ losses: bad }), /losses increment must be an integer/);
   }
   assert.throws(() => recordIncrements({ wins: "1" as unknown as number }), /wins increment must be an integer/);
+});
+
+test("mergePointDeltas: one entry per player, repeats summed in first-appearance order; a sum of 0 is kept (its write still makes the row); non-integers rejected", () => {
+  assert.deepEqual(mergePointDeltas([]), []);
+  assert.deepEqual(
+    mergePointDeltas([
+      { userId: "u-b", delta: 7 },
+      { userId: "u-a", delta: 3 },
+      { userId: "u-b", delta: -2 },
+      { userId: "u-c", delta: 4 },
+      { userId: "u-c", delta: -4 },
+      { userId: "u-a", delta: 0 },
+    ]),
+    [{ userId: "u-b", delta: 5 }, { userId: "u-a", delta: 3 }, { userId: "u-c", delta: 0 }],
+  );
+  for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, 0.5, "3" as unknown as number]) {
+    assert.throws(() => mergePointDeltas([{ userId: "u-a", delta: 1 }, { userId: "u-b", delta: bad }]), /points increment must be an integer/);
+  }
+});
+
+test("revealPointDeltas: a standard reveal banks each submitter's results summed (submissionsPerPlayer > 1), negative totals included, zero-point results skipped", () => {
+  // Ranked results, as computeResults orders them.
+  const results = [
+    { userId: "u-me", points: 10 },
+    { userId: "u-james", points: 10 },
+    { userId: "u-me", points: 5 },
+    { userId: "u-sarah", points: 0 }, // skipped, as the reveal always did
+    { userId: "u-james", points: 0 },
+    { userId: "u-sarah", points: -3 }, // anti-votes: banks below 0
+  ];
+  assert.deepEqual(revealPointDeltas(results), [
+    { userId: "u-me", delta: 15 },
+    { userId: "u-james", delta: 10 },
+    { userId: "u-sarah", delta: -3 },
+  ]);
+  // Every result 0 (nobody voted): nothing to bank.
+  assert.deepEqual(revealPointDeltas([{ userId: "u-me", points: 0 }, { userId: "u-sarah", points: 0 }]), []);
+  // The total each player gains equals the per-result sum the old banking wrote.
+  const perResult = new Map<string, number>();
+  for (const r of results) if (r.points !== 0) perResult.set(r.userId, (perResult.get(r.userId) ?? 0) + r.points);
+  assert.deepEqual(new Map(revealPointDeltas(results).map((d) => [d.userId, d.delta])), perResult);
 });

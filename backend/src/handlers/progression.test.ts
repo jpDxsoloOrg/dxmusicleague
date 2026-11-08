@@ -1,6 +1,8 @@
 // Timed auto-advance tests — a round whose phase deadlines are in the past
-// advances (cascading), and a manual league never does. Head-to-head leagues
-// (HTH-08) at the bottom.
+// advances (cascading), and a manual league never does; concurrent reads of
+// a standard league reveal (and bank) a due round once, and a stale advance
+// can't write over a reveal (BUG-04). Head-to-head leagues (HTH-08) at the
+// bottom.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -101,6 +103,100 @@ test("does nothing before the deadline, or for a manual league", async () => {
   const r2 = round({ status: "submitting", submissionDeadline: ago(HOUR) });
   const d2 = await deps(manual, r2);
   assert.equal((await autoAdvanceRound(d2, manual, r2))?.status, "submitting");
+});
+
+// ---- standard reveal races (BUG-04) ------------------------------------------
+// Every read of a timed league may reveal its due round, so two at once both
+// try to; the reveal's one claim-and-bank write lets exactly one bank. And a
+// read holding a copy from before the round was advanced and revealed can't
+// write it back over the reveal (which would let it be revealed — and
+// banked — again).
+
+const STD_OWNER = "u-me";
+const STD_PLAYERS = ["u-me", "u-sarah", "u-james"];
+
+interface PointsLeague {
+  deps: Deps;
+  repo: MemoryRepository;
+  leagueId: string;
+  roundId: string;
+  /** Each player's one song. */
+  song: Map<string, string>;
+}
+
+/** A timed (1-day phases) standard league of STD_PLAYERS, through the
+ *  handlers: round 1 opened and every song in — which closes submissions on
+ *  its own (everyone submitted) — so the round is previewing. */
+async function pointsTimed(): Promise<PointsLeague> {
+  const repo = new MemoryRepository(false);
+  const d: Deps = { repo, users: new MemoryUserDirectory() };
+  const lg = await createLeague(d, STD_OWNER, { name: "Timed Points", musicProvider: "mock", roundCount: 3, progression: "timed", phaseDays: 1 });
+  for (const p of STD_PLAYERS.slice(1)) await joinLeague(d, p, lg.inviteCode);
+  const r = await createRound(d, STD_OWNER, lg.id, { theme: "Openers" });
+  await updateRound(d, STD_OWNER, lg.id, r.id, { status: "submitting" });
+  const song = new Map<string, string>();
+  for (const p of STD_PLAYERS) {
+    const sub = await submitSong(d, p, r.id, {
+      track: { id: `t-${p}`, provider: "mock", providerTrackId: `t-${p}`, title: `${p} anthem`, artists: [`Artist ${p}`] },
+    });
+    song.set(p, sub.id);
+  }
+  assert.equal((await repo.getRound(r.id))!.status, "previewing", "everyone submitted: the timed league advanced");
+  return { deps: d, repo, leagueId: lg.id, roundId: r.id, song };
+}
+
+/** `voter`'s ballot: 5 + 5 on the other two players' songs. */
+const fiveAndFive = (f: PointsLeague, voter: string) => ({
+  allocations: Object.fromEntries(STD_PLAYERS.filter((p) => p !== voter).map((p) => [f.song.get(p)!, 5])),
+});
+
+async function pointsOf(f: PointsLeague): Promise<Record<string, number>> {
+  return Object.fromEntries((await f.repo.getStandings(f.leagueId)).map((r) => [r.userId, r.points]));
+}
+
+test("standard timed: two league reads at once after the vote deadline reveal the round once — every player's points banked once, and both boards show them", async () => {
+  const f = await pointsTimed();
+  await updateRound(f.deps, STD_OWNER, f.leagueId, f.roundId, { status: "voting" });
+  await castBallot(f.deps, "u-me", f.roundId, fiveAndFive(f, "u-me"));
+  // The vote deadline passes with one ballot in: the next read reveals.
+  const r = (await f.repo.getRound(f.roundId))!;
+  await f.repo.updateRound({ ...r, voteDeadline: ago(HOUR) });
+
+  const [sarah, james] = await Promise.all([
+    getLeagueDetail(f.deps, "u-sarah", f.leagueId),
+    getLeagueDetail(f.deps, "u-james", f.leagueId),
+  ]);
+  assert.deepEqual(await pointsOf(f), { "u-me": 0, "u-sarah": 5, "u-james": 5 });
+  for (const detail of [sarah, james]) {
+    assert.equal(detail.currentRound?.status, "revealed");
+    assert.deepEqual(
+      Object.fromEntries(detail.standings.map((s) => [s.user.id, s.points])),
+      { "u-me": 0, "u-sarah": 5, "u-james": 5 },
+    );
+  }
+});
+
+test("standard timed: an auto-advance holding a copy read before the round was advanced and revealed doesn't write it back over the reveal, so no second reveal can bank it", async () => {
+  const { revealRound } = await import("./voting.ts");
+  const f = await pointsTimed();
+  // A slow reader's copy, its preview deadline already passed: it will advance to voting.
+  const stale: Round = { ...(await f.repo.getRound(f.roundId))!, previewDeadline: ago(HOUR) };
+
+  // Meanwhile the owner opens voting, two of three vote, and the owner reveals.
+  await updateRound(f.deps, STD_OWNER, f.leagueId, f.roundId, { status: "voting" });
+  await castBallot(f.deps, "u-me", f.roundId, fiveAndFive(f, "u-me"));
+  await castBallot(f.deps, "u-sarah", f.roundId, fiveAndFive(f, "u-sarah"));
+  await revealRound(f.deps, STD_OWNER, f.roundId);
+  const banked = await pointsOf(f);
+  assert.deepEqual(banked, { "u-me": 5, "u-sarah": 5, "u-james": 10 });
+  const settled = (await f.repo.getRound(f.roundId))!;
+
+  const league = (await f.repo.getLeague(f.leagueId))!;
+  const after = await autoAdvanceRound(f.deps, league, stale);
+  assert.equal(after?.status, "revealed", "the stale copy is brought up to date, not written");
+  assert.deepEqual(await f.repo.getRound(f.roundId), settled);
+  await assert.rejects(revealRound(f.deps, STD_OWNER, f.roundId), (e: unknown) => e instanceof Error && /in voting/.test(e.message));
+  assert.deepEqual(await pointsOf(f), banked);
 });
 
 // ---- head-to-head (HTH-08) --------------------------------------------------

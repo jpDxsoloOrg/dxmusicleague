@@ -201,14 +201,20 @@ export async function updateRound(
     return round;
   }
 
-  // Head-to-head (HTH-07): an edit built from a round read before its reveal
-  // must not be written back over the reveal — it would put the round back
-  // in voting, drop the reveal's pins (h2hDeparted / h2hTally) and let a
-  // second reveal bank its W/L/D twice. So such a write lands only while the
-  // round is still unsettled; if a reveal got there first, the edit is
-  // refused. Standard leagues write unconditionally, exactly as before.
-  if (leagueFormat(league) === "headToHead" && !settledWhenRead) {
+  // An edit built from a round read before its reveal must not be written
+  // back over the reveal — it would put the round back in voting (and, head
+  // to head, drop the reveal's pins h2hDeparted / h2hTally), letting a second
+  // reveal bank its W/L/D (HTH-07) or points (BUG-04) twice: say, an owner
+  // extending the vote deadline just as it expires while a member's page load
+  // reveals the round. So such a write lands only while the round is still
+  // unsettled; if a reveal got there first, the edit is refused. (The write
+  // is refused too if the league was deleted under this PATCH — it never
+  // recreates a deleted round — so a refusal checks which: 404 if the round
+  // is gone.) An edit of a round read already settled (a theme fix after
+  // the reveal) is an ordinary write, as before.
+  if (!settledWhenRead) {
     if (!(await deps.repo.updateRoundUnlessSettled(round))) {
+      if (!(await deps.repo.getRound(round.id, { consistent: true }))) throw notFound("That round doesn't exist.");
       throw conflict("That round was just revealed. Reload to see the results.");
     }
     return round;

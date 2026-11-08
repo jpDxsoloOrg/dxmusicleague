@@ -156,10 +156,13 @@ All routes require a valid Cognito JWT. `:me` denotes the caller's `sub`. Errors
 | `PATCH` | `/leagues/{leagueId}/rounds/{roundId}` | `{ status?, theme?, ...deadlines }` | Drives the `draft → submitting → voting → revealed` lifecycle. |
 
 Status transitions are validated (no skipping/reversing). `revealed` is reached only via the
-reveal endpoint below, not a raw PATCH. Head-to-head leagues: a PATCH that read the round before
-it was revealed is written only while the round is still unsettled (`updateRoundUnlessSettled`),
-so it can't put a revealed round back in voting — it answers `409` instead; the timed
-auto-advance writes the same way. Standard leagues write unconditionally, as before.
+reveal endpoint below, not a raw PATCH. A PATCH that read the round before it was revealed is
+written only while the round is still unsettled (`updateRoundUnlessSettled`), so it can't put a
+revealed round back in voting (to be revealed, and banked, again) — it answers `409` "That round
+was just revealed. Reload to see the results." instead; the timed auto-advance writes the same
+way. Both formats (head-to-head since HTH-07, standard since BUG-04). If the league was deleted
+under the PATCH, the refused write answers `404` "That round doesn't exist." instead. A PATCH
+that read the round already revealed (a theme fix) is an ordinary write.
 
 ### Submissions
 
@@ -229,7 +232,16 @@ fixed tie-break (points → distinct voters → title), increment each member's 
 total, create the Spotify playlist on the host account (§3), store `playlistUrl` on the round,
 set status `revealed`. `GET /results` is the read side — available only once `revealed`, and
 returns submitters, points, ranks, and all voter comments (matching
-[`getRoundResults`](../src/data/mock.ts)).
+[`getRoundResults`](../src/data/mock.ts)). **Exactly once** (BUG-04): the claim and the banking
+are ONE atomic write (`revealPointsRoundOnce` — the same `TransactWriteItems` as the
+head-to-head reveal below, with one in-place `points` increment per player instead of W/L/D).
+A submitter's results are summed into one increment first (with `submissionsPerPlayer` > 1 one
+player has several, and a transaction can't touch a row twice; the 99-row cap counts players).
+Zero-point results bank nothing; negative totals (anti-votes) bank. Of two concurrent reveals
+(the owner's, or the timed auto-advance run by league reads, ballots and submissions) only the
+one whose write lands banks; the loser re-reads the round strongly consistently and answers the
+same ranked list. A round where nobody scored is just the conditional round write. The payload
+is unchanged: the bare ranked array.
 
 **Head-to-head reveal** (same endpoints; `finalizeReveal` / `domain/rules.ts`
 `settleMatchups`): each matchup is tallied from the ballots' `picks` — a pick counts only in a
@@ -247,14 +259,19 @@ departed player's row takes nothing); `noContest` and the bye bank nothing; poin
 W/L/D `Update` per player). The claim also pins `h2hDeparted` (the departed set as it stood) and
 `h2hTally` (the picks it counted). Only the reveal whose write lands banks, so the owner's
 reveal racing a timed auto-advance (or two auto-advancing reads) can't double-bank; the loser
-re-reads the round strongly consistently and answers with it. A write that fails banks nothing
-and leaves the round in voting, so the reveal can be retried. (Above 99 banked rows — DynamoDB's
+re-reads the round strongly consistently and answers with it. When two reveals' transactions
+overlap, DynamoDB cancels the later one with `TransactionConflict` (not `ConditionalCheckFailed`)
+— nothing written — so the repository sends it again after a short backoff (25 / 50 / 100 ms,
+jittered, at most 3 times; the same for a settle-guarded `PutItem` refused with
+`TransactionConflictException`): it then loses the claim cleanly once the winner has committed.
+Any other failed write banks nothing and leaves the round in voting, so the reveal can be
+retried. (Above 99 banked rows — DynamoDB's
 100-item transaction cap — it falls back to the conditional round write, then one write per row:
 at most once.) Every later read uses the pins: the pinned players' songs are withdrawn and the
 pinned tally decides the outcomes, so results (and `GET /matchups`) read back as banked whatever
 the member list or a ballot written after the reveal read them does afterwards. (Voter comments
-are still read live from the ballot rows.) A standard round's reveal is unchanged: bank, then an
-unconditional round write.
+are still read live from the ballot rows.) A standard round's reveal claims and banks through
+the same transaction (`revealPointsRoundOnce`, above) but pins nothing.
 
 The payload (readable by any signed-in user once revealed, like standard results):
 

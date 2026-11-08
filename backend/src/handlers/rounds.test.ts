@@ -3,7 +3,9 @@
 // override + the existing cap, freeze-once, the minimum-player guard, the
 // join-vs-open race (no member is ever left outside the frozen order), and
 // the proof that standard leagues are untouched. Pure logic over MemoryRepository
-// (no AWS); the freeze's RNG is injected through deps, seeded.
+// (no AWS); the freeze's RNG is injected through deps, seeded. BUG-04 (last):
+// a standard owner PATCH read before the round's reveal can't write over it,
+// and one that loses to the league's deletion answers 404, not 409.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -450,4 +452,81 @@ test("a legacy league stored without `format` opens as standard (no freeze)", as
   await open(deps, "std", 1);
   assert.equal((await repo.getLeague("std"))?.h2hParticipants, undefined);
   assert.deepEqual(freezes, []);
+});
+
+test("standard: an owner's PATCH built from a round read before its reveal gets 409 and can't put it back in voting, so no second reveal can bank it; a PATCH that reads the revealed round lands as before (BUG-04)", async () => {
+  const { revealRound } = await import("./voting.ts");
+  const three = [OWNER, "u-2", "u-3"];
+  const voting = draft("std", 1, { status: "voting", voteDeadline: "2030-01-01T00:00:00.000Z" });
+  const { deps, repo } = await setup([standardLeague({ memberIds: three })], [voting]);
+  for (const u of three) {
+    await repo.putSubmission({
+      id: `s-${u}`, roundId: voting.id, userId: u,
+      track: { id: `t-${u}`, provider: "mock", providerTrackId: `t-${u}`, title: `${u} anthem`, artists: [`Artist ${u}`] },
+    });
+  }
+  await repo.putBallot({ roundId: voting.id, voterId: OWNER, allocations: { "s-u-2": 5, "s-u-3": 5 }, castAt: "2030-01-01T00:00:00.000Z" });
+  const points = async () => Object.fromEntries((await repo.getStandings("std")).map((s) => [s.userId, s.points]));
+
+  // The owner's PATCH (extending the vote deadline) reads the round while it's voting…
+  const stale = (await repo.getRound(voting.id))!;
+  // …a reveal lands (the owner's, or a member's page load past the deadline)…
+  await revealRound(deps, OWNER, voting.id);
+  const banked = await points();
+  assert.deepEqual(banked, { [OWNER]: 0, "u-2": 5, "u-3": 5 });
+  const settled = (await repo.getRound(voting.id))!;
+  assert.equal(settled.status, "revealed");
+
+  // …and the PATCH's write arrives after it.
+  const late: Deps = {
+    ...deps,
+    repo: new Proxy(repo, {
+      get: (target, prop) => {
+        if (prop === "getRound") return async () => structuredClone(stale);
+        const value: unknown = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }),
+  };
+  await assert.rejects(
+    updateRound(late, OWNER, "std", voting.id, { voteDeadline: "2030-01-02T00:00:00.000Z" }),
+    isStatus(409, "That round was just revealed. Reload to see the results."),
+  );
+  assert.deepEqual(await repo.getRound(voting.id), settled, "still revealed, the edit not written");
+  await assert.rejects(revealRound(deps, OWNER, voting.id), isStatus(400, /in voting/));
+  assert.deepEqual(await points(), banked, "nothing banked twice");
+
+  // An edit made from a fresh read of the revealed round is an ordinary write, as ever.
+  await updateRound(deps, OWNER, "std", voting.id, { theme: "Renamed" });
+  assert.deepEqual(await repo.getRound(voting.id), { ...settled, theme: "Renamed" });
+});
+
+test("a PATCH whose settle-guarded write loses to the league's deletion answers 404 (not 'just revealed') and recreates nothing, in either format (BUG-04)", async () => {
+  const stdVoting = draft("std", 1, { status: "voting", voteDeadline: "2030-01-01T00:00:00.000Z" });
+  const h2hVoting = draft("h2h", 1, { status: "voting", voteDeadline: "2030-01-01T00:00:00.000Z" });
+  const { deps, repo } = await setup([standardLeague(), h2hLeague({ h2hParticipants: [...FIVE], h2hSalt: "salt" })], [stdVoting, h2hVoting]);
+  for (const [leagueId, round] of [["std", stdVoting], ["h2h", h2hVoting]] as const) {
+    // The owner deletes the league after this PATCH read it, before its write.
+    const racing: Deps = {
+      ...deps,
+      repo: new Proxy(repo, {
+        get: (target, prop) => {
+          if (prop === "updateRoundUnlessSettled") {
+            return async (r: Round) => {
+              await target.deleteLeague(leagueId);
+              return target.updateRoundUnlessSettled(r);
+            };
+          }
+          const value: unknown = Reflect.get(target, prop);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      }),
+    };
+    await assert.rejects(
+      updateRound(racing, OWNER, leagueId, round.id, { voteDeadline: "2030-01-02T00:00:00.000Z" }),
+      isStatus(404, "That round doesn't exist."),
+    );
+    assert.equal(await repo.getRound(round.id), undefined, "no phantom round");
+    assert.deepEqual(await repo.getRoundsForLeague(leagueId), []);
+  }
 });

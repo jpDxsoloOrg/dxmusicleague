@@ -28,8 +28,8 @@ import {
 } from "@aws-sdk/lib-dynamodb";
 import type { Ballot, League, LeagueSettings, MatchupTally, Round, Submission } from "../domain/types.ts";
 import { leagueFormat } from "../domain/types.ts";
-import type { StandingRecordDelta, StandingTotals } from "../domain/standings.ts";
-import { recordIncrements } from "../domain/standings.ts";
+import type { StandingPointsDelta, StandingRecordDelta, StandingTotals } from "../domain/standings.ts";
+import { mergePointDeltas, recordIncrements } from "../domain/standings.ts";
 import type { SeasonFreeze } from "../domain/freeze.ts";
 import type { Repository } from "./repository.ts";
 
@@ -373,8 +373,9 @@ export class DynamoRepository implements Repository {
     if (sep < 0) return undefined;
     const leagueId = roundId.slice(0, sep);
     const idx = roundId.slice(sep + 1);
-    // Strongly consistent only when asked (the head-to-head reveal's re-read
-    // after losing its claim); every other read keeps the default, unchanged.
+    // Strongly consistent only when asked (a reveal or timed advance's
+    // re-read after its conditional write lost to a reveal — HTH-07, BUG-04);
+    // every other read keeps the default, unchanged.
     const res = await this.doc.send(
       new GetCommand({
         TableName: this.tableName,
@@ -402,8 +403,14 @@ export class DynamoRepository implements Repository {
     // stored round isn't settled — roundSettled's definition — so a write
     // built from a copy read before a reveal can't un-reveal the round, and
     // of two concurrent reveals exactly one wins. The loser writes nothing.
+    // Sent while another reveal's transaction holds the round, it's refused
+    // with a transaction conflict before its condition is even checked: it's
+    // sent again once that settles (retryOnTransactionConflict), so it then
+    // lands or loses cleanly.
     try {
-      await this.doc.send(new PutCommand({ TableName: this.tableName, Item: this.roundItem(round), ...UNSETTLED_ROUND }));
+      await retryOnTransactionConflict(() =>
+        this.doc.send(new PutCommand({ TableName: this.tableName, Item: this.roundItem(round), ...UNSETTLED_ROUND })),
+      );
       return true;
     } catch (err) {
       if ((err as { name?: string } | null)?.name === "ConditionalCheckFailedException") return false;
@@ -415,29 +422,52 @@ export class DynamoRepository implements Repository {
     records: ReadonlyArray<{ userId: string; delta: StandingRecordDelta }> = [],
   ): Promise<boolean> {
     const banked = mergeRecords(records); // validates every increment before any write
-    if (banked.length === 0) return this.updateRoundUnlessSettled(round);
-    if (banked.length + 1 > MAX_TRANSACT_ITEMS) {
+    return this.claimAndBank(round, banked.map(({ userId, inc }) => this.standingRecordUpdate(round.leagueId, userId, inc)));
+  }
+  async revealPointsRoundOnce(round: Round, points: ReadonlyArray<StandingPointsDelta> = []): Promise<boolean> {
+    // One validated increment per player (a submitter with several songs is
+    // summed — a transaction can't touch the same row twice), before any write.
+    const banked = mergePointDeltas(points);
+    return this.claimAndBank(round, banked.map(({ userId, delta }) => this.standingPointsUpdate(round.leagueId, userId, delta)));
+  }
+  /**
+   * The once-only reveal both formats share: claim the round (its conditional
+   * put) and apply every standing row's in-place increment (`rows`, at most
+   * one per player) together.
+   */
+  private async claimAndBank(round: Round, rows: StandingUpdate[]): Promise<boolean> {
+    if (rows.length === 0) return this.updateRoundUnlessSettled(round);
+    if (rows.length + 1 > MAX_TRANSACT_ITEMS) {
       // Too many standing rows for one transaction (a 100+-player league):
       // claim first, then bank row by row — at most once (a failure part-way
       // leaves the round revealed with rows missing) but never twice.
       if (!(await this.updateRoundUnlessSettled(round))) return false;
-      for (const { userId, inc } of banked) await this.addStandingRecord(round.leagueId, userId, inc);
+      for (const row of rows) await retryOnTransactionConflict(() => this.doc.send(new UpdateCommand(row)));
       return true;
     }
     // One TransactWriteItems: the conditional round write (the claim) plus
-    // every standing row's in-place W/L/D increment — all land or none do.
+    // every standing row's in-place increment — all land or none do.
     // A refused claim (another reveal settled it) cancels the whole
     // transaction with ConditionalCheckFailed on item 0: nothing is banked.
-    // Any other failure (throttling, a conflict with a concurrent write)
-    // also writes nothing, and the round is still in voting to reveal again.
+    // Two reveals of one round racing (the last two ballots cast at once, two
+    // page loads at the deadline) can send overlapping transactions: DynamoDB
+    // cancels the later one with TransactionConflict instead, before checking
+    // its claim — so it's sent again after a short backoff, and then fails
+    // the claim once the winner has committed (the loser's clean `false`) or
+    // lands if the winner was cancelled. The same goes for a conflict on a
+    // standing row (another round's reveal banking the same players).
+    // Any other failure (throttling, a conflict that outlasts the retries)
+    // also writes nothing, and propagates.
     try {
-      await this.doc.send(
-        new TransactWriteCommand({
-          TransactItems: [
-            { Put: { TableName: this.tableName, Item: this.roundItem(round), ...UNSETTLED_ROUND } },
-            ...banked.map(({ userId, inc }) => ({ Update: this.standingRecordUpdate(round.leagueId, userId, inc) })),
-          ],
-        }),
+      await retryOnTransactionConflict(() =>
+        this.doc.send(
+          new TransactWriteCommand({
+            TransactItems: [
+              { Put: { TableName: this.tableName, Item: this.roundItem(round), ...UNSETTLED_ROUND } },
+              ...rows.map((row) => ({ Update: row })),
+            ],
+          }),
+        ),
       );
       return true;
     } catch (err) {
@@ -630,14 +660,19 @@ export class DynamoRepository implements Repository {
     }));
   }
   async addStandingPoints(leagueId: string, userId: string, delta: number): Promise<void> {
-    await this.doc.send(
-      new UpdateCommand({
-        TableName: this.tableName,
-        Key: { PK: `LEAGUE#${leagueId}`, SK: `STANDING#${userId}` },
-        UpdateExpression: "SET points = if_not_exists(points, :zero) + :d, userId = :u, entity = :e",
-        ExpressionAttributeValues: { ":zero": 0, ":d": delta, ":u": userId, ":e": "standing" },
-      }),
-    );
+    await this.doc.send(new UpdateCommand(this.standingPointsUpdate(leagueId, userId, delta)));
+  }
+  /** The points increment's UpdateItem — sent alone by addStandingPoints, and
+   *  as one item of the standard reveal's transaction (BUG-04): an atomic
+   *  in-place add, the row and its total created at 0 if absent, W/L/D
+   *  untouched. */
+  private standingPointsUpdate(leagueId: string, userId: string, delta: number): StandingUpdate {
+    return {
+      TableName: this.tableName,
+      Key: { PK: `LEAGUE#${leagueId}`, SK: `STANDING#${userId}` },
+      UpdateExpression: "SET points = if_not_exists(points, :zero) + :d, userId = :u, entity = :e",
+      ExpressionAttributeValues: { ":zero": 0, ":d": delta, ":u": userId, ":e": "standing" },
+    };
   }
   async addStandingRecord(leagueId: string, userId: string, delta: StandingRecordDelta): Promise<void> {
     await this.doc.send(new UpdateCommand(this.standingRecordUpdate(leagueId, userId, delta)));
@@ -648,7 +683,7 @@ export class DynamoRepository implements Repository {
    *  0 if absent, `points` untouched. Attribute names go through placeholders
    *  so no counter name can ever collide with a DynamoDB reserved word.
    *  Validates the delta (recordIncrements) before anything is sent. */
-  private standingRecordUpdate(leagueId: string, userId: string, delta: StandingRecordDelta) {
+  private standingRecordUpdate(leagueId: string, userId: string, delta: StandingRecordDelta): StandingUpdate {
     const inc = recordIncrements(delta);
     return {
       TableName: this.tableName,
@@ -664,8 +699,67 @@ export class DynamoRepository implements Repository {
   }
 }
 
+/** One standing row's in-place increment as an UpdateItem — sent alone, or
+ *  as one `Update` of a reveal's transaction. */
+interface StandingUpdate {
+  TableName: string;
+  Key: { PK: string; SK: string };
+  UpdateExpression: string;
+  ExpressionAttributeNames?: Record<string, string>;
+  ExpressionAttributeValues: Record<string, string | number>;
+}
+
 /** DynamoDB's cap on the items of one TransactWriteItems call. */
 const MAX_TRANSACT_ITEMS = 100;
+
+/** How many more times a write refused for a transaction conflict is sent,
+ *  and the first pause before it (doubled each time, ±50% jitter): about
+ *  25 / 50 / 100 ms, room for the conflicting transaction — tens of ms — to
+ *  commit or be cancelled. */
+const CONFLICT_RETRIES = 3;
+const CONFLICT_BACKOFF_MS = 25;
+
+/**
+ * Whether DynamoDB refused a write only because another transaction in flight
+ * held one of its items — which writes NOTHING, so it's safe to send again: a
+ * TransactionConflictException (a single-item write to an item an in-flight
+ * TransactWriteItems holds), or a TransactWriteItems cancelled with
+ * `TransactionConflict` as its only reason (the rest `None`). A cancellation
+ * for any other reason too — a failed condition (a refused claim),
+ * throttling, validation — isn't one.
+ */
+export function isTransactionConflict(err: unknown): boolean {
+  const e = err as { name?: string; CancellationReasons?: Array<{ Code?: string }> } | null;
+  if (e?.name === "TransactionConflictException") return true;
+  if (e?.name !== "TransactionCanceledException") return false;
+  const codes = (e.CancellationReasons ?? []).map((r) => r.Code ?? "None");
+  return codes.includes("TransactionConflict") && codes.every((c) => c === "TransactionConflict" || c === "None");
+}
+
+/**
+ * Run `write`, running it again — up to CONFLICT_RETRIES more times, after a
+ * short jittered backoff — while DynamoDB refuses it for a transaction
+ * conflict (`isTransactionConflict`). The SDK's own retries don't cover one
+ * (it's not in their throttling or transient lists). A refused write wrote
+ * nothing, so a repeat can't apply anything twice; for the settle-guarded
+ * round writes, the repeat's condition then decides cleanly what the
+ * conflict hid: refused once the other reveal has committed, landing if it
+ * didn't. Any other error, or a conflict that outlasts the retries, is
+ * thrown. `pause` is injectable for tests.
+ */
+export async function retryOnTransactionConflict<T>(
+  write: () => Promise<T>,
+  pause: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await write();
+    } catch (err) {
+      if (attempt >= CONFLICT_RETRIES || !isTransactionConflict(err)) throw err;
+      await pause(Math.round(CONFLICT_BACKOFF_MS * 2 ** attempt * (0.5 + Math.random())));
+    }
+  }
+}
 
 /** The condition every settle-guarded round write carries: the round exists
  *  (never a phantom item for one that was deleted) and isn't settled —

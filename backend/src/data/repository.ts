@@ -5,7 +5,7 @@
 // Swapping which one a handler runs against is the whole point of the seam.
 
 import type { Ballot, League, LeagueSettings, Round, Submission } from "../domain/types.ts";
-import type { StandingRecordDelta, StandingTotals } from "../domain/standings.ts";
+import type { StandingPointsDelta, StandingRecordDelta, StandingTotals } from "../domain/standings.ts";
 import type { SeasonFreeze } from "../domain/freeze.ts";
 
 export interface Repository {
@@ -65,18 +65,22 @@ export interface Repository {
 
   // ---- Rounds ----
   createRound(round: Round): Promise<void>;
-  /** `consistent`: a strongly consistent read — the head-to-head reveal's
-   *  re-read after another reveal won the claim, so it sees that write. */
+  /** `consistent`: a strongly consistent read — the re-read of a reveal,
+   *  timed advance or round edit whose conditional write lost to another
+   *  reveal (HTH-07; BUG-04 standard), so it sees that write. */
   getRound(roundId: string, opts?: { consistent?: boolean }): Promise<Round | undefined>;
   getRoundsForLeague(leagueId: string): Promise<Round[]>;
   updateRound(round: Round): Promise<void>;
   /** `updateRound`, but ONLY if the stored round exists and isn't settled
    *  (`revealed` / `complete`) — one conditional write. Resolves `true` when
-   *  it landed, `false` (writing nothing) otherwise. A head-to-head league's
-   *  round edits and timed advances write through it (HTH-07), so a request
-   *  holding a copy read before the reveal can never put a revealed round
-   *  back to `voting` (dropping its pins) and let it be revealed — and banked
-   *  — a second time. */
+   *  it landed, `false` (writing nothing) otherwise. Round edits of a round
+   *  read unsettled and timed advances write through it, in either format
+   *  (HTH-07 head-to-head; BUG-04 standard), so a request holding a copy
+   *  read before the reveal can never put a revealed round back to `voting`
+   *  (dropping an H2H round's pins) and let it be revealed — and banked — a
+   *  second time. DynamoDB: a write refused only because another reveal's
+   *  transaction is in flight on the round is sent again after a short
+   *  backoff, so it still resolves `true`/`false`, not an error. */
   updateRoundUnlessSettled(round: Round): Promise<boolean>;
   /** Settle a round, once, and bank its head-to-head records (HTH-07): write
    *  `round` (the caller has set its status to `revealed`, plus what the
@@ -91,8 +95,29 @@ export interface Repository {
    *  when the stored round is already settled or doesn't exist.
    *  DynamoDB: one TransactWriteItems (round + up to 99 standing rows — a
    *  99-player league); a larger round falls back to the conditional round
-   *  write followed by one standing write per player (at most once). */
+   *  write followed by one standing write per player (at most once). Two
+   *  overlapping transactions (two reveals of the round, or of two rounds
+   *  banking the same players) get the later one cancelled for a
+   *  transaction conflict, which writes nothing: it's sent again after a
+   *  short backoff, so the loser of a race on one round still resolves
+   *  `false` rather than an error. */
   revealRoundOnce(round: Round, records?: ReadonlyArray<{ userId: string; delta: StandingRecordDelta }>): Promise<boolean>;
+  /** `revealRoundOnce` for a standard (points) round (BUG-04): write `round`
+   *  (status `revealed`) ONLY if the stored round isn't settled, and in the
+   *  SAME atomic write add every `points` entry to its player's standing
+   *  `points` (as `addStandingPoints`). Entries for one player are summed
+   *  first (`mergePointDeltas` — a submitter may have several songs, and a
+   *  transaction can't touch a row twice); every increment is validated
+   *  before anything is written. Same contract: of two concurrent reveals
+   *  exactly one lands and banks; a write that fails part-way banks nothing
+   *  and leaves the round in voting. Resolves `true` when it landed, `false`
+   *  (writing and banking nothing) when the stored round is already settled
+   *  or doesn't exist. No `points` → just the conditional round write.
+   *  DynamoDB: one TransactWriteItems (round + up to 99 distinct players'
+   *  rows); more falls back to the conditional round write followed by one
+   *  points write per player (at most once); a transaction conflict is sent
+   *  again, as for `revealRoundOnce`. */
+  revealPointsRoundOnce(round: Round, points?: ReadonlyArray<StandingPointsDelta>): Promise<boolean>;
 
   // ---- Submissions ----
   /** Upsert by submission id — a player may hold several per round (the

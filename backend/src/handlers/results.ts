@@ -14,6 +14,13 @@
 // domain-only imports, so no cycle); this file only loads, banks and shapes
 // the payload.
 //
+// Exactly once, in both formats: a reveal claims the round and banks in ONE
+// atomic repository write that lands only while the stored round is still
+// unsettled (`revealRoundOnce` for W/L/D, `revealPointsRoundOnce` for a
+// standard round's points — BUG-04), so concurrent reveals (the owner's, and
+// the timed auto-advance run by league reads, ballots and submissions) bank
+// once between them.
+//
 // Wire compatibility for the live beta: a standard round's results stay the
 // bare `RoundResult[]` array, byte for byte, on both GET results and the
 // reveal response, so an older frontend never breaks against this backend.
@@ -28,6 +35,7 @@ import { compareMatchupIds } from "../domain/schedule.ts";
 import { departedParticipants } from "../domain/matchups.ts";
 import { matchupRecords, rankSubmissions, resolveMatchups, settleMatchups, tallyBallots, tallyMatchups } from "../domain/rules.ts";
 import type { MatchupOutcome, SettledRound, SettledSide } from "../domain/rules.ts";
+import { revealPointDeltas } from "../domain/standings.ts";
 import { loadRoundMatchups } from "./matchups.ts";
 import type { Deps } from "./leagues.ts";
 
@@ -109,11 +117,26 @@ export interface FinalizeRevealOptions {
   conflictIfSettled?: boolean;
 }
 
-/** Tally + rank a voting round, bank each submitter's points, mark it revealed,
- *  and persist. Shared by the owner reveal endpoint and timed auto-advance, so
- *  both settle a round identically. Mutates `round.status`. A head-to-head
- *  league's round settles as matchups instead (`finalizeHeadToHeadReveal`);
- *  a standard round takes exactly the original path. */
+/**
+ * Tally + rank a voting round, bank each submitter's points, mark it revealed,
+ * and persist — exactly once. Shared by the owner reveal endpoint and timed
+ * auto-advance, so both settle a round identically. Mutates `round` to the
+ * stored round (status `revealed`). A head-to-head league's round settles as
+ * matchups instead (`finalizeHeadToHeadReveal`).
+ *
+ * A standard round (BUG-04): the ranked list is computed exactly as ever, and
+ * its points — each submitter's results summed into one increment, zero
+ * results skipped, negative totals banked (`revealPointDeltas`) — bank in the
+ * SAME atomic write that claims the round (`revealPointsRoundOnce`, landing
+ * only while the stored round is unsettled). Two reveals racing, each holding
+ * a copy read while the round was voting, both tally, but only the one whose
+ * write lands banks; the other banks nothing, re-reads the round strongly
+ * consistently and answers with its ranked list — the same `computeResults`
+ * the winner answered and GET results serves. (In DynamoDB the two claims'
+ * transactions can overlap; the repository sends the one refused for that
+ * conflict again, so it too resolves as a lost claim, not an error.) A
+ * write that fails for any other reason banks nothing and throws.
+ */
 export async function finalizeReveal(
   deps: Deps,
   round: Round,
@@ -123,12 +146,16 @@ export async function finalizeReveal(
   if (league && leagueFormat(league) === "headToHead") return finalizeHeadToHeadReveal(deps, league, round, options);
 
   const results = await computeResults(deps, round.id);
-  for (const r of results) {
-    // Negative totals (anti-votes) bank too — the leaderboard can go below 0.
-    if (r.points !== 0) await deps.repo.addStandingPoints(round.leagueId, r.submitter.id, r.points);
+  const points = revealPointDeltas(results.map((r) => ({ userId: r.submitter.id, points: r.points })));
+  const claimed: Round = { ...round, status: "revealed" };
+  if (!(await deps.repo.revealPointsRoundOnce(claimed, points))) {
+    // Another reveal settled it first (or it's gone): nothing was banked.
+    const stored = await deps.repo.getRound(round.id, { consistent: true });
+    if (!stored) throw notFound("That round doesn't exist.");
+    Object.assign(round, stored);
+    return computeResults(deps, round.id);
   }
   round.status = "revealed";
-  await deps.repo.updateRound(round);
   return results;
 }
 
@@ -234,7 +261,7 @@ export type RoundResultsPayload = RoundResult[] | HeadToHeadResults;
  * not the ballot rows.
  *
  * Mutates `round` to what is stored afterwards (status `revealed` and the
- * pins), like the standard path mutates `round.status` — unless the caller
+ * pins), as the standard path does — unless the caller
  * asked for a 409 on a lost race (`conflictIfSettled`), which leaves `round`
  * as it was.
  */

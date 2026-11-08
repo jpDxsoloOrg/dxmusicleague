@@ -4,8 +4,8 @@
 
 import type { Ballot, League, LeagueSettings, Round, Submission } from "../domain/types.ts";
 import { DEFAULT_LEAGUE_SETTINGS, leagueFormat } from "../domain/types.ts";
-import type { StandingRecordDelta, StandingTotals } from "../domain/standings.ts";
-import { recordIncrements } from "../domain/standings.ts";
+import type { StandingPointsDelta, StandingRecordDelta, StandingTotals } from "../domain/standings.ts";
+import { mergePointDeltas, recordIncrements } from "../domain/standings.ts";
 import type { SeasonFreeze } from "../domain/freeze.ts";
 import { roundSettled } from "../domain/matchups.ts";
 import type { Repository, UserDirectory } from "./repository.ts";
@@ -199,6 +199,19 @@ export class MemoryRepository implements Repository {
     for (const { userId, inc } of increments) this.bankRecord(round.leagueId, userId, inc);
     return true;
   }
+  async revealPointsRoundOnce(round: Round, points: ReadonlyArray<StandingPointsDelta> = []): Promise<boolean> {
+    // The standard round's twin of revealRoundOnce, just as atomic: one
+    // validated increment per player first, then the claim and the banking
+    // together (synchronously). Rows are banked in the order given, so a
+    // player's row is first written in the same order as when the reveal
+    // banked result by result (the order getStandings returns ties in).
+    const increments = mergePointDeltas(points);
+    const stored = this.rounds.get(round.id);
+    if (!stored || roundSettled(stored)) return false;
+    this.rounds.set(round.id, structuredClone(round));
+    for (const { userId, delta } of increments) this.bankPoints(round.leagueId, userId, delta);
+    return true;
+  }
 
   // ---- Submissions ----
   async putSubmission(submission: Submission): Promise<void> {
@@ -254,6 +267,9 @@ export class MemoryRepository implements Repository {
     return row;
   }
   async addStandingPoints(leagueId: string, userId: string, delta: number): Promise<void> {
+    this.bankPoints(leagueId, userId, delta);
+  }
+  private bankPoints(leagueId: string, userId: string, delta: number): void {
     const row = this.standingRow(leagueId, userId);
     row.points = (row.points ?? 0) + delta;
   }

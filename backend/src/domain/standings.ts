@@ -41,6 +41,44 @@ export function recordIncrements(delta: StandingRecordDelta): { wins: number; lo
   return out;
 }
 
+/** One player's increment to their standing `points` — what a standard
+ *  (points) round's reveal banks (BUG-04). */
+export interface StandingPointsDelta {
+  userId: string;
+  delta: number;
+}
+
+/**
+ * Points increments as one validated entry per player: repeats summed, in the
+ * order each player first appears. A transaction can't touch the same
+ * standing row twice, and a standard league with submissionsPerPlayer > 1
+ * gives one submitter several results. Every player given is kept, even when
+ * their entries sum to 0: that write still creates their row if it's absent,
+ * exactly as the one-write-per-result banking this replaced did. Rejects a
+ * non-integer increment (as recordIncrements does), so a bad caller can never
+ * poison a stored total with NaN/Infinity/fractions.
+ */
+export function mergePointDeltas(entries: ReadonlyArray<StandingPointsDelta>): StandingPointsDelta[] {
+  const byUser = new Map<string, number>();
+  for (const { userId, delta } of entries) {
+    if (!Number.isInteger(delta)) throw new Error(`Standing points increment must be an integer, got ${delta}`);
+    byUser.set(userId, (byUser.get(userId) ?? 0) + delta);
+  }
+  return [...byUser].map(([userId, delta]) => ({ userId, delta }));
+}
+
+/**
+ * What a standard round's reveal banks, from its ranked results: each
+ * submitter's points summed over their songs (`mergePointDeltas`), in
+ * ranked order of first appearance. A zero-point result banks nothing, as
+ * the reveal always skipped those; a negative one (anti-votes) banks too —
+ * the leaderboard can go below 0. A round where every result scored 0 banks
+ * nothing at all (an empty list).
+ */
+export function revealPointDeltas(results: ReadonlyArray<{ userId: string; points: number }>): StandingPointsDelta[] {
+  return mergePointDeltas(results.filter((r) => r.points !== 0).map((r) => ({ userId: r.userId, delta: r.points })));
+}
+
 /** The board's name collation, pinned to English (see compareStandings). */
 const NAME_COLLATOR = new Intl.Collator("en");
 

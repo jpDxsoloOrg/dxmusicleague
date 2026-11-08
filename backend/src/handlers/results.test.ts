@@ -8,6 +8,9 @@
 // the bare array. Head-to-head leagues are driven through the real handlers
 // (create → join → open round 1 = freeze → submit → vote → reveal) over
 // MemoryRepository, with the freeze RNG seeded through deps.
+// BUG-04 (at the bottom): a standard round's points are banked exactly once
+// too — racing reveals, stale reveals, failed writes, a submitter's several
+// results summed into one increment — with the payload unchanged.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -273,7 +276,7 @@ const isStatus = (code: number, message?: RegExp) => (e: unknown) =>
 /** `f.deps` over the same store with some repository methods replaced — to
  *  stage a race: hand one request a stale read, or act inside another's
  *  write. Every other method runs on the real MemoryRepository. */
-function withRepo(f: H2H, overrides: Partial<Repository>): Deps {
+function withRepo(f: { deps: Deps; repo: MemoryRepository }, overrides: Partial<Repository>): Deps {
   const repo = new Proxy(f.repo, {
     get: (target, prop) => {
       if (Object.hasOwn(overrides, prop)) return Reflect.get(overrides, prop);
@@ -773,4 +776,227 @@ test("a standard round's reveal and results stay the bare RoundResult[] array th
   assert.deepEqual([sarah.points, sarah.wins, sarah.losses, sarah.draws], [10, 0, 0, 0]);
   assert.equal("h2hDeparted" in (await d.repo.getRound(ROUND))!, false);
   assert.equal("h2hTally" in (await d.repo.getRound(ROUND))!, false);
+});
+
+// ---- Standard reveal: points banked exactly once (BUG-04) ----------------------
+// A standard round claims itself and banks its points in ONE repository write
+// (`revealPointsRoundOnce`), as a head-to-head round banks its W/L/D, so two
+// reveals — the owner's, a timed auto-advance from a league read, a ballot or
+// a submission — can race any way and every player's points still land
+// exactly once. The answer stays the bare ranked list, byte for byte.
+// (Timed races: progression.test.ts and voting.test.ts; stale PATCHes:
+// rounds.test.ts.)
+
+const POINTS_PLAYERS = ["u-me", "u-sarah", "u-james"];
+
+interface PointsRound {
+  deps: Deps;
+  repo: MemoryRepository;
+  leagueId: string;
+  roundId: string;
+  /** Each player's submission ids, in submission order. */
+  songs: Map<string, string[]>;
+}
+
+/** A standard league of POINTS_PLAYERS (u-me owns it), created and joined
+ *  through the handlers, round 1 opened, `songsEach` songs from every player
+ *  (the league's submissionsPerPlayer), `antiVotes` anti-votes per voter, and
+ *  voting open. */
+async function pointsRoundInVoting({ songsEach = 1, antiVotes = 0 } = {}): Promise<PointsRound> {
+  const repo = new MemoryRepository(false);
+  const deps: Deps = { repo, users: new MemoryUserDirectory() };
+  const lg = await createLeague(deps, OWNER, { name: "Points League", musicProvider: "mock", roundCount: 3 });
+  for (const p of POINTS_PLAYERS.slice(1)) await joinLeague(deps, p, lg.inviteCode);
+  await repo.updateLeagueSettings(lg.id, { ...lg.settings, submissionsPerPlayer: songsEach, downvotePoolSize: antiVotes });
+  const round = await createRound(deps, OWNER, lg.id, { theme: "Openers" });
+  await updateRound(deps, OWNER, lg.id, round.id, { status: "submitting" });
+  const songs = new Map<string, string[]>();
+  for (const p of POINTS_PLAYERS) {
+    for (let i = 1; i <= songsEach; i++) {
+      const sub = await submitSong(deps, p, round.id, {
+        track: { id: `t-${p}-${i}`, provider: "mock", providerTrackId: `t-${p}-${i}`, title: `${p} song ${i}`, artists: [`Artist ${p} ${i}`] },
+      });
+      songs.set(p, [...(songs.get(p) ?? []), sub.id]);
+    }
+  }
+  await updateRound(deps, OWNER, lg.id, round.id, { status: "previewing" });
+  await updateRound(deps, OWNER, lg.id, round.id, { status: "voting" });
+  return { deps, repo, leagueId: lg.id, roundId: round.id, songs };
+}
+
+/** Every player's banked points, by user. */
+async function pointsOf(f: PointsRound): Promise<Record<string, number>> {
+  return Object.fromEntries((await f.repo.getStandings(f.leagueId)).map((r) => [r.userId, r.points]));
+}
+
+/** Two ballots: u-me 5 + 5 on Sarah's and James's songs, u-sarah 5 + 5 on
+ *  u-me's and James's → u-me 5, u-sarah 5, u-james 10. */
+async function twoBallots(f: PointsRound): Promise<void> {
+  const { castBallot } = await import("./voting.ts");
+  const song = (p: string) => f.songs.get(p)![0]!;
+  await castBallot(f.deps, "u-me", f.roundId, { allocations: { [song("u-sarah")]: 5, [song("u-james")]: 5 } });
+  await castBallot(f.deps, "u-sarah", f.roundId, { allocations: { [song("u-me")]: 5, [song("u-james")]: 5 } });
+}
+
+test("standard reveal racing another reveal (the owner's, or one through the route table) banks every player's points exactly once; both answer the bare ranked list, byte for byte what it was before, and GET results agrees", async () => {
+  const { revealRound, getResults } = await import("./voting.ts");
+  const f = await pointsRoundInVoting();
+  await twoBallots(f);
+  const expected = JSON.stringify(await computeResults(f.deps, f.roundId));
+  const banked = { "u-me": 5, "u-sarah": 5, "u-james": 10 };
+
+  const routes = buildRoutes(f.deps);
+  const match = matchRoute(routes, "POST", `/rounds/${f.roundId}/reveal`)!;
+  const answers = await Promise.all([
+    revealRound(f.deps, OWNER, f.roundId),
+    match.route.handler({ caller: OWNER, params: match.params, query: {}, body: undefined }),
+  ]);
+  assert.deepEqual(await pointsOf(f), banked, "banked once, not twice");
+  for (const answer of answers) assert.equal(JSON.stringify(answer), expected);
+  assert.equal(JSON.stringify(await getResults(f.deps, SPECTATOR, f.roundId)), expected);
+  const stored = (await f.repo.getRound(f.roundId))!;
+  assert.equal(stored.status, "revealed");
+  assert.equal("h2hTally" in stored, false, "nothing pinned on a standard round");
+
+  // Settled: a later reveal is refused and banks nothing.
+  await assert.rejects(revealRound(f.deps, OWNER, f.roundId), isStatus(400, /in voting/));
+  assert.deepEqual(await pointsOf(f), banked);
+});
+
+test("standard: a reveal holding a round read while it was still voting banks nothing once another reveal settled it — it re-reads the round strongly consistently, answers the same list and brings the caller's copy up to date", async () => {
+  const { revealRound } = await import("./voting.ts");
+  const f = await pointsRoundInVoting();
+  const stale = (await f.repo.getRound(f.roundId))!; // a racing request's copy
+  await twoBallots(f);
+  const first = await revealRound(f.deps, OWNER, f.roundId);
+  const banked = await pointsOf(f);
+  assert.deepEqual(banked, { "u-me": 5, "u-sarah": 5, "u-james": 10 });
+
+  const reads: unknown[] = [];
+  const spy = withRepo(f, {
+    getRound: async (id, opts) => {
+      reads.push(opts);
+      return f.repo.getRound(id, opts);
+    },
+  });
+  const again = await finalizeReveal(spy, stale);
+  assert.deepEqual(await pointsOf(f), banked, "no double-bank");
+  assert.deepEqual(reads, [{ consistent: true }], "the loser re-reads the settled round strongly consistently");
+  assert.equal(JSON.stringify(again), JSON.stringify(first), "answers with the same ranked list");
+  assert.equal(stale.status, "revealed", "the caller's copy is brought up to date");
+});
+
+test("standard, submissionsPerPlayer 2 + anti-votes: each player's results bank as ONE increment (their sum) in the claim's write — negative totals included, zero results skipped — and the standings match per-result banking; the round is written as before, just revealed", async () => {
+  const { castBallot, revealRound } = await import("./voting.ts");
+  const f = await pointsRoundInVoting({ songsEach: 2, antiVotes: 2 });
+  const [me1, me2] = f.songs.get("u-me")!;
+  const [, sarah2] = f.songs.get("u-sarah")!;
+  const [james1, james2] = f.songs.get("u-james")!;
+  // → u-me 10 + 5, u-james 10 + 5, u-sarah 0 (no points) and −3 (anti-votes only).
+  await castBallot(f.deps, "u-me", f.roundId, { allocations: { [james1!]: 5, [james2!]: 5 }, downvotes: { [sarah2!]: 2 } });
+  await castBallot(f.deps, "u-sarah", f.roundId, { allocations: { [me1!]: 5, [james1!]: 5 } });
+  await castBallot(f.deps, "u-james", f.roundId, { allocations: { [me1!]: 5, [me2!]: 5 }, downvotes: { [sarah2!]: 1 } });
+  const before = (await f.repo.getRound(f.roundId))!;
+  const ranked = await computeResults(f.deps, f.roundId);
+  assert.deepEqual(
+    ranked.map((r) => [r.track.title, r.points]).sort(),
+    [["u-james song 1", 10], ["u-james song 2", 5], ["u-me song 1", 10], ["u-me song 2", 5], ["u-sarah song 1", 0], ["u-sarah song 2", -3]],
+  );
+
+  const calls: unknown[] = [];
+  const spy = withRepo(f, {
+    revealPointsRoundOnce: async (round, points) => {
+      calls.push(structuredClone(points));
+      return f.repo.revealPointsRoundOnce(round, points);
+    },
+    addStandingPoints: async () => assert.fail("a reveal banks only through its claim"),
+    updateRound: async () => assert.fail("a reveal writes the round only through its claim"),
+  });
+  const answer = await revealRound(spy, OWNER, f.roundId);
+  assert.equal(JSON.stringify(answer), JSON.stringify(ranked), "the bare ranked list, unchanged");
+
+  // One call; one entry per player, in ranked order of first appearance.
+  const firstSeen = [...new Set(ranked.filter((r) => r.points !== 0).map((r) => r.submitter.id))];
+  assert.equal(calls.length, 1);
+  const sent = calls[0] as Array<{ userId: string; delta: number }>;
+  assert.deepEqual(sent.map((p) => p.userId), firstSeen);
+  assert.deepEqual(Object.fromEntries(sent.map((p) => [p.userId, p.delta])), { "u-me": 15, "u-james": 15, "u-sarah": -3 });
+
+  // The totals the old per-result banking reached: 0 at join + every non-zero result.
+  const perResult: Record<string, number> = { "u-me": 0, "u-sarah": 0, "u-james": 0 };
+  for (const r of ranked) if (r.points !== 0) perResult[r.submitter.id]! += r.points;
+  assert.deepEqual(await pointsOf(f), perResult);
+  assert.deepEqual(await pointsOf(f), { "u-me": 15, "u-sarah": -3, "u-james": 15 });
+  assert.deepEqual(await f.repo.getRound(f.roundId), { ...before, status: "revealed" });
+});
+
+test("standard: a round where nobody scored claims the round and banks nothing; a reveal whose write fails banks nothing and leaves the round in voting — retrying banks it exactly once", async () => {
+  const { revealRound, getResults } = await import("./voting.ts");
+  const quiet = await pointsRoundInVoting();
+  const sent: unknown[] = [];
+  const spy = withRepo(quiet, {
+    revealPointsRoundOnce: async (round, points) => {
+      sent.push(points);
+      return quiet.repo.revealPointsRoundOnce(round, points);
+    },
+  });
+  await revealRound(spy, OWNER, quiet.roundId);
+  assert.deepEqual(sent, [[]], "no ballots: every result is 0, nothing to bank");
+  assert.equal((await quiet.repo.getRound(quiet.roundId))!.status, "revealed");
+  assert.deepEqual(await pointsOf(quiet), { "u-me": 0, "u-sarah": 0, "u-james": 0 });
+
+  const f = await pointsRoundInVoting();
+  await twoBallots(f);
+  const failing = withRepo(f, {
+    revealPointsRoundOnce: async () => {
+      throw Object.assign(new Error("throttled"), { name: "ProvisionedThroughputExceededException" });
+    },
+  });
+  await assert.rejects(revealRound(failing, OWNER, f.roundId), /throttled/);
+  assert.equal((await f.repo.getRound(f.roundId))!.status, "voting");
+  assert.deepEqual(await pointsOf(f), { "u-me": 0, "u-sarah": 0, "u-james": 0 }, "nothing banked");
+
+  const payload = await revealRound(f.deps, OWNER, f.roundId);
+  assert.deepEqual(await pointsOf(f), { "u-me": 5, "u-sarah": 5, "u-james": 10 }, "banked once");
+  assert.deepEqual(await getResults(f.deps, SPECTATOR, f.roundId), payload);
+});
+
+test("MemoryRepository.revealPointsRoundOnce: claims an unsettled round and banks its points together (repeats summed, rows created in the order given); refused — writing and banking nothing — on a revealed, complete or missing round; a bad increment writes nothing", async () => {
+  const repo = new MemoryRepository(false);
+  const base: Round = { id: "lg-x~0001", leagueId: "lg-x", index: 1, theme: "T", status: "voting" };
+  const rows = async () => (await repo.getStandings("lg-x")).map((r) => `${r.userId} ${r.points}`);
+  await repo.addStandingPoints("lg-x", "u-a", 2); // an existing row (joined earlier)
+  await repo.createRound(base);
+
+  await assert.rejects(repo.revealPointsRoundOnce({ ...base, status: "revealed" }, [{ userId: "u-a", delta: 1.5 }]), /integer/);
+  assert.equal((await repo.getRound(base.id))!.status, "voting", "a bad increment claims nothing");
+  assert.deepEqual(await rows(), ["u-a 2"]);
+
+  const points = [
+    { userId: "u-c", delta: 4 },
+    { userId: "u-a", delta: -3 },
+    { userId: "u-b", delta: 6 },
+    { userId: "u-c", delta: 1 },
+  ];
+  assert.equal(await repo.revealPointsRoundOnce({ ...base, status: "revealed" }, points), true);
+  assert.equal((await repo.getRound(base.id))!.status, "revealed");
+  assert.deepEqual(await rows(), ["u-a -1", "u-c 5", "u-b 6"], "new rows in first-write order, like the old per-result writes");
+  assert.equal(await repo.revealPointsRoundOnce({ ...base, status: "revealed", theme: "Again" }, points), false);
+  assert.equal((await repo.getRound(base.id))!.theme, "T");
+  assert.deepEqual(await rows(), ["u-a -1", "u-c 5", "u-b 6"], "the loser banks nothing");
+
+  const complete: Round = { ...base, id: "lg-x~0002", index: 2, status: "complete" };
+  await repo.createRound(complete);
+  assert.equal(await repo.revealPointsRoundOnce({ ...complete, status: "revealed" }, points), false);
+  assert.deepEqual(await repo.getRound(complete.id), complete, "a complete round is settled: nothing written");
+  assert.equal(await repo.revealPointsRoundOnce({ ...base, id: "lg-x~0009", index: 9, status: "revealed" }, points), false);
+  assert.equal(await repo.getRound("lg-x~0009"), undefined, "no phantom round");
+  assert.deepEqual(await rows(), ["u-a -1", "u-c 5", "u-b 6"]);
+
+  // Nothing to bank: just the claim.
+  const open: Round = { ...base, id: "lg-x~0003", index: 3 };
+  await repo.createRound(open);
+  assert.equal(await repo.revealPointsRoundOnce({ ...open, status: "revealed" }), true);
+  assert.equal((await repo.getRound(open.id))!.status, "revealed");
+  assert.deepEqual(await rows(), ["u-a -1", "u-c 5", "u-b 6"]);
 });

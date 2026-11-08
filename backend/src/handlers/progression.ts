@@ -100,7 +100,7 @@ export async function autoAdvanceRound(
     }
   }
 
-  if (advanced) await persistAdvance(deps, league, round);
+  if (advanced) await persistAdvance(deps, round);
   return round;
 }
 
@@ -151,18 +151,14 @@ export async function revealIfNobodyCanVote(deps: Deps, league: League, round: R
   return true;
 }
 
-/** Write an advanced round. A head-to-head league's write lands only while
- *  the stored round is unsettled (HTH-07): this copy may have been read
- *  before another request advanced AND revealed the round, and writing it
- *  back would put the round back in voting — dropping the reveal's pins and
- *  letting a second reveal bank it twice. If a reveal won, `round` is brought
- *  up to date with the stored, settled round instead. Standard leagues write
- *  unconditionally, exactly as before. */
-async function persistAdvance(deps: Deps, league: League, round: Round): Promise<void> {
-  if (leagueFormat(league) !== "headToHead") {
-    await deps.repo.updateRound(round);
-    return;
-  }
+/** Write an advanced round. The write lands only while the stored round is
+ *  unsettled, in either format (HTH-07 head-to-head; BUG-04 standard): this
+ *  copy may have been read before another request advanced AND revealed the
+ *  round, and writing it back would put the round back in voting — dropping
+ *  an H2H reveal's pins — and let a second reveal bank it twice. If a reveal
+ *  won, `round` is brought up to date with the stored, settled round
+ *  instead. */
+async function persistAdvance(deps: Deps, round: Round): Promise<void> {
   if (await deps.repo.updateRoundUnlessSettled(round)) return;
   const stored = await deps.repo.getRound(round.id, { consistent: true });
   if (stored) Object.assign(round, stored);

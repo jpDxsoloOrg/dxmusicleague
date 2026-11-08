@@ -13,6 +13,8 @@
 // whole pool (a two-player league, players who didn't submit, a low cap) —
 // the voter spends exactly what those songs can take, end to end through the
 // reveal and the timed everyone-voted reveal.
+// BUG-04 (last): in a timed standard league, the last two ballots cast at
+// once reveal — and bank — the round once.
 // Every league is driven through the real flow (open round 1 → freeze,
 // submit, close, open voting) over MemoryRepository, with the freeze RNG
 // seeded through deps.
@@ -21,8 +23,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MemoryRepository, MemoryUserDirectory } from "../data/memory.ts";
 import type { Deps } from "./leagues.ts";
-import { joinLeague, leaveLeague } from "./leagues.ts";
-import { updateRound } from "./rounds.ts";
+import { createLeague, joinLeague, leaveLeague } from "./leagues.ts";
+import { createRound, updateRound } from "./rounds.ts";
 import { listVotableSubmissions, submitSong } from "./submissions.ts";
 import { listMatchups } from "./matchups.ts";
 import { castBallot, getMyBallot, revealRound } from "./voting.ts";
@@ -811,4 +813,35 @@ test("timed two-player league: both 5-point ballots trigger the everyone-voted r
   assert.equal((await repo.getRound(TINY_ROUND))!.status, "voting");
   await castBallot(deps, "u-ben", TINY_ROUND, { allocations: { [subs.get(OWNER)!.id]: 5 } });
   assert.equal((await repo.getRound(TINY_ROUND))!.status, "revealed");
+});
+
+test("timed standard league: the last two ballots cast at the same moment reveal the round once — every player's points banked once (BUG-04)", async () => {
+  // Each cast runs the timed auto-advance, and both see every member voted:
+  // both reveal, and the reveal's one claim-and-bank write lets one bank.
+  const players = ["u-me", "u-sarah", "u-james"];
+  const repo = new MemoryRepository(false);
+  const deps: Deps = { repo, users: new MemoryUserDirectory() };
+  const lg = await createLeague(deps, "u-me", { name: "Timed Points", musicProvider: "mock", roundCount: 3, progression: "timed", phaseDays: 1 });
+  for (const p of players.slice(1)) await joinLeague(deps, p, lg.inviteCode);
+  const round = await createRound(deps, "u-me", lg.id, { theme: "Openers" });
+  await updateRound(deps, "u-me", lg.id, round.id, { status: "submitting" });
+  const song = new Map<string, string>();
+  for (const [i, p] of players.entries()) {
+    const { title, artists } = SONGS[i]!;
+    const sub = await submitSong(deps, p, round.id, {
+      track: { id: `mock-${title}`, provider: "mock", providerTrackId: `mock-${title}`, title, artists },
+    });
+    song.set(p, sub.id);
+  }
+  await updateRound(deps, "u-me", lg.id, round.id, { status: "voting" }); // everyone submitted: previewing already
+  const ballot = (voter: string) => ({
+    allocations: Object.fromEntries(players.filter((p) => p !== voter).map((p) => [song.get(p)!, 5])),
+  });
+
+  await castBallot(deps, "u-me", round.id, ballot("u-me"));
+  assert.equal((await repo.getRound(round.id))!.status, "voting");
+  await Promise.all([castBallot(deps, "u-sarah", round.id, ballot("u-sarah")), castBallot(deps, "u-james", round.id, ballot("u-james"))]);
+  assert.equal((await repo.getRound(round.id))!.status, "revealed");
+  const points = Object.fromEntries((await repo.getStandings(lg.id)).map((s) => [s.userId, s.points]));
+  assert.deepEqual(points, { "u-me": 10, "u-sarah": 10, "u-james": 10 }, "three ballots of 5 + 5: 10 each, banked once");
 });

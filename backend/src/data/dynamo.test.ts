@@ -10,12 +10,17 @@
 // the existing BALLOT# item (HTH-06), and the once-only reveal (HTH-07): its
 // transaction (conditional round write with the pinned `h2hDeparted` /
 // `h2hTally` + every W/L/D increment), the settle-guarded round write, and
-// the strongly consistent round read.
+// the strongly consistent round read; and the once-only standard reveal
+// (BUG-04): the same transaction with one in-place points increment per
+// player (a submitter's results summed), and its fallback past the cap; and
+// how both reveals' settle-guarded writes survive DynamoDB's transaction
+// conflicts (two overlapping reveals: the later one is sent again and loses
+// the claim cleanly), modelled by an in-flight-transaction fake.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
-import { DynamoRepository } from "./dynamo.ts";
+import { DynamoRepository, isTransactionConflict, retryOnTransactionConflict } from "./dynamo.ts";
 import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types.ts";
 import type { Ballot, League, Round } from "../domain/types.ts";
 
@@ -605,8 +610,9 @@ test("revealRoundOnce with records: ONE TransactWriteItems — the conditional r
   assert.equal(await repo.revealRoundOnce(claimed, recs), false);
   assert.deepEqual(storedRecords(table), { "u-a": "1-0-0", "u-b": "0-1-0", "u-c": "0-0-1" });
 
-  // A failure that isn't the claim (throttling, a conflicting write) propagates
-  // and leaves NOTHING written: the round stays in voting, ready to retry.
+  // A failure that isn't the claim (throttling; a transaction conflict is
+  // sent again — see the conflict tests) propagates and leaves NOTHING
+  // written: the round stays in voting, ready to retry.
   const flaky = fakeRepo();
   await flaky.repo.createRound(voting);
   const realSend = (flaky.repo as unknown as { doc: { send: (c: unknown) => Promise<unknown> } }).doc.send;
@@ -670,6 +676,149 @@ test("revealRoundOnce: one entry per player (repeats summed — a transaction ca
   assert.equal(sent.length, 1);
 });
 
+// ---- Rounds: the once-only standard reveal (BUG-04) ----
+
+type Send = (c: unknown) => Promise<unknown>;
+
+/** Put `hook` in front of a fake repo's document client: it sees every
+ *  command first, with the fake's own `send` to pass it on to. */
+function intercept(fake: ReturnType<typeof fakeRepo>, hook: (cmd: unknown, real: Send) => Promise<unknown>): void {
+  const real = (fake.repo as unknown as { doc: { send: Send } }).doc.send;
+  Object.assign(fake.repo, { doc: { send: (c: unknown) => hook(c, real) } });
+}
+
+/** A TransactWriteItems cancellation, one reason code per item — what the SDK
+ *  throws (writing nothing). */
+function cancelled(codes: string[]): Error {
+  return Object.assign(new Error(`Transaction cancelled, please refer cancellation reasons for specific reasons [${codes.join(", ")}]`), {
+    name: "TransactionCanceledException",
+    CancellationReasons: codes.map((Code) => ({ Code })),
+  });
+}
+
+/** Each STANDING# row's points in the fake table, by user. */
+function storedPoints(table: Map<string, Item>): Record<string, number> {
+  return Object.fromEntries(
+    [...table.values()]
+      .filter((it) => String(it.SK).startsWith("STANDING#"))
+      .map((it) => [it.userId as string, it.points as number]),
+  );
+}
+
+/** The UpdateItem input addStandingPoints sends for this increment. */
+async function addStandingPointsInput(leagueId: string, userId: string, delta: number): Promise<unknown> {
+  const { repo, sent } = fakeRepo();
+  await repo.addStandingPoints(leagueId, userId, delta);
+  return (sent[0] as UpdateCommand).input;
+}
+
+test("revealPointsRoundOnce: ONE TransactWriteItems — the conditional round put plus one in-place points increment per player (a submitter's results summed: a transaction can't touch a row twice) — so the claim and the banking land together or not at all", async () => {
+  const { repo, table, sent } = fakeRepo();
+  const voting: Round = {
+    id: "lg-1~0001", leagueId: "lg-1", index: 1, theme: "Openers", status: "voting",
+    voteDeadline: "2026-11-09T00:00:00.000Z", playlistUrl: "https://example.com/p",
+  };
+  await repo.createRound(voting);
+  await repo.addStandingPoints("lg-1", "u-a", 7); // an existing row (joined earlier)
+  const points = [
+    { userId: "u-a", delta: 10 },
+    { userId: "u-b", delta: 5 },
+    { userId: "u-a", delta: 5 }, // u-a's second song (submissionsPerPlayer 2)
+    { userId: "u-c", delta: -3 }, // anti-votes: a negative total banks too
+  ];
+  const claimed: Round = { ...voting, status: "revealed" };
+
+  sent.length = 0;
+  assert.equal(await repo.revealPointsRoundOnce(claimed, points), true);
+  assert.equal(sent.length, 1, "one request");
+  const tx = sent[0] as TransactWriteCommand;
+  assert.ok(tx instanceof TransactWriteCommand);
+  const items = tx.input.TransactItems!;
+  assert.equal(items.length, 4, "the round + three distinct players");
+  assert.match(items[0]!.Put?.ConditionExpression ?? "", /attribute_exists\(PK\) AND #status <> :revealed AND #status <> :complete/);
+  assert.equal(items[0]!.Put?.Item?.status, "revealed");
+  assert.deepEqual(items.slice(1).map((t) => t.Update?.Key?.SK), ["STANDING#u-a", "STANDING#u-b", "STANDING#u-c"]);
+  // Each row's increment is exactly addStandingPoints' UpdateItem for the player's sum.
+  assert.deepEqual(items[1]!.Update, await addStandingPointsInput("lg-1", "u-a", 15));
+  assert.deepEqual(items[2]!.Update, await addStandingPointsInput("lg-1", "u-b", 5));
+  assert.deepEqual(items[3]!.Update, await addStandingPointsInput("lg-1", "u-c", -3));
+  assert.deepEqual(storedPoints(table), { "u-a": 22, "u-b": 5, "u-c": -3 });
+  // The round item is the round as before, just revealed (no W/L/D, nothing pinned).
+  assert.deepEqual(JSON.parse(JSON.stringify(await repo.getRound(voting.id))), claimed);
+  assert.equal(table.get("LEAGUE#lg-1|STANDING#u-b")?.wins, undefined);
+
+  // The loser of a race: the claim fails, the whole transaction is cancelled, nothing banks twice.
+  assert.equal(await repo.revealPointsRoundOnce(claimed, points), false);
+  assert.deepEqual(storedPoints(table), { "u-a": 22, "u-b": 5, "u-c": -3 });
+
+  // A failure that isn't the claim (nor a transaction conflict, sent again —
+  // see the conflict test below) propagates and leaves NOTHING written.
+  const flaky = fakeRepo();
+  await flaky.repo.createRound(voting);
+  let attempts = 0;
+  intercept(flaky, async (c, real) => {
+    if (c instanceof TransactWriteCommand) {
+      attempts++;
+      throw cancelled(["None", "ThrottlingError", "None", "None"]);
+    }
+    return real(c);
+  });
+  await assert.rejects(flaky.repo.revealPointsRoundOnce(claimed, points), /cancelled/);
+  assert.equal(attempts, 1, "not retried");
+  assert.equal(flaky.table.get("LEAGUE#lg-1|ROUND#0001")?.status, "voting");
+  assert.deepEqual(storedPoints(flaky.table), {});
+
+  // A bad increment is refused before anything is sent.
+  const strict = fakeRepo();
+  await strict.repo.createRound(voting);
+  strict.sent.length = 0;
+  await assert.rejects(strict.repo.revealPointsRoundOnce(claimed, [{ userId: "u-a", delta: 2.5 }]), /integer/);
+  assert.equal(strict.sent.length, 0);
+
+  // Nothing to bank (every result scored 0): just the conditional round put.
+  const quiet = fakeRepo();
+  await quiet.repo.createRound(voting);
+  quiet.sent.length = 0;
+  assert.equal(await quiet.repo.revealPointsRoundOnce(claimed, []), true);
+  assert.equal(quiet.sent.length, 1);
+  assert.ok(quiet.sent[0] instanceof PutCommand);
+  assert.match((quiet.sent[0] as PutCommand).input.ConditionExpression ?? "", /#status <> :revealed AND #status <> :complete/);
+  assert.equal(await quiet.repo.revealPointsRoundOnce(claimed), false, "already revealed: refused");
+  assert.equal(quiet.table.get("LEAGUE#lg-1|ROUND#0001")?.status, "revealed");
+});
+
+test("revealPointsRoundOnce: the 99-row cap counts distinct players — 99 players with two results each still fit one transaction; 100 claim first, then one addStandingPoints UpdateItem per player; a refused claim there banks nothing", async () => {
+  const { repo, table, sent } = fakeRepo();
+  const voting: Round = { id: "lg-1~0001", leagueId: "lg-1", index: 1, theme: "Openers", status: "voting" };
+  const players = (n: number, songs: number) =>
+    Array.from({ length: songs }, () => Array.from({ length: n }, (_, i) => ({ userId: `u-${i}`, delta: 2 }))).flat();
+
+  // 99 players × 2 results = 198 entries → 99 rows + the round = 100 items: one transaction.
+  await repo.createRound(voting);
+  sent.length = 0;
+  assert.equal(await repo.revealPointsRoundOnce({ ...voting, status: "revealed" }, players(99, 2)), true);
+  assert.deepEqual(sent.map((c) => (c as object).constructor.name), ["TransactWriteCommand"]);
+  assert.equal((sent[0] as TransactWriteCommand).input.TransactItems!.length, 100);
+  assert.equal(storedPoints(table)["u-98"], 4);
+
+  // 100 players: the conditional round put, then one UpdateItem per player.
+  await repo.createRound({ ...voting, id: "lg-1~0002", index: 2 });
+  sent.length = 0;
+  assert.equal(await repo.revealPointsRoundOnce({ ...voting, id: "lg-1~0002", index: 2, status: "revealed" }, players(100, 2)), true);
+  assert.ok(sent[0] instanceof PutCommand);
+  assert.match((sent[0] as PutCommand).input.ConditionExpression ?? "", /#status <> :revealed AND #status <> :complete/);
+  assert.equal(sent.length, 101);
+  assert.ok(sent.slice(1).every((c) => c instanceof UpdateCommand));
+  assert.deepEqual((sent[1] as UpdateCommand).input, await addStandingPointsInput("lg-1", "u-0", 4));
+  assert.equal(storedPoints(table)["u-99"], 4);
+  assert.equal(storedPoints(table)["u-0"], 8, "rounds 1 and 2 each banked once");
+  // …and a refused claim there banks nothing either.
+  sent.length = 0;
+  assert.equal(await repo.revealPointsRoundOnce({ ...voting, id: "lg-1~0002", index: 2, status: "revealed" }, players(100, 2)), false);
+  assert.equal(sent.length, 1);
+  assert.equal(storedPoints(table)["u-0"], 8);
+});
+
 test("updateRoundUnlessSettled: the same conditional PutItem as the claim — lands on an unsettled round, refused (writing nothing) on a settled or missing one", async () => {
   const { repo, table, sent } = fakeRepo();
   const previewing: Round = { id: "lg-1~0001", leagueId: "lg-1", index: 1, theme: "Openers", status: "previewing" };
@@ -701,4 +850,209 @@ test("getRound({ consistent: true }) is a strongly consistent GetItem; the defau
   const [plain, strong] = sent as [GetCommand, GetCommand];
   assert.equal("ConsistentRead" in plain.input, false);
   assert.equal(strong.input.ConsistentRead, true);
+});
+
+// ---- Rounds: transaction conflicts on the settle-guarded writes (BUG-04) ----
+
+/** Model DynamoDB's transaction-conflict rule on a fake repo: a
+ *  TransactWriteItems holds its items for `holdMs` while in flight (its
+ *  conditions are checked as it commits); another TransactWriteItems touching
+ *  one of them is cancelled with `TransactionConflict` on that item, and a
+ *  single-item write to one fails with TransactionConflictException — both
+ *  writing nothing. Every attempt is logged in `attempts`. */
+function withInFlightTransactions(fake: ReturnType<typeof fakeRepo>, holdMs = 5): { attempts: string[] } {
+  const held = new Set<string>();
+  const attempts: string[] = [];
+  const keyOf = (k: { PK?: unknown; SK?: unknown } | undefined) => `${String(k?.PK)}|${String(k?.SK)}`;
+  intercept(fake, async (c, real) => {
+    if (c instanceof TransactWriteCommand) {
+      const keys = (c.input.TransactItems ?? []).map((t) => keyOf(t.Put ? t.Put.Item : (t.Update ?? t.ConditionCheck)?.Key));
+      if (keys.some((k) => held.has(k))) {
+        attempts.push("tx:conflict");
+        throw cancelled(keys.map((k) => (held.has(k) ? "TransactionConflict" : "None")));
+      }
+      attempts.push("tx");
+      keys.forEach((k) => held.add(k));
+      try {
+        await new Promise((resolve) => setTimeout(resolve, holdMs));
+        return await real(c);
+      } finally {
+        keys.forEach((k) => held.delete(k));
+      }
+    }
+    if (c instanceof PutCommand || c instanceof UpdateCommand) {
+      const k = keyOf(c instanceof PutCommand ? c.input.Item : c.input.Key);
+      if (held.has(k)) {
+        attempts.push("write:conflict");
+        throw Object.assign(new Error("Transaction is ongoing for the item"), { name: "TransactionConflictException" });
+      }
+      attempts.push("write");
+    }
+    return real(c);
+  });
+  return { attempts };
+}
+
+test("isTransactionConflict: only a refusal for an in-flight transaction — TransactionConflictException, or a cancellation whose only reason is TransactionConflict", () => {
+  const named = (name: string) => Object.assign(new Error(name), { name });
+  assert.equal(isTransactionConflict(named("TransactionConflictException")), true);
+  assert.equal(isTransactionConflict(cancelled(["TransactionConflict"])), true);
+  assert.equal(isTransactionConflict(cancelled(["None", "TransactionConflict", "None"])), true);
+  assert.equal(isTransactionConflict(cancelled(["TransactionConflict", "TransactionConflict"])), true);
+  // A refused claim is a lost race, not a conflict — even alongside one.
+  assert.equal(isTransactionConflict(cancelled(["ConditionalCheckFailed", "None"])), false);
+  assert.equal(isTransactionConflict(cancelled(["ConditionalCheckFailed", "TransactionConflict"])), false);
+  assert.equal(isTransactionConflict(cancelled(["None", "ThrottlingError"])), false);
+  assert.equal(isTransactionConflict(cancelled(["None", "None"])), false);
+  assert.equal(isTransactionConflict(named("ConditionalCheckFailedException")), false);
+  assert.equal(isTransactionConflict(named("ProvisionedThroughputExceededException")), false);
+  assert.equal(isTransactionConflict(named("TransactionCanceledException")), false, "no reasons given");
+  assert.equal(isTransactionConflict(null), false);
+  assert.equal(isTransactionConflict(undefined), false);
+});
+
+test("retryOnTransactionConflict: sends a conflicted write again after a growing jittered pause, at most 3 more times; anything else is thrown at once", async () => {
+  const pauses: number[] = [];
+  const pause = async (ms: number) => { pauses.push(ms); };
+  const conflict = () => cancelled(["TransactionConflict", "None"]);
+
+  // Clears on the third attempt: its result comes back.
+  let calls = 0;
+  assert.equal(await retryOnTransactionConflict(async () => { if (++calls < 3) throw conflict(); return "landed"; }, pause), "landed");
+  assert.equal(calls, 3);
+  assert.equal(pauses.length, 2);
+  assert.ok(pauses[0]! >= 12 && pauses[0]! <= 38, `first pause ~25ms ±50%, got ${pauses[0]}`);
+  assert.ok(pauses[1]! >= 25 && pauses[1]! <= 75, `second pause ~50ms ±50%, got ${pauses[1]}`);
+
+  // Never clears: 1 + 3 attempts, then the conflict itself is thrown.
+  calls = 0;
+  pauses.length = 0;
+  await assert.rejects(retryOnTransactionConflict(async () => { calls++; throw conflict(); }, pause), /TransactionConflict/);
+  assert.equal(calls, 4);
+  assert.equal(pauses.length, 3);
+  assert.ok(pauses[2]! >= 50 && pauses[2]! <= 150, `third pause ~100ms ±50%, got ${pauses[2]}`);
+
+  // A refused claim, throttling, a validation error: not retried.
+  for (const err of [cancelled(["ConditionalCheckFailed", "None"]), cancelled(["None", "ThrottlingError"]), Object.assign(new Error("bad"), { name: "ValidationException" })]) {
+    calls = 0;
+    pauses.length = 0;
+    await assert.rejects(retryOnTransactionConflict(async () => { calls++; throw err; }, pause), (e) => e === err);
+    assert.deepEqual([calls, pauses.length], [1, 0]);
+  }
+});
+
+test("two reveals of one round whose transactions overlap: the later one, cancelled with TransactionConflict, is sent again and loses the claim cleanly (false, not an error) — banked once, either format", async () => {
+  // Standard: the last two ballots cast at once, each request revealing.
+  const std = fakeRepo();
+  const voting: Round = { id: "lg-1~0001", leagueId: "lg-1", index: 1, theme: "Openers", status: "voting" };
+  await std.repo.createRound(voting);
+  const { attempts } = withInFlightTransactions(std);
+  const claimed: Round = { ...voting, status: "revealed" };
+  const points = [{ userId: "u-a", delta: 5 }, { userId: "u-b", delta: 5 }];
+  const outcomes = await Promise.all([std.repo.revealPointsRoundOnce(claimed, points), std.repo.revealPointsRoundOnce(claimed, points)]);
+  assert.deepEqual([...outcomes].sort(), [false, true], "one wins, the other loses the claim — neither throws");
+  assert.deepEqual(attempts, ["tx", "tx:conflict", "tx"], "the conflicted transaction was sent again");
+  assert.equal(std.table.get("LEAGUE#lg-1|ROUND#0001")?.status, "revealed");
+  assert.deepEqual(storedPoints(std.table), { "u-a": 5, "u-b": 5 }, "banked once");
+
+  // Head-to-head shares the claim (claimAndBank): the same.
+  const h2h = fakeRepo();
+  await h2h.repo.createRound(voting);
+  const h2hLog = withInFlightTransactions(h2h);
+  const recs = [{ userId: "u-a", delta: { wins: 1 } }, { userId: "u-b", delta: { losses: 1 } }];
+  const h2hClaimed: Round = { ...claimed, h2hDeparted: [], h2hTally: [] };
+  const h2hOutcomes = await Promise.all([h2h.repo.revealRoundOnce(h2hClaimed, recs), h2h.repo.revealRoundOnce(h2hClaimed, recs)]);
+  assert.deepEqual([...h2hOutcomes].sort(), [false, true]);
+  assert.deepEqual(h2hLog.attempts, ["tx", "tx:conflict", "tx"]);
+  assert.deepEqual(storedRecords(h2h.table), { "u-a": "1-0-0", "u-b": "0-1-0" });
+
+  // Two different rounds revealed at once, banking the same players: the
+  // conflict is on the standing rows; the retry lands — both bank, once each.
+  const two = fakeRepo();
+  await two.repo.createRound(voting);
+  await two.repo.createRound({ ...voting, id: "lg-1~0002", index: 2 });
+  const twoLog = withInFlightTransactions(two);
+  const both = await Promise.all([
+    two.repo.revealPointsRoundOnce(claimed, points),
+    two.repo.revealPointsRoundOnce({ ...claimed, id: "lg-1~0002", index: 2 }, points),
+  ]);
+  assert.deepEqual(both, [true, true]);
+  assert.deepEqual(twoLog.attempts, ["tx", "tx:conflict", "tx"]);
+  assert.deepEqual(storedPoints(two.table), { "u-a": 10, "u-b": 10 });
+
+  // A timed advance's settle-guarded write landing while a reveal's
+  // transaction holds the round: TransactionConflictException, sent again,
+  // then refused by its condition (false) — the round stays revealed.
+  const adv = fakeRepo();
+  await adv.repo.createRound(voting);
+  const advLog = withInFlightTransactions(adv);
+  const [revealed, staleWrite] = await Promise.all([
+    adv.repo.revealPointsRoundOnce(claimed, points),
+    adv.repo.updateRoundUnlessSettled({ ...voting, theme: "Stale copy" }),
+  ]);
+  assert.deepEqual([revealed, staleWrite], [true, false]);
+  assert.deepEqual(advLog.attempts, ["tx", "write:conflict", "write"]);
+  assert.deepEqual([adv.table.get("LEAGUE#lg-1|ROUND#0001")?.status, adv.table.get("LEAGUE#lg-1|ROUND#0001")?.theme], ["revealed", "Openers"]);
+});
+
+test("a transaction conflict that outlasts the retries propagates with nothing written; a refused claim alongside a conflict is a clean loss, not retried; the 100+-player fallback's row writes are retried too", async () => {
+  const voting: Round = { id: "lg-1~0001", leagueId: "lg-1", index: 1, theme: "Openers", status: "voting" };
+  const claimed: Round = { ...voting, status: "revealed" };
+  const points = [{ userId: "u-a", delta: 5 }];
+
+  // Never clears (≈175 ms of real backoff): 1 + 3 transactions, then the error.
+  const stuck = fakeRepo();
+  await stuck.repo.createRound(voting);
+  let attempts = 0;
+  intercept(stuck, async (c, real) => {
+    if (c instanceof TransactWriteCommand) { attempts++; throw cancelled(["TransactionConflict", "None"]); }
+    return real(c);
+  });
+  await assert.rejects(stuck.repo.revealPointsRoundOnce(claimed, points), /TransactionConflict/);
+  assert.equal(attempts, 4);
+  assert.equal(stuck.table.get("LEAGUE#lg-1|ROUND#0001")?.status, "voting", "nothing written: still revealable");
+  assert.deepEqual(storedPoints(stuck.table), {});
+
+  // The same for the settle-guarded PutItem.
+  const stuckPut = fakeRepo();
+  await stuckPut.repo.createRound(voting);
+  attempts = 0;
+  intercept(stuckPut, async (c, real) => {
+    if (c instanceof PutCommand) { attempts++; throw Object.assign(new Error("Transaction is ongoing for the item"), { name: "TransactionConflictException" }); }
+    return real(c);
+  });
+  await assert.rejects(stuckPut.repo.updateRoundUnlessSettled({ ...voting, theme: "Edit" }), /ongoing/);
+  assert.equal(attempts, 4);
+  assert.equal(stuckPut.table.get("LEAGUE#lg-1|ROUND#0001")?.theme, "Openers");
+
+  // Item 0's claim refused (whatever else conflicted): false at once.
+  const lost = fakeRepo();
+  await lost.repo.createRound(voting);
+  attempts = 0;
+  intercept(lost, async (c, real) => {
+    if (c instanceof TransactWriteCommand) { attempts++; throw cancelled(["ConditionalCheckFailed", "TransactionConflict"]); }
+    return real(c);
+  });
+  assert.equal(await lost.repo.revealPointsRoundOnce(claimed, points), false);
+  assert.equal(attempts, 1);
+
+  // Past the cap: the claim, then one UpdateItem per player — one refused for
+  // a conflict (another round's transaction on that row) is sent again, so
+  // every row still banks exactly once.
+  const big = fakeRepo();
+  await big.repo.createRound(voting);
+  let refusedOnce = false;
+  intercept(big, async (c, real) => {
+    if (c instanceof UpdateCommand && c.input.Key?.SK === "STANDING#u-42" && !refusedOnce) {
+      refusedOnce = true;
+      throw Object.assign(new Error("Transaction is ongoing for the item"), { name: "TransactionConflictException" });
+    }
+    return real(c);
+  });
+  const many = Array.from({ length: 100 }, (_, i) => ({ userId: `u-${i}`, delta: 3 }));
+  assert.equal(await big.repo.revealPointsRoundOnce(claimed, many), true);
+  assert.ok(refusedOnce);
+  const banked = storedPoints(big.table);
+  assert.equal(Object.keys(banked).length, 100);
+  assert.ok(Object.values(banked).every((p) => p === 3), "each row once");
 });
