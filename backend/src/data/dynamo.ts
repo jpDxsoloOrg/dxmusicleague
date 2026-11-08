@@ -4,7 +4,7 @@
 //
 //   League meta   PK=LEAGUE#<id>      SK=META   (rematchLeagueId once the league is rematched)
 //   Membership    PK=LEAGUE#<id>      SK=MEMBER#<userId>   (+ GSI1: USER#<id> / LEAGUE#<id>)
-//   Round         PK=LEAGUE#<id>      SK=ROUND#<index4>   (h2hDeparted + h2hTally once an H2H round is revealed)
+//   Round         PK=LEAGUE#<id>      SK=ROUND#<index4>   (h2hDeparted + h2hTally once an H2H round is revealed; pointsTally once a standard one is)
 //   Submission    PK=ROUND#<roundId>  SK=SUB#<userId>
 //   Ballot        PK=ROUND#<roundId>  SK=BALLOT#<voterId>   (allocations; picks for H2H)
 //   Standing      PK=LEAGUE#<id>      SK=STANDING#<userId>  (points; wins/losses/draws for H2H)
@@ -26,7 +26,7 @@ import {
   TransactWriteCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
-import type { Ballot, League, LeagueSettings, MatchupTally, Round, Submission } from "../domain/types.ts";
+import type { Ballot, League, LeagueSettings, MatchupTally, Round, SongTally, Submission } from "../domain/types.ts";
 import { leagueFormat } from "../domain/types.ts";
 import type { StandingPointsDelta, StandingRecordDelta, StandingTotals } from "../domain/standings.ts";
 import { mergePointDeltas, recordIncrements } from "../domain/standings.ts";
@@ -538,6 +538,7 @@ export class DynamoRepository implements Repository {
       playlistUrl: round.playlistUrl,
       h2hDeparted: round.h2hDeparted, // head-to-head, pinned at the reveal (undefined → not stored)
       h2hTally: round.h2hTally, // head-to-head, pinned at the reveal (undefined → not stored)
+      pointsTally: round.pointsTally, // standard, pinned at the reveal (undefined → not stored)
     };
   }
   private toRound(it: Record<string, unknown>): Round {
@@ -552,10 +553,12 @@ export class DynamoRepository implements Repository {
       previewDeadline: it.previewDeadline as string | undefined,
       voteDeadline: it.voteDeadline as string | undefined,
       playlistUrl: it.playlistUrl as string | undefined,
-      // Only revealed head-to-head rounds carry it; every other round reads
-      // back without the key, exactly as before.
+      // Only revealed head-to-head rounds carry the h2h pins, and only
+      // standard rounds revealed since BUG-18 carry pointsTally; every other
+      // round reads back without the keys, exactly as before.
       ...(Array.isArray(it.h2hDeparted) ? { h2hDeparted: it.h2hDeparted as string[] } : {}),
       ...(Array.isArray(it.h2hTally) ? { h2hTally: it.h2hTally as MatchupTally[] } : {}),
+      ...(Array.isArray(it.pointsTally) ? { pointsTally: it.pointsTally as SongTally[] } : {}),
     };
   }
 

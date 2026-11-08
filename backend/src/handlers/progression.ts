@@ -166,7 +166,8 @@ export async function revealIfNobodyCanVote(deps: Deps, league: League, round: R
  *  unsettled, in either format (HTH-07 head-to-head; BUG-04 standard): this
  *  copy may have been read before another request advanced AND revealed the
  *  round, and writing it back would put the round back in voting — dropping
- *  an H2H reveal's pins — and let a second reveal bank it twice. If a reveal
+ *  the reveal's pins (h2hTally / h2hDeparted, or a standard round's
+ *  pointsTally) — and let a second reveal bank it twice. If a reveal
  *  won, `round` is brought up to date with the stored, settled round
  *  instead. */
 async function persistAdvance(deps: Deps, round: Round): Promise<void> {

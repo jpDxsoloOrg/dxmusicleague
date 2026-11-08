@@ -2,7 +2,7 @@
 // referee": the same rules the frontend mirrors for UX are enforced here so a
 // hand-crafted request can't break the game. See docs/data-model-and-api.md §2.
 
-import type { Ballot, LeagueSettings, MatchupTally } from "./types.ts";
+import type { Ballot, LeagueSettings, MatchupTally, SongTally } from "./types.ts";
 import { badRequest } from "./errors.ts";
 import { inMatchup, matchupState, votableMatchups } from "./matchups.ts";
 import type { MatchupSide, RoundMatchup, RoundMatchupSet } from "./matchups.ts";
@@ -284,6 +284,33 @@ export function tallyBallots(
     }
   }
   return tally;
+}
+
+/** One song's tally in a standard round — defined in types.ts because the
+ *  reveal pins it on the round (`Round.pointsTally`, BUG-18). */
+export type { SongTally } from "./types.ts";
+
+/**
+ * A standard round's per-song tally (`tallyBallots`), one entry per song in
+ * `submissionIds`' order — a song nobody voted for gets zeros. What the reveal
+ * ranks, banks and pins (`Round.pointsTally`), so every later read can rank
+ * the same numbers without re-tallying the ballot rows. Allocations to an id
+ * that isn't one of the songs are left out, as they never rank.
+ */
+export function tallySongs(
+  submissionIds: readonly string[],
+  ballots: Array<{ allocations: Record<string, number>; downvotes?: Record<string, number> }>,
+): SongTally[] {
+  const tally = tallyBallots(ballots);
+  return submissionIds.map((submissionId) => {
+    const t = tally.get(submissionId);
+    return {
+      submissionId,
+      pointsFor: t?.pointsFor ?? 0,
+      pointsAgainst: t?.pointsAgainst ?? 0,
+      distinctVoters: t?.distinctVoters ?? 0,
+    };
+  });
 }
 
 // ---- Head-to-head: the matchup tally and outcomes (HTH-07) -----------------

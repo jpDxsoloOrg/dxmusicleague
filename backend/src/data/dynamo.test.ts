@@ -12,7 +12,8 @@
 // `h2hTally` + every W/L/D increment), the settle-guarded round write, and
 // the strongly consistent round read; and the once-only standard reveal
 // (BUG-04): the same transaction with one in-place points increment per
-// player (a submitter's results summed), and its fallback past the cap; and
+// player (a submitter's results summed), and its fallback past the cap, with
+// the per-song tally it pins on the round put (`pointsTally`, BUG-18); and
 // how both reveals' settle-guarded writes survive DynamoDB's transaction
 // conflicts (two overlapping reveals: the later one is sent again and loses
 // the claim cleanly), modelled by an in-flight-transaction fake; and the
@@ -796,7 +797,8 @@ test("revealPointsRoundOnce: ONE TransactWriteItems — the conditional round pu
   assert.deepEqual(items[2]!.Update, await addStandingPointsInput("lg-1", "u-b", 5));
   assert.deepEqual(items[3]!.Update, await addStandingPointsInput("lg-1", "u-c", -3));
   assert.deepEqual(storedPoints(table), { "u-a": 22, "u-b": 5, "u-c": -3 });
-  // The round item is the round as before, just revealed (no W/L/D, nothing pinned).
+  // The round item is exactly the round it was given — here just revealed (no
+  // W/L/D, no pin; the reveal handler adds `pointsTally`, see the BUG-18 test).
   assert.deepEqual(JSON.parse(JSON.stringify(await repo.getRound(voting.id))), claimed);
   assert.equal(table.get("LEAGUE#lg-1|STANDING#u-b")?.wins, undefined);
 
@@ -870,6 +872,63 @@ test("revealPointsRoundOnce: the 99-row cap counts distinct players — 99 playe
   assert.equal(await repo.revealPointsRoundOnce({ ...voting, id: "lg-1~0002", index: 2, status: "revealed" }, players(100, 2)), false);
   assert.equal(sent.length, 1);
   assert.equal(storedPoints(table)["u-0"], 8);
+});
+
+test("revealPointsRoundOnce pins the standard tally (BUG-18): `pointsTally` rides on the conditional round put — in the transaction, the bare claim and the 100+-player fallback — and getRound / getRoundsForLeague read it back; a theme edit keeps it, a stale copy can't drop it; an unpinned round reads back with no pointsTally key", async () => {
+  const { repo, table, sent } = fakeRepo();
+  const voting: Round = { id: "lg-1~0001", leagueId: "lg-1", index: 1, theme: "Openers", status: "voting" };
+  await repo.createRound(voting);
+  // Unpinned rounds (any unrevealed one, every H2H round, a standard round revealed before the pin) read back without the key.
+  assert.equal("pointsTally" in table.get("LEAGUE#lg-1|ROUND#0001")!, false);
+  assert.equal("pointsTally" in (await repo.getRound(voting.id))!, false);
+  assert.equal("pointsTally" in (await repo.getRoundsForLeague("lg-1"))[0]!, false);
+
+  const pointsTally = [
+    { submissionId: "sub-a", pointsFor: 10, pointsAgainst: 2, distinctVoters: 2 },
+    { submissionId: "sub-b", pointsFor: 0, pointsAgainst: 0, distinctVoters: 0 },
+  ];
+  sent.length = 0;
+  assert.equal(await repo.revealPointsRoundOnce({ ...voting, status: "revealed", pointsTally }, [{ userId: "u-a", delta: 8 }]), true);
+  assert.equal(sent.length, 1);
+  const tx = sent[0] as TransactWriteCommand;
+  assert.ok(tx instanceof TransactWriteCommand);
+  const claim = tx.input.TransactItems![0]!.Put!;
+  assert.match(claim.ConditionExpression ?? "", /attribute_exists\(PK\) AND #status <> :revealed AND #status <> :complete/);
+  assert.deepEqual(claim.Item?.pointsTally, pointsTally, "pinned in the claim itself");
+  assert.deepEqual(table.get("LEAGUE#lg-1|ROUND#0001")?.pointsTally, pointsTally);
+  assert.deepEqual((await repo.getRound(voting.id))?.pointsTally, pointsTally);
+  assert.deepEqual((await repo.getRound(voting.id, { consistent: true }))?.pointsTally, pointsTally);
+  assert.deepEqual((await repo.getRoundsForLeague("lg-1"))[0]?.pointsTally, pointsTally);
+  assert.equal("h2hTally" in (await repo.getRound(voting.id))!, false);
+
+  // A stale "voting" copy (no pin) can't un-reveal the round or drop the pin…
+  assert.equal(await repo.updateRoundUnlessSettled({ ...voting, theme: "Stale" }), false);
+  assert.equal(await repo.revealPointsRoundOnce({ ...voting, status: "revealed", pointsTally: [] }, [{ userId: "u-a", delta: 1 }]), false);
+  assert.deepEqual(table.get("LEAGUE#lg-1|ROUND#0001")?.pointsTally, pointsTally);
+  // …and an ordinary write of the revealed round (an owner's theme fix) keeps it.
+  await repo.updateRound({ ...(await repo.getRound(voting.id))!, theme: "Renamed" });
+  assert.deepEqual(JSON.parse(JSON.stringify(await repo.getRound(voting.id))), { ...voting, status: "revealed", theme: "Renamed", pointsTally });
+
+  // Nothing to bank: the bare conditional PutItem pins it too; an empty pin round-trips as an empty list.
+  await repo.createRound({ ...voting, id: "lg-1~0002", index: 2 });
+  sent.length = 0;
+  assert.equal(await repo.revealPointsRoundOnce({ ...voting, id: "lg-1~0002", index: 2, status: "revealed", pointsTally: [] }), true);
+  assert.ok(sent[0] instanceof PutCommand);
+  assert.deepEqual((sent[0] as PutCommand).input.Item?.pointsTally, []);
+  assert.deepEqual((await repo.getRound("lg-1~0002"))?.pointsTally, []);
+
+  // Past the 99-row cap: the claim (conditional PutItem, pin included) goes first.
+  await repo.createRound({ ...voting, id: "lg-1~0003", index: 3 });
+  const players = Array.from({ length: 100 }, (_, i) => ({ userId: `u-${i}`, delta: 1 }));
+  sent.length = 0;
+  assert.equal(await repo.revealPointsRoundOnce({ ...voting, id: "lg-1~0003", index: 3, status: "revealed", pointsTally }, players), true);
+  assert.ok(sent[0] instanceof PutCommand);
+  assert.deepEqual((sent[0] as PutCommand).input.Item?.pointsTally, pointsTally);
+  assert.deepEqual((await repo.getRound("lg-1~0003"))?.pointsTally, pointsTally);
+
+  // A non-list attribute (hand-edited data) reads back as no pin, as h2hTally does.
+  table.set("LEAGUE#lg-1|ROUND#0004", { ...table.get("LEAGUE#lg-1|ROUND#0001")!, SK: "ROUND#0004", roundId: "lg-1~0004", index: 4, pointsTally: "oops" });
+  assert.equal("pointsTally" in (await repo.getRound("lg-1~0004"))!, false);
 });
 
 test("updateRoundUnlessSettled: the same conditional PutItem as the claim — lands on an unsettled round, refused (writing nothing) on a settled or missing one", async () => {

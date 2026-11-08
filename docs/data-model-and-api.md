@@ -29,7 +29,7 @@ because every read below is a point-get or a single-partition `Query` — no cro
 |---|---|---|---|
 | League meta | `LEAGUE#<leagueId>` | `META` | `name, ownerId, musicProvider, format, settings{}, roundCount, createdAt`, head-to-head only once frozen: `h2hParticipants[], h2hSalt`; once rematched: `rematchLeagueId` (its one live rematch — claimed by a conditional write, replaced only once that league is deleted) |
 | Membership | `LEAGUE#<leagueId>` | `MEMBER#<userId>` | `joinedAt, displayName` |
-| Round | `LEAGUE#<leagueId>` | `ROUND#<index4>` | `roundId, theme, description, status, submissionDeadline, voteDeadline, playlistUrl`; head-to-head once revealed: `h2hDeparted[]` (who had departed at the reveal) and `h2hTally[]` (`{ matchupId, votesA, votesB }` as the reveal counted them) |
+| Round | `LEAGUE#<leagueId>` | `ROUND#<index4>` | `roundId, theme, description, status, submissionDeadline, voteDeadline, playlistUrl`; head-to-head once revealed: `h2hDeparted[]` (who had departed at the reveal) and `h2hTally[]` (`{ matchupId, votesA, votesB }` as the reveal counted them); standard once revealed: `pointsTally[]` (`{ submissionId, pointsFor, pointsAgainst, distinctVoters }` per song, as the reveal counted them) |
 | Submission | `ROUND#<roundId>` | `SUB#<userId>` | `track{}, submittedAt` |
 | Vote ballot | `ROUND#<roundId>` | `BALLOT#<voterId>` | `allocations{subId:pts}, comments{subId:text}, castAt`; head-to-head: `picks{matchupId:subId}` with `allocations` empty |
 | Standing | `LEAGUE#<leagueId>` | `STANDING#<userId>` | `points` (running season total); `wins, losses, draws` (head-to-head record — absent on older rows, read as 0) |
@@ -292,12 +292,24 @@ Zero-point results bank nothing; negative totals (anti-votes) bank. Of two concu
 (the owner's, or the timed auto-advance run by league reads, ballots and submissions) only the
 one whose write lands banks; the loser re-reads the round strongly consistently and answers the
 same ranked list. A round where nobody scored is just the conditional round write. The payload
-is unchanged: the bare ranked array. **Consistent tally** (BUG-05): both reveals (this one and
-the head-to-head reveal below) tally from a strongly consistent `Query` of the round's `BALLOT#`
-items (`ConsistentRead`). In a timed league the vote that completes the turnout triggers the
-reveal, and a default (eventually consistent) read right after that write could miss it, banking
-— or, head-to-head, pinning — a tally without an acknowledged vote. GET results and the turnout /
-progress counts keep the default read.
+is unchanged: the bare ranked array. **Pinned tally** (BUG-18): the claim also pins the per-song
+tally the list was ranked from — `pointsTally`, one `{ submissionId, pointsFor, pointsAgainst,
+distinctVoters }` per song, zeros included (net points = `pointsFor − pointsAgainst`) — and
+`GET /results`, the reveal page on reload and a reveal that lost its claim all rank from it with
+the same tie-break instead of re-tallying the `BALLOT#` rows (titles, submitters and notes come
+from the live submissions; voter comments still from the live ballot rows, as head to head).
+`castBallot` checks the round is in `voting` and then writes its row without a condition, so a
+ballot can land after the reveal read the ballots — it passed the check just before the reveal,
+or arrived between the reveal's read and its claim. The voter gets `{ ok: true }` and the row is
+stored, but it was never banked, so it never counts: the results always agree with the
+standings. A revealed round without `pointsTally` (seeded, or revealed before the pin existed)
+re-tallies its rows as before. Like the head-to-head pins it rides along on round payloads (the
+frontend ignores it); the results payload is unchanged. **Consistent tally** (BUG-05): both
+reveals (this one and the head-to-head reveal below) tally from a strongly consistent `Query` of
+the round's `BALLOT#` items (`ConsistentRead`). In a timed league the vote that completes the
+turnout triggers the reveal, and a default (eventually consistent) read right after that write
+could miss it, banking and pinning a tally without an acknowledged vote. GET results and the
+turnout / progress counts keep the default read.
 
 **Head-to-head reveal** (same endpoints; `finalizeReveal` / `domain/rules.ts`
 `settleMatchups`): each matchup is tallied from the ballots' `picks` — a pick counts only in a
@@ -327,7 +339,8 @@ at most once.) Every later read uses the pins: the pinned players' songs are wit
 pinned tally decides the outcomes, so results (and `GET /matchups`) read back as banked whatever
 the member list or a ballot written after the reveal read them does afterwards. (Voter comments
 are still read live from the ballot rows.) A standard round's reveal claims and banks through
-the same transaction (`revealPointsRoundOnce`, above) but pins nothing.
+the same transaction (`revealPointsRoundOnce`, above) and pins what it counted the same way: its
+per-song `pointsTally` (above), which every later read ranks from.
 
 The payload (readable by any signed-in user once revealed, like standard results):
 

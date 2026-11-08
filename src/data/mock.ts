@@ -203,6 +203,9 @@ export const rounds: Round[] = [
   // (nothing to deanonymize), so pages must not rely on them. Closing the gap
   // means stripping them in those backend handlers: getLeagueDetail and
   // listMyLeagues in handlers/leagues.ts, and updateRound in handlers/rounds.ts.
+  // The same goes for a revealed standard round's `pointsTally` (BUG-18: the
+  // per-song numbers its reveal banked, which GET results ranks from); the
+  // mock never races a ballot against a reveal, so it doesn't model the pin.
   ...H2H_SEED.rounds.map(({ h2hDeparted: _departed, h2hTally: _tally, ...round }) => round),
 ];
 

@@ -11,6 +11,10 @@
 // BUG-04: a standard round's points are banked exactly once too — racing
 // reveals, stale reveals, failed writes, a submitter's several results summed
 // into one increment — with the payload unchanged.
+// BUG-18: a standard reveal pins the per-song tally it banked on the round,
+// so a ballot landing after the reveal read the ballots can't make GET
+// results (or a lost claim's answer) disagree with the standings; a revealed
+// round without a pin re-tallies; a theme edit keeps the pin.
 // BUG-05 (at the bottom): both reveals tally from a strongly consistent ballot
 // read (GET results keeps the default read), so the ballot that completed a
 // timed round's turnout is counted even when a lagging replica would have
@@ -27,7 +31,7 @@ import type { RandomInt } from "../domain/freeze.ts";
 import { votableMatchups } from "../domain/matchups.ts";
 import type { RoundMatchup, RoundMatchupSet } from "../domain/matchups.ts";
 import { computeResults, finalizeReveal } from "./results.ts";
-import type { HeadToHeadResults, MatchupResult, RoundResultsPayload } from "./results.ts";
+import type { HeadToHeadResults, MatchupResult, RoundResult, RoundResultsPayload } from "./results.ts";
 import type { Deps } from "./leagues.ts";
 import { createLeague, getLeagueDetail, joinLeague, leaveLeague } from "./leagues.ts";
 import { createRound, updateRound } from "./rounds.ts";
@@ -777,11 +781,16 @@ test("a standard round's reveal and results stay the bare RoundResult[] array th
   assert.ok(Array.isArray(revealed));
   assert.equal(JSON.stringify(revealed), expected);
   assert.equal(JSON.stringify(await call("GET", `/rounds/${ROUND}/results`, "u-me")), expected);
-  // Points banked as ever; no W/L/D written, nothing pinned on the round.
+  // Points banked as ever; no W/L/D written, no head-to-head pins — only the
+  // per-song tally the list was ranked from (BUG-18).
   const sarah = (await d.repo.getStandings("lg-test")).find((s) => s.userId === "u-sarah")!;
   assert.deepEqual([sarah.points, sarah.wins, sarah.losses, sarah.draws], [10, 0, 0, 0]);
   assert.equal("h2hDeparted" in (await d.repo.getRound(ROUND))!, false);
   assert.equal("h2hTally" in (await d.repo.getRound(ROUND))!, false);
+  assert.deepEqual((await d.repo.getRound(ROUND))!.pointsTally, [
+    { submissionId: "sub-a", pointsFor: 10, pointsAgainst: 0, distinctVoters: 1 },
+    { submissionId: "sub-b", pointsFor: 0, pointsAgainst: 0, distinctVoters: 0 },
+  ]);
 });
 
 // ---- Standard reveal: points banked exactly once (BUG-04) ----------------------
@@ -865,7 +874,8 @@ test("standard reveal racing another reveal (the owner's, or one through the rou
   assert.equal(JSON.stringify(await getResults(f.deps, SPECTATOR, f.roundId)), expected);
   const stored = (await f.repo.getRound(f.roundId))!;
   assert.equal(stored.status, "revealed");
-  assert.equal("h2hTally" in stored, false, "nothing pinned on a standard round");
+  assert.equal("h2hTally" in stored, false, "no head-to-head pins on a standard round");
+  assert.equal(stored.pointsTally?.length, 3, "the winning claim pinned its per-song tally (BUG-18)");
 
   // Settled: a later reveal is refused and banks nothing.
   await assert.rejects(revealRound(f.deps, OWNER, f.roundId), isStatus(400, /in voting/));
@@ -895,7 +905,7 @@ test("standard: a reveal holding a round read while it was still voting banks no
   assert.equal(stale.status, "revealed", "the caller's copy is brought up to date");
 });
 
-test("standard, submissionsPerPlayer 2 + anti-votes: each player's results bank as ONE increment (their sum) in the claim's write — negative totals included, zero results skipped — and the standings match per-result banking; the round is written as before, just revealed", async () => {
+test("standard, submissionsPerPlayer 2 + anti-votes: each player's results bank as ONE increment (their sum) in the claim's write — negative totals included, zero results skipped — and the standings match per-result banking; the round is written as before, just revealed, with every song's tally pinned", async () => {
   const { castBallot, revealRound } = await import("./voting.ts");
   const f = await pointsRoundInVoting({ songsEach: 2, antiVotes: 2 });
   const [me1, me2] = f.songs.get("u-me")!;
@@ -936,7 +946,20 @@ test("standard, submissionsPerPlayer 2 + anti-votes: each player's results bank 
   for (const r of ranked) if (r.points !== 0) perResult[r.submitter.id]! += r.points;
   assert.deepEqual(await pointsOf(f), perResult);
   assert.deepEqual(await pointsOf(f), { "u-me": 15, "u-sarah": -3, "u-james": 15 });
-  assert.deepEqual(await f.repo.getRound(f.roundId), { ...before, status: "revealed" });
+  // The claim pinned every song's tally (BUG-18), in submission order —
+  // anti-votes and zero rows included — and changed nothing else.
+  const [sarah1] = f.songs.get("u-sarah")!;
+  const tally = (submissionId: string, pointsFor: number, pointsAgainst: number, distinctVoters: number) =>
+    ({ submissionId, pointsFor, pointsAgainst, distinctVoters });
+  assert.deepEqual(await f.repo.getRound(f.roundId), {
+    ...before,
+    status: "revealed",
+    pointsTally: [
+      tally(me1!, 10, 0, 2), tally(me2!, 5, 0, 1),
+      tally(sarah1!, 0, 0, 0), tally(sarah2!, 0, 3, 0),
+      tally(james1!, 10, 0, 2), tally(james2!, 5, 0, 1),
+    ],
+  });
 });
 
 test("standard: a round where nobody scored claims the round and banks nothing; a reveal whose write fails banks nothing and leaves the round in voting — retrying banks it exactly once", async () => {
@@ -1008,6 +1031,137 @@ test("MemoryRepository.revealPointsRoundOnce: claims an unsettled round and bank
   assert.equal(await repo.revealPointsRoundOnce({ ...open, status: "revealed" }), true);
   assert.equal((await repo.getRound(open.id))!.status, "revealed");
   assert.deepEqual(await rows(), ["u-a -1", "u-c 5", "u-b 6"]);
+});
+
+// ---- Standard reveal pins its tally (BUG-18) ----------------------------------
+// A standard reveal banks the points it tallied, so it pins those per-song
+// numbers on the round in the same conditional write (`pointsTally`), as a
+// head-to-head reveal pins `h2hTally`. GET results, the reveal page on reload
+// and a lost claim's answer rank from the pin, so a ballot row written after
+// the reveal read the ballots — racing its write, or one that passed
+// castBallot's voting check just before it — is stored but can never make
+// the results disagree with the standings. A revealed round without a pin
+// (seeded, or revealed before the pin existed) re-tallies its rows as before.
+
+/** A standard round's results payload: the bare ranked list. */
+function ranked(payload: RoundResultsPayload): RoundResult[] {
+  assert.ok(Array.isArray(payload), "a standard round answers the bare array");
+  return payload;
+}
+/** `[rank, title, points]` per result, in ranked order. */
+const ranking = (results: RoundResult[]) => results.map((r) => [r.rank, r.track.title, r.points]);
+
+test("standard reveal pins its tally (BUG-18): a ballot written between the reveal's ballot read and its write, or one that passed castBallot's voting check just before the reveal and lands after it, changes neither the banked points nor GET results nor a lost claim's answer", async () => {
+  const { castBallot, revealRound, getResults } = await import("./voting.ts");
+  const f = await pointsRoundInVoting();
+  const stale = (await f.repo.getRound(f.roundId))!; // a voter's copy, read while voting
+  const song = (p: string) => f.songs.get(p)![0]!;
+  await castBallot(f.deps, "u-me", f.roundId, { allocations: { [song("u-sarah")]: 5, [song("u-james")]: 5 } });
+
+  // A ballot lands while the reveal is under way: after it read the ballots, before its write.
+  const racing = withRepo(f, {
+    revealPointsRoundOnce: async (round, points) => {
+      await f.repo.putBallot({
+        roundId: f.roundId, voterId: "u-sarah", allocations: { [song("u-me")]: 5, [song("u-james")]: 5 },
+        castAt: new Date().toISOString(),
+      });
+      return f.repo.revealPointsRoundOnce(round, points);
+    },
+  });
+  const revealed = ranked(await revealRound(racing, OWNER, f.roundId));
+  assert.deepEqual(ranking(revealed), [[1, "u-james song 1", 5], [2, "u-sarah song 1", 5], [3, "u-me song 1", 0]]);
+  const banked = await pointsOf(f);
+  assert.deepEqual(banked, { "u-me": 0, "u-sarah": 5, "u-james": 5 });
+  // One entry per song of the round, in the order the reveal read them, zeros included.
+  assert.deepEqual((await f.repo.getRound(f.roundId))!.pointsTally, [
+    { submissionId: song("u-me"), pointsFor: 0, pointsAgainst: 0, distinctVoters: 0 },
+    { submissionId: song("u-sarah"), pointsFor: 5, pointsAgainst: 0, distinctVoters: 1 },
+    { submissionId: song("u-james"), pointsFor: 5, pointsAgainst: 0, distinctVoters: 1 },
+  ]);
+  // Sarah's racing row alone already changes a re-tally; GET results keeps the reveal's answer.
+  assert.deepEqual(
+    ranking(await computeResults(f.deps, f.roundId)),
+    [[1, "u-james song 1", 10], [2, "u-me song 1", 5], [3, "u-sarah song 1", 5]],
+    "re-tallying the rows after the racing ballot would rank the round differently",
+  );
+  assert.equal(JSON.stringify(await getResults(f.deps, SPECTATOR, f.roundId)), JSON.stringify(revealed));
+
+  // A voter whose castBallot read the round before the reveal: its check
+  // passes and the ballot row is written after the reveal.
+  const late = withRepo(f, { getRound: async () => structuredClone(stale) });
+  assert.deepEqual(
+    await castBallot(late, "u-james", f.roundId, { allocations: { [song("u-me")]: 5, [song("u-sarah")]: 5 } }),
+    { ok: true },
+  );
+  assert.equal((await f.repo.getBallotsForRound(f.roundId)).length, 3, "both late ballots are stored");
+  assert.deepEqual(
+    ranking(await computeResults(f.deps, f.roundId)),
+    [[1, "u-james song 1", 10], [2, "u-me song 1", 10], [3, "u-sarah song 1", 10]],
+    "re-tallying the rows now would rank the round differently",
+  );
+
+  // The pinned tally keeps the banked ranking: GET results (the reveal page
+  // on reload, through the route table too) and a reveal that loses its
+  // claim answer exactly what the reveal answered.
+  assert.equal(JSON.stringify(await getResults(f.deps, SPECTATOR, f.roundId)), JSON.stringify(revealed));
+  const match = matchRoute(buildRoutes(f.deps), "GET", `/rounds/${f.roundId}/results`)!;
+  assert.equal(
+    JSON.stringify(await match.route.handler({ caller: "u-james", params: match.params, query: {}, body: undefined })),
+    JSON.stringify(revealed),
+  );
+  const loser = structuredClone(stale);
+  assert.equal(JSON.stringify(await finalizeReveal(f.deps, loser)), JSON.stringify(revealed));
+  assert.equal(loser.status, "revealed");
+  assert.deepEqual(await pointsOf(f), banked, "the standings are unchanged");
+  assert.deepEqual(
+    Object.fromEntries(ranked(await getResults(f.deps, SPECTATOR, f.roundId)).map((r) => [r.submitter.id, r.points])),
+    banked,
+    "the standings and the results agree",
+  );
+});
+
+test("standard: a revealed round without a pinned tally (seeded, or revealed before BUG-18) still re-tallies its ballot rows, exactly as before", async () => {
+  const { getResults } = await import("./voting.ts");
+  const f = await pointsRoundInVoting();
+  const song = (p: string) => f.songs.get(p)![0]!;
+  await twoBallots(f);
+  const round = (await f.repo.getRound(f.roundId))!;
+  await f.repo.updateRound({ ...round, status: "revealed" }); // nothing pinned
+  assert.equal("pointsTally" in (await f.repo.getRound(f.roundId))!, false);
+  assert.equal(JSON.stringify(await getResults(f.deps, SPECTATOR, f.roundId)), JSON.stringify(await computeResults(f.deps, f.roundId)));
+  assert.deepEqual(ranking(ranked(await getResults(f.deps, SPECTATOR, f.roundId))), [
+    [1, "u-james song 1", 10], [2, "u-me song 1", 5], [3, "u-sarah song 1", 5],
+  ]);
+
+  // A ballot row written afterwards counts, as it always did there.
+  await f.repo.putBallot({
+    roundId: f.roundId, voterId: "u-james", allocations: { [song("u-me")]: 5, [song("u-sarah")]: 5 },
+    castAt: new Date().toISOString(),
+  });
+  assert.deepEqual(ranking(ranked(await getResults(f.deps, SPECTATOR, f.roundId))), [
+    [1, "u-james song 1", 10], [2, "u-me song 1", 10], [3, "u-sarah song 1", 10],
+  ]);
+});
+
+test("standard: editing a revealed round (a theme fix) keeps its pinned tally, so its results still read back as banked", async () => {
+  const { revealRound, getResults } = await import("./voting.ts");
+  const f = await pointsRoundInVoting();
+  const song = (p: string) => f.songs.get(p)![0]!;
+  await twoBallots(f);
+  const revealed = await revealRound(f.deps, OWNER, f.roundId);
+  const settled = (await f.repo.getRound(f.roundId))!;
+  assert.equal(settled.pointsTally?.length, 3);
+
+  const edited = await updateRound(f.deps, OWNER, f.leagueId, f.roundId, { theme: "Renamed" });
+  assert.deepEqual(edited, { ...settled, theme: "Renamed" });
+  assert.deepEqual(await f.repo.getRound(f.roundId), { ...settled, theme: "Renamed" }, "the pin survives the edit");
+
+  // A ballot row that raced the reveal still doesn't count.
+  await f.repo.putBallot({
+    roundId: f.roundId, voterId: "u-james", allocations: { [song("u-me")]: 5, [song("u-sarah")]: 5 },
+    castAt: new Date().toISOString(),
+  });
+  assert.equal(JSON.stringify(await getResults(f.deps, SPECTATOR, f.roundId)), JSON.stringify(revealed));
 });
 
 // ---- Both reveals tally from a strongly consistent ballot read (BUG-05) -------

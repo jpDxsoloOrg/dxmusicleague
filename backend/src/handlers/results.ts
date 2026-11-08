@@ -25,9 +25,23 @@
 // (BUG-05): `getBallotsForRound(…, { consistent: true })`. In a timed league
 // the last voter's ballot write is what triggers the reveal (the
 // everyone-voted check saw it), and a default — eventually consistent — read
-// right after can be served without it; the reveal would then pin (H2H) or
-// bank (standard) a tally missing an acknowledged vote, for good. GET
-// results, turnout and progress reads keep the default read.
+// right after can be served without it; the reveal would then pin and bank
+// a tally missing an acknowledged vote, for good. GET results, turnout and
+// progress reads keep the default read.
+//
+// What a reveal tallies, in both formats, it also pins on the round in that
+// same claiming write — the H2H matchup tally (`h2hTally`, HTH-07), a
+// standard round's per-song tally (`pointsTally`, BUG-18) — and every later
+// read of the revealed round (GET results, the reveal page on reload, a
+// reveal that lost its claim) ranks from the pin, not from the ballot rows.
+// castBallot checks the round is in voting, then writes its row without a
+// condition, so a ballot can land after the reveal read the ballots — it
+// passed the check just before the reveal, or arrived between the reveal's
+// read and its write. The voter gets 200 and the row is stored, but it was
+// never banked; re-tallying the rows would rank the round differently from
+// the standings, for good. Voter comments are still read live from the
+// rows. A revealed round without a pin (seeded data, or revealed before the
+// pin existed) re-tallies, as before.
 //
 // Wire compatibility for the live beta: a standard round's results stay the
 // bare `RoundResult[]` array, byte for byte, on both GET results and the
@@ -36,12 +50,12 @@
 // matchups, bye }`; the frontend data layer (HTH-09) normalizes the two into
 // its own `{ format, ... }` union.
 
-import type { Ballot, League, Round, Submission, Track } from "../domain/types.ts";
+import type { Ballot, League, Round, SongTally, Submission, Track } from "../domain/types.ts";
 import { leagueFormat } from "../domain/types.ts";
 import { conflict, notFound } from "../domain/errors.ts";
 import { compareMatchupIds } from "../domain/schedule.ts";
 import { departedParticipants } from "../domain/matchups.ts";
-import { matchupRecords, rankSubmissions, resolveMatchups, settleMatchups, tallyBallots, tallyMatchups } from "../domain/rules.ts";
+import { matchupRecords, rankSubmissions, resolveMatchups, settleMatchups, tallyMatchups, tallySongs } from "../domain/rules.ts";
 import type { MatchupOutcome, SettledRound, SettledSide } from "../domain/rules.ts";
 import { revealPointDeltas } from "../domain/standings.ts";
 import { loadRoundMatchups } from "./matchups.ts";
@@ -66,32 +80,56 @@ export interface RoundResult {
   comments: VoterComment[];
 }
 
-/** Tally ballots, rank with the tie-break, attach submitter names and voter
- *  comments. Used by reveal and GET results — a standard (points) round's
- *  results; the format dispatch is in `finalizeReveal` / `roundResults`, so
- *  this stays exactly the original ranked-list computation. `read.consistent`
- *  reads the ballots strongly consistently — only the reveal's tally, which
- *  banks (BUG-05); every other caller keeps the default read. */
+/** A standard (points) round's results as a revealed round reads them: rank
+ *  with the tie-break, attach submitter names and voter comments. Serves GET
+ *  results and the answer of a reveal that lost its claim; the format
+ *  dispatch is in `finalizeReveal` / `roundResults`. The ballots are read the
+ *  default way: the reveal's own tally, which banks and pins, reads them
+ *  strongly consistently itself (`finalizeReveal`, BUG-05) and ranks with
+ *  `rankResults` directly. `pinned` is a revealed round's pinned tally
+ *  (`Round.pointsTally`, BUG-18): the songs are ranked from it instead of
+ *  from the ballot rows, which are then read only for the voter comments.
+ *  Without a pin (seeded data, or a round revealed before the pin existed)
+ *  the rows are re-tallied, exactly the original ranked-list computation.
+ *  Titles, submitters and notes always come from the live submissions. */
 export async function computeResults(
   deps: Deps,
   roundId: string,
-  read?: { consistent?: boolean },
+  pinned?: readonly SongTally[],
 ): Promise<RoundResult[]> {
   const subs = await deps.repo.getSubmissionsForRound(roundId);
-  const ballots = await deps.repo.getBallotsForRound(roundId, read);
-  const tally = tallyBallots(ballots.map((b) => ({ allocations: b.allocations, downvotes: b.downvotes })));
+  const ballots = await deps.repo.getBallotsForRound(roundId);
+  return rankResults(deps, subs, pinned ?? tallySongs(subs.map((s) => s.id), ballots), ballots);
+}
 
+/** A standard round's ranked list from a per-song tally (the reveal's own,
+ *  or the one it pinned): the songs ranked with the fixed tie-break
+ *  (`rankSubmissions`: points → distinct voters → title), named, with the
+ *  submitter's note and every voter comment from `ballots`. A song the tally
+ *  doesn't list scores zero. */
+async function rankResults(
+  deps: Deps,
+  subs: Submission[],
+  tally: readonly SongTally[],
+  ballots: Ballot[],
+): Promise<RoundResult[]> {
+  const bySong = new Map(tally.map((t) => [t.submissionId, t]));
   const ranked = rankSubmissions(
-    subs.map((s) => ({
-      submissionId: s.id,
-      title: s.track.title,
-      points: tally.get(s.id)?.points ?? 0,
-      distinctVoters: tally.get(s.id)?.distinctVoters ?? 0,
-      pointsFor: tally.get(s.id)?.pointsFor ?? 0,
-      pointsAgainst: tally.get(s.id)?.pointsAgainst ?? 0,
-      userId: s.userId,
-      track: s.track,
-    })),
+    subs.map((s) => {
+      const t = bySong.get(s.id);
+      const pointsFor = t?.pointsFor ?? 0;
+      const pointsAgainst = t?.pointsAgainst ?? 0;
+      return {
+        submissionId: s.id,
+        title: s.track.title,
+        points: pointsFor - pointsAgainst,
+        distinctVoters: t?.distinctVoters ?? 0,
+        pointsFor,
+        pointsAgainst,
+        userId: s.userId,
+        track: s.track,
+      };
+    }),
   );
 
   const noteBySubmission = new Map(subs.map((s) => [s.id, s.comment]));
@@ -142,19 +180,25 @@ export interface FinalizeRevealOptions {
  * its points — each submitter's results summed into one increment, zero
  * results skipped, negative totals banked (`revealPointDeltas`) — bank in the
  * SAME atomic write that claims the round (`revealPointsRoundOnce`, landing
- * only while the stored round is unsettled). Two reveals racing, each holding
- * a copy read while the round was voting, both tally, but only the one whose
- * write lands banks; the other banks nothing, re-reads the round strongly
- * consistently and answers with its ranked list — the same `computeResults`
- * the winner answered and GET results serves. (In DynamoDB the two claims'
- * transactions can overlap; the repository sends the one refused for that
- * conflict again, so it too resolves as a lost claim, not an error.) A
- * write that fails for any other reason banks nothing and throws.
+ * only while the stored round is unsettled). That write also pins the
+ * per-song tally the list was ranked from (`pointsTally`, BUG-18), so GET
+ * results and every later read rank exactly what was banked: a ballot that
+ * lands after this read the ballots — one that passed castBallot's status
+ * check just before the reveal, or was written between this read and the
+ * claim — is stored but never counted. Two reveals racing, each holding a
+ * copy read while the round was voting, both tally, but only the one whose
+ * write lands banks and pins; the other banks nothing, re-reads the round
+ * strongly consistently and answers with its ranked list from the winner's
+ * pin — the list the winner answered and GET results serves. (In DynamoDB
+ * the two claims' transactions can overlap; the repository sends the one
+ * refused for that conflict again, so it too resolves as a lost claim, not
+ * an error.) A write that fails for any other reason banks nothing and
+ * throws.
  *
  * The tally reads the ballots strongly consistently (BUG-05): when the last
  * vote of a timed round triggered this reveal, an eventually consistent read
- * could miss that ballot and bank points without it, while GET results
- * (re-tallied live) counted it. The lost-claim answer is GET results' list,
+ * could miss that ballot and bank (and pin) points without it. The
+ * lost-claim answer is GET results' list, its ballots (for the comments)
  * read the default way like GET results.
  */
 export async function finalizeReveal(
@@ -165,27 +209,31 @@ export async function finalizeReveal(
   const league = await deps.repo.getLeague(round.leagueId);
   if (league && leagueFormat(league) === "headToHead") return finalizeHeadToHeadReveal(deps, league, round, options);
 
-  const results = await computeResults(deps, round.id, { consistent: true });
+  const subs = await deps.repo.getSubmissionsForRound(round.id);
+  const ballots = await deps.repo.getBallotsForRound(round.id, { consistent: true });
+  const pointsTally = tallySongs(subs.map((s) => s.id), ballots);
+  const results = await rankResults(deps, subs, pointsTally, ballots);
   const points = revealPointDeltas(results.map((r) => ({ userId: r.submitter.id, points: r.points })));
-  const claimed: Round = { ...round, status: "revealed" };
+  const claimed: Round = { ...round, status: "revealed", pointsTally };
   if (!(await deps.repo.revealPointsRoundOnce(claimed, points))) {
     // Another reveal settled it first (or it's gone): nothing was banked.
     const stored = await deps.repo.getRound(round.id, { consistent: true });
     if (!stored) throw notFound("That round doesn't exist.");
     Object.assign(round, stored);
-    return computeResults(deps, round.id);
+    return computeResults(deps, stored.id, stored.pointsTally);
   }
-  round.status = "revealed";
+  Object.assign(round, claimed);
   return results;
 }
 
 /** Any revealed round's results, as GET results and the reveal answer them:
- *  the standard ranked list (the bare array, unchanged) or, for a
- *  head-to-head league, the matchup payload. */
+ *  the standard ranked list (the bare array, unchanged; ranked from the
+ *  reveal's pinned tally when it has one, BUG-18) or, for a head-to-head
+ *  league, the matchup payload. */
 export async function roundResults(deps: Deps, round: Round): Promise<RoundResultsPayload> {
   const league = await deps.repo.getLeague(round.leagueId);
   if (league && leagueFormat(league) === "headToHead") return headToHeadResults(deps, league, round);
-  return computeResults(deps, round.id);
+  return computeResults(deps, round.id, round.pointsTally);
 }
 
 // ---- Head-to-head (HTH-07) -------------------------------------------------

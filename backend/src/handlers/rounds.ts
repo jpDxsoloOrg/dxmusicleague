@@ -202,16 +202,17 @@ export async function updateRound(
   }
 
   // An edit built from a round read before its reveal must not be written
-  // back over the reveal — it would put the round back in voting (and, head
-  // to head, drop the reveal's pins h2hDeparted / h2hTally), letting a second
-  // reveal bank its W/L/D (HTH-07) or points (BUG-04) twice: say, an owner
-  // extending the vote deadline just as it expires while a member's page load
-  // reveals the round. So such a write lands only while the round is still
-  // unsettled; if a reveal got there first, the edit is refused. (The write
-  // is refused too if the league was deleted under this PATCH — it never
-  // recreates a deleted round — so a refusal checks which: 404 if the round
-  // is gone.) An edit of a round read already settled (a theme fix after
-  // the reveal) is an ordinary write, as before.
+  // back over the reveal — it would put the round back in voting (and drop
+  // the reveal's pins: h2hDeparted / h2hTally head to head, pointsTally on a
+  // standard round), letting a second reveal bank its W/L/D (HTH-07) or
+  // points (BUG-04) twice: say, an owner extending the vote deadline just as
+  // it expires while a member's page load reveals the round. So such a write
+  // lands only while the round is still unsettled; if a reveal got there
+  // first, the edit is refused. (The write is refused too if the league was
+  // deleted under this PATCH — it never recreates a deleted round — so a
+  // refusal checks which: 404 if the round is gone.) An edit of a round read
+  // already settled (a theme fix after the reveal) is an ordinary write, as
+  // before, and keeps the pins.
   if (!settledWhenRead) {
     if (!(await deps.repo.updateRoundUnlessSettled(round))) {
       if (!(await deps.repo.getRound(round.id, { consistent: true }))) throw notFound("That round doesn't exist.");

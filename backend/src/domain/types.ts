@@ -147,6 +147,36 @@ export interface Round {
    *  and on standard rounds; a revealed round without it (hand-made data)
    *  re-tallies. Public once revealed, like `h2hDeparted`. */
   h2hTally?: MatchupTally[];
+  /** Standard (points) rounds only (BUG-18): each song's numbers as the
+   *  reveal counted them — pinned in the same conditional write that settles
+   *  the round and banks those points (`finalizeReveal`, handlers/results.ts;
+   *  `revealPointsRoundOnce`). One entry per song the reveal ranked, zeros
+   *  included. GET results, the reveal page on reload and a reveal that lost
+   *  its claim rank from these instead of re-tallying the ballot rows, so a
+   *  ballot that lands after the reveal read them (one that passed
+   *  castBallot's status check just before the reveal, or was written
+   *  between the reveal's read and its write) can never make the results
+   *  disagree with the banked standings. Unset before the reveal and on
+   *  head-to-head rounds; a revealed round without it (seeded data, or one
+   *  revealed before the pin existed) re-tallies, as before. Public once
+   *  revealed — the results show the same numbers, plus a distinct-voter
+   *  count — so it rides along on round payloads; the frontend ignores it. */
+  pointsTally?: SongTally[];
+}
+
+/** One song's tally in a standard round (BUG-18; the domain tally is
+ *  `tallySongs` in domain/rules.ts): what the ranked results show for it and
+ *  what the tie-break reads. The net total is `pointsFor − pointsAgainst`. */
+export interface SongTally {
+  /** The song's submission id — what ballot allocations are keyed by. */
+  submissionId: string;
+  /** Sum of positive votes. */
+  pointsFor: number;
+  /** Sum of anti-votes (as a positive number; 0 when none). */
+  pointsAgainst: number;
+  /** Count of distinct voters who placed > 0 points on the song — the
+   *  first tie-break after points. */
+  distinctVoters: number;
 }
 
 /** Picks counted for each side of one head-to-head matchup (HTH-07; the

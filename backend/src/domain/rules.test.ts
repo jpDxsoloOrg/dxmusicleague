@@ -2,8 +2,9 @@
 // Proves "the server is the referee" logic in isolation: points ballots (the
 // effective pool, BUG-02; the self-vote rule over every own song, BUG-11, in
 // every league whatever a legacy row's `allowSelfVote` says, BUG-17) and
-// their tally, head-to-head ballots (HTH-06), and the head-to-head tally,
-// outcomes and the W/L/D each reveal banks (HTH-07).
+// their tally (and the per-song tally a standard reveal pins, BUG-18),
+// head-to-head ballots (HTH-06), and the head-to-head tally, outcomes and the
+// W/L/D each reveal banks (HTH-07).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -16,6 +17,7 @@ import {
   settleMatchups,
   tallyBallots,
   tallyMatchups,
+  tallySongs,
   validateBallot,
   validateH2HBallot,
 } from "./rules.ts";
@@ -238,6 +240,28 @@ test("anti-votes: optional up to the pool, subtract at tally, negatives allowed"
   ]);
   assert.deepEqual(tally.get("b"), { points: -3, distinctVoters: 0, pointsFor: 0, pointsAgainst: 3 });
   assert.deepEqual(tally.get("a"), { points: 5, distinctVoters: 1, pointsFor: 5, pointsAgainst: 0 });
+});
+
+test("tallySongs (BUG-18): tallyBallots per song, one entry per given song in its order — zeros for a song nobody voted for, anti-votes kept apart, allocations to any other id left out", () => {
+  const ballots: Array<{ allocations: Record<string, number>; downvotes?: Record<string, number> }> = [
+    { allocations: { b: 5, a: 3, stray: 2 } },
+    { allocations: { b: 4, c: 0 }, downvotes: { a: 2, c: 1 } },
+    { allocations: {} },
+  ];
+  const songs = tallySongs(["c", "a", "b", "d"], ballots);
+  assert.deepEqual(songs, [
+    { submissionId: "c", pointsFor: 0, pointsAgainst: 1, distinctVoters: 0 },
+    { submissionId: "a", pointsFor: 3, pointsAgainst: 2, distinctVoters: 1 },
+    { submissionId: "b", pointsFor: 9, pointsAgainst: 0, distinctVoters: 2 },
+    { submissionId: "d", pointsFor: 0, pointsAgainst: 0, distinctVoters: 0 },
+  ]);
+  // The same numbers tallyBallots counts: net = pointsFor − pointsAgainst.
+  const tally = tallyBallots(ballots);
+  for (const s of songs.slice(0, 3)) {
+    const t = tally.get(s.submissionId)!;
+    assert.deepEqual([s.pointsFor - s.pointsAgainst, s.distinctVoters, s.pointsFor, s.pointsAgainst], [t.points, t.distinctVoters, t.pointsFor, t.pointsAgainst]);
+  }
+  assert.deepEqual(tallySongs([], ballots), []);
 });
 
 // ---- Head-to-head ballots: validateH2HBallot (HTH-06) ----------------------
