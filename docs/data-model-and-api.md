@@ -1,9 +1,11 @@
 # Phase 2 — Data Model & API Contract
 
-> Design doc for the backend that replaces the in-memory mock store
-> ([src/data/mock.ts](../src/data/mock.ts)). Encodes the game rules decided in
-> June 2026 (see `musicLeagueClone.md` §7 "Game Rules") as server-side validation.
-> Nothing here is built yet — this is the contract the frontend already expects.
+> Design doc for the backend API. Encodes the game rules decided in June 2026 (see
+> `musicLeagueClone.md` §7 "Game Rules") as server-side validation. Built: the backend in
+> [backend/](../backend/README.md) implements it (one set of handlers over a `Repository`
+> port — in memory locally, DynamoDB on AWS), and the frontend reaches it through
+> [src/data/apiClient.ts](../src/data/apiClient.ts) (§4). The head-to-head format's design
+> notes are in [plans/head-to-head-format.md](plans/head-to-head-format.md).
 
 ## Principles
 
@@ -142,6 +144,10 @@ All routes require a valid Cognito JWT. `:me` denotes the caller's `sub`. Errors
 `{ "error": "<message>" }` with a 4xx status; the join flow's messages match
 [`joinLeague`](../src/data/mock.ts) today. A few errors add machine-readable fields beside
 `error` (a `code`, plus whatever it names); clients branch on `code`, never on the message.
+The tables name the routes that matter to the game rules, not all of them;
+[backend/src/http/routes.ts](../backend/src/http/routes.ts) is the full list. In the prose,
+`GET /submissions`, `GET /matchups` and `GET /results` are short for the round's
+`/rounds/{roundId}/…` routes.
 
 ### Leagues
 
@@ -160,16 +166,26 @@ All routes require a valid Cognito JWT. `:me` denotes the caller's `sub`. Errors
   `code: "already-member"` and the `leagueId` (the client opens that league); a frozen head-to-head
   season → 409 "Season locked — …" (see [Head-to-head season freeze](#head-to-head-season-freeze));
   else write Membership + Standing(0) and return the league.
-- **Summary** fields (`currentRound`, `totalRounds`, `completionPct`, `members`) are computed
-  in the Lambda from the league's rounds + memberships; `completionPct` becomes real
-  (votes-cast / members for voting rounds) instead of the mock's hardcoded map.
+- **Summary** fields (`currentRound`, `totalRounds`, `completionPct`, `members`, `finished`) are
+  computed in the Lambda from the league's rounds + memberships. `completionPct` is real (the
+  frontend mock keeps a hardcoded map for its points leagues) and counts current members only:
+  for a submitting round, members' songs (each up to the allowance) / slots; for a voting round,
+  members with a ballot / members; 100 once revealed, 0 otherwise. **Head-to-head** counts its
+  own people: while submitting, members with their one song / members; while voting, **voted /
+  eligible** — the members who have picked in every matchup they can vote in, out of the members
+  with a matchup to pick in (100 when nobody can vote; `headToHeadCompletionPct` in
+  `backend/src/handlers/leagues.ts`). The design notes in
+  [plans/head-to-head-format.md](plans/head-to-head-format.md) cover the
+  [turnout](plans/head-to-head-format.md#progression-completion--and-departures-hth-08) behind
+  it, and [when the who-voted panel and the activity feed may name head-to-head
+  voters](plans/head-to-head-format.md#who-voted-panel-and-anonymity).
 
 ### Rounds (owner-only writes)
 
 | Method | Path | Body | Notes |
 |---|---|---|---|
 | `POST` | `/leagues/{leagueId}/rounds` | `{ theme, description?, submissionDeadline?, voteDeadline? }` | Creates a `draft` round, `index = max+1`. |
-| `PATCH` | `/leagues/{leagueId}/rounds/{roundId}` | `{ status?, theme?, ...deadlines }` | Drives the `draft → submitting → voting → revealed` lifecycle. |
+| `PATCH` | `/leagues/{leagueId}/rounds/{roundId}` | `{ status?, theme?, ...deadlines }` | Drives the `draft → submitting → previewing → voting → revealed` lifecycle. |
 
 Status transitions are validated (no skipping/reversing). `revealed` is reached only via the
 reveal endpoint below, not a raw PATCH. A PATCH that read the round before it was revealed is
@@ -184,13 +200,15 @@ that read the round already revealed (a theme fix) is an ordinary write.
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| `POST` | `/rounds/{roundId}/submission` | `{ track }` | `Submission` |
+| `POST` | `/rounds/{roundId}/submission` | `{ track, comment? }` | `Submission` |
 | `GET` | `/rounds/{roundId}/submissions` | — | `VotableSubmission[]` (anonymized) |
 
 `POST` validations: caller is a league member; round status is `submitting`; submission
-deadline not passed. Upserts `SUB#<me>` (re-submit overwrites). `GET` returns the anonymized
-list **excluding the caller's own pick**, only once submissions close (`previewing` or
-`voting`). The list is in submission-id order, never the order the repository reads in: that
+deadline not passed; not a song, or an artist, already in the round (400). With
+`submissionsPerPlayer` 1 a re-submit replaces the pick (same id); otherwise each submit adds
+one, up to the allowance (400 at the cap — remove a pick to change it). `GET` returns the
+anonymized list **excluding the caller's own pick**, only once submissions close (`previewing`
+or `voting`). The list is in submission-id order, never the order the repository reads in: that
 follows the submitter (insertion time in memory, user id via DynamoDB's `SUB#<userId>#<subId>`
 key), so it would say whose song is whose. The round's public Spotify playlist lists its tracks
 in the same order.
@@ -246,8 +264,9 @@ the row.
 
 **Reveal** (owner triggers once): tally points per submission from all ballots, rank with the
 fixed tie-break (points → distinct voters → title), increment each member's `STANDING#`
-total, create the Spotify playlist on the host account (§3), store `playlistUrl` on the round,
-set status `revealed`. `GET /results` is the read side — available only once `revealed`, and
+total, set status `revealed` (the Spotify playlist was made earlier, when submissions closed —
+see [Music provider proxy](#music-provider-proxy)). `GET /results` is the read side — available
+only once `revealed`, and
 returns submitters, points, ranks, and all voter comments (matching
 [`getRoundResults`](../src/data/mock.ts)). **Exactly once** (BUG-04): the claim and the banking
 are ONE atomic write (`revealPointsRoundOnce` — the same `TransactWriteItems` as the
@@ -350,10 +369,11 @@ Non-members before the reveal → 403; a standard league's round → 400.
 
 ### Standings
 
-`GET /leagues/{leagueId}/standings → Standing[]` (also embedded in `LeagueDetail`). Reads the
-`STANDING#` items, sorts them in the league format's board order (below), assigns rank.
-Maintained incrementally at reveal, so this is a cheap single-partition query — no
-recomputation over all votes.
+No route of their own: the board comes embedded in the league detail,
+`GET /leagues/{leagueId}` → `LeagueDetail.standings` (`Standing[]`; the frontend's
+`getStandings` reads it from there). It reads the `STANDING#` items, sorts them in the league
+format's board order (below), assigns rank. Maintained incrementally at reveal, so this is a
+cheap single-partition query — no recomputation over all votes.
 
 Every `Standing` row carries `points` **and** a `wins`/`losses`/`draws` record (the side a
 league's format doesn't use is 0). Head-to-head leagues rank by wins desc → losses asc →
@@ -369,13 +389,22 @@ before head-to-head existed have no such attributes and read back as 0–0–0 (
 
 | Method | Path | Returns |
 |---|---|---|
-| `GET` | `/providers/{provider}/search?q=&market=&limit=` | `Track[]` |
+| `GET` | `/spotify/search?q=&market=&limit=` | `{ tracks }` — simplified tracks the Spotify provider maps to `Track` |
 
-Backs [`MusicProvider.searchTracks`](../src/music/types.ts). For Spotify: Client Credentials
-token (cached, app-level), `GET /v1/search?type=track`, **limit capped at 10** per the Feb 2026
-change, normalized to `Track`. `client_secret` lives in Secrets Manager and never leaves the
-Lambda. Playlist creation is **not** a public route — it runs inside `/reveal` using the host
-account's refresh token (`POST /me/playlists`, `POST /playlists/{id}/items`).
+Backs [`MusicProvider.searchTracks`](../src/music/types.ts) for Spotify leagues: Client
+Credentials token (cached, app-level), Spotify's `GET /v1/search?type=track`, **limit capped at
+10** per the Feb 2026 change; an empty `q` returns no tracks. Search needs only the client id
+and secret; playlist creation (below) also needs the host account's refresh token. All three
+live in Secrets Manager (`SPOTIFY_SECRET_ID` names a secret holding
+`{ clientId, clientSecret, refreshToken }`; locally, the `SPOTIFY_CLIENT_ID` /
+`SPOTIFY_CLIENT_SECRET` / `SPOTIFY_REFRESH_TOKEN` env vars, which win when the first two are set)
+and never leave the Lambda. The backend has no YouTube Music route: its search is served by the
+Vite dev plugin's `/youtube-music/*` endpoints ([vite-plugin-ytmusic.ts](../vite-plugin-ytmusic.ts)),
+so it runs in `vite dev` only. Playlist creation is **not** a public route — it runs when a
+Spotify league's round leaves `submitting` for `previewing` (the owner's PATCH or the timed
+auto-advance), best-effort (a Spotify failure doesn't block the round), using the host account's
+refresh token (Spotify's `POST /me/playlists`, `POST /playlists/{id}/items`), and stores
+`playlistUrl` on the round.
 
 ---
 
@@ -383,26 +412,32 @@ account's refresh token (`POST /me/playlists`, `POST /playlists/{id}/items`).
 
 - `client_id`, `client_secret`, host **refresh token** → Secrets Manager / SSM. Never the browser.
 - Reuse the exact call patterns proven in `spotify_search.sh` / `spotify_playlist.mjs`.
-- Host account must keep **Premium** active, or playlist creation fails at reveal.
+- Host account must keep **Premium** active, or playlist creation fails when submissions close.
 
 ---
 
 ## 4. Frontend swap map
 
-Each mock function becomes one fetch. Keeping the return shapes identical means the pages
-don't change — only [src/data/mock.ts](../src/data/mock.ts) is replaced by an API client.
+Done. Pages call a `DataClient` ([src/data/client.ts](../src/data/client.ts)), and
+[src/data/index.ts](../src/data/index.ts) picks the implementation: `ApiClient`
+([src/data/apiClient.ts](../src/data/apiClient.ts)), one fetch per method, when `VITE_API_URL`
+is set; otherwise `MockClient` over the in-memory store in [src/data/mock.ts](../src/data/mock.ts).
+Both resolve to the same view-model shapes, so the pages don't change. The main methods:
 
-| Mock function | Endpoint |
+| `DataClient` method | Endpoint |
 |---|---|
 | `getMyLeagueSummaries()` | `GET /leagues` |
-| `getLeagueDetail(id)` | `GET /leagues/{id}` |
+| `getLeagueDetail(leagueId)` | `GET /leagues/{id}` |
 | `createLeague(input)` | `POST /leagues` |
 | `joinLeague(code)` | `POST /leagues/join` |
-| `getVotableSubmissions(id)` | `GET /rounds/{roundId}/submissions` |
-| `saveVoteComments(...)` → real ballot | `POST /rounds/{roundId}/ballot` |
-| `getRoundResults(id)` | `GET /rounds/{roundId}/results` |
-| `getStandings(id)` | `GET /leagues/{id}/standings` |
-| provider search (SubmitSongPage) | `GET /providers/{provider}/search` |
+| `getStandings(leagueId)` | `GET /leagues/{id}` (`.standings`) |
+| `getVotableSubmissions(roundId)` | `GET /rounds/{roundId}/submissions` |
+| `castBallot(roundId, allocations, comments?, downvotes?)` | `POST /rounds/{roundId}/ballot` (`allocations`) |
+| `castMatchupBallot(roundId, picks, comments?)` | `POST /rounds/{roundId}/ballot` (`picks`) |
+| `getMyBallot(roundId)` | `GET /rounds/{roundId}/my-ballot` |
+| `getMatchups(roundId)` | `GET /rounds/{roundId}/matchups` |
+| `getResults(roundId)` | `GET /rounds/{roundId}/results` |
+| provider search (SubmitSongPage; the Spotify `MusicProvider`, not a `DataClient` method) | `GET /spotify/search` |
 
 ---
 
@@ -414,3 +449,6 @@ don't change — only [src/data/mock.ts](../src/data/mock.ts) is replaced by an 
 4. Ballot validation + reveal/tally + standings — the rules engine.
 5. Spotify proxy: search first (Client Credentials), then playlist-on-reveal (host token).
 6. Swap `mock.ts` for the API client behind the existing page components.
+
+All six are built. The one change of plan: the round playlist is made when submissions close,
+not at the reveal (see [Music provider proxy](#music-provider-proxy)).
