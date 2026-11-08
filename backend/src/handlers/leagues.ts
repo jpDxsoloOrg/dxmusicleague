@@ -524,8 +524,9 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
   // points are already banked in the response.
   const currentRound = await autoAdvanceRound(deps, league, latestRound(rounds));
 
-  // Standing rows persist for ex-members (so a returning player keeps their
-  // points / W-L-D record) — the board displays current members only.
+  // Standing rows persist for ex-members (so a player who rejoins a standard
+  // league keeps their points; a locked head-to-head season can't be
+  // rejoined — HTH-14) — the board displays current members only.
   const rawStandings = await deps.repo.getStandings(leagueId);
   const memberSet = new Set(league.memberIds);
   // Names resolve before sorting: an H2H board breaks record ties by name.
@@ -573,9 +574,9 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
   // ballot would say which side of the only contest its author is on
   // (`ballotAuthorVisible`). Otherwise they show the caller's own ballot and
   // those of the members the panel shows as done — never the row of a member
-  // it shows waiting (comments-only, or incomplete since a rejoin), which can
-  // say its author was in the only contest a departure had left (BUG-06),
-  // nor a departed voter's.
+  // it shows waiting (comments-only — or incomplete since a rejoin, which
+  // HTH-14 made unreachable), which can say its author was in the only
+  // contest a departure had left (BUG-06), nor a departed voter's.
   let submissionProgress: RoundParticipation | undefined;
   let votingProgress: RoundParticipation | undefined;
   let showBallotBy = (_voterId: string) => true;
@@ -732,11 +733,15 @@ export async function claimPublicSpot(
   return { league: toLeagueView(updated) };
 }
 
-/** Leave a league — removes the caller's own membership (and standing). The
- *  owner can't leave (they delete the league instead). In a head-to-head
- *  league whose season is locked (round 1 opened) a leave or a kick is
- *  permanent: the join gate (`seasonJoinRefusal`) never lets them back in,
- *  and their remaining matchups play as walkovers for their opponents. */
+/** Leave a league — removes the caller's own membership (or, for the owner,
+ *  kicks another member). Only the membership: the standing row is kept, off
+ *  the board (`removeMember`), so a player who rejoins a standard league gets
+ *  their points back. The owner can't leave (they delete the league
+ *  instead). In a head-to-head league whose season is locked (round 1
+ *  opened) a leave or a kick is permanent: the join gate
+ *  (`seasonJoinRefusal`) never lets them back in, their remaining matchups
+ *  play as walkovers for their opponents, and their row just stays stored
+ *  with the record it had. */
 export async function leaveLeague(
   deps: Deps,
   caller: string,

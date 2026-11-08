@@ -5,14 +5,14 @@
 //   League meta   PK=LEAGUE#<id>      SK=META   (rematchLeagueId once the league is rematched)
 //   Membership    PK=LEAGUE#<id>      SK=MEMBER#<userId>   (+ GSI1: USER#<id> / LEAGUE#<id>)
 //   Round         PK=LEAGUE#<id>      SK=ROUND#<index4>   (h2hDeparted + h2hTally once an H2H round is revealed; pointsTally once a standard one is)
-//   Submission    PK=ROUND#<roundId>  SK=SUB#<userId>
+//   Submission    PK=ROUND#<roundId>  SK=SUB#<userId>#<submissionId>   (legacy rows: SUB#<userId>, still read)
 //   Ballot        PK=ROUND#<roundId>  SK=BALLOT#<voterId>   (allocations; picks for H2H)
 //   Standing      PK=LEAGUE#<id>      SK=STANDING#<userId>  (points; wins/losses/draws for H2H)
 //   Invite        PK=INVITE#<code>    SK=META
 //
-// The league-loop methods (create/get/list/addMember/invites/rounds/standings)
-// are fully implemented. Submission/ballot methods follow the same pattern and
-// are exercised once the round + voting handlers land (build-order steps 3–4).
+// Every Repository method is implemented here (handlers reach them only
+// through the port). dynamo.test.ts exercises the item mapping and the
+// conditional / transactional writes offline, over an in-process fake client.
 
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
@@ -87,8 +87,12 @@ export class DynamoRepository implements Repository {
   }
 
   async getLeague(leagueId: string, opts?: { consistent?: boolean }): Promise<League | undefined> {
-    // Strongly consistent only when asked (the head-to-head freeze's
-    // post-write check); every other read keeps the default, unchanged.
+    // Strongly consistent only when a caller needs to see a write that just
+    // landed (read-after-write): the head-to-head freeze's post-write check
+    // (rounds.ts `settleRoundOneOrder`), a refused head-to-head join's
+    // answer (leagues.ts `addJoiningMember`, HTH-14) and the rematch pointer's
+    // reads (`liveRematch`, `claimRematch`, `withRematchLink` — BUG-13).
+    // Every other read keeps the default, unchanged.
     const consistency = opts?.consistent ? { ConsistentRead: true } : {};
     const meta = await this.doc.send(
       new GetCommand({ TableName: this.tableName, Key: { PK: `LEAGUE#${leagueId}`, SK: "META" }, ...consistency }),
@@ -416,9 +420,9 @@ export class DynamoRepository implements Repository {
     if (sep < 0) return undefined;
     const leagueId = roundId.slice(0, sep);
     const idx = roundId.slice(sep + 1);
-    // Strongly consistent only when asked (a reveal or timed advance's
-    // re-read after its conditional write lost to a reveal — HTH-07, BUG-04);
-    // every other read keeps the default, unchanged.
+    // Strongly consistent only when asked (the re-read of a reveal, timed
+    // advance or round edit whose conditional write lost to a reveal —
+    // HTH-07, BUG-04); every other read keeps the default, unchanged.
     const res = await this.doc.send(
       new GetCommand({
         TableName: this.tableName,
@@ -565,7 +569,11 @@ export class DynamoRepository implements Repository {
   // ---- Submissions ----
   // Keyed SUB#<userId>#<submissionId> so a player can hold several per round.
   // Rows written before multi-submission used SK = SUB#<userId> (no id); reads
-  // filter on the userId attribute rather than the key, so both shapes work.
+  // filter on the userId attribute rather than the key, so both shapes read
+  // and delete. Known gap: an allowance-1 re-submit over a legacy row keeps
+  // its id but writes the new-style key here, so it lands beside the legacy
+  // row instead of overwriting it (reads then return that pick twice) — only
+  // in a round that has been submitting since before multi-submission.
   async putSubmission(submission: Submission): Promise<void> {
     await this.doc.send(
       new PutCommand({

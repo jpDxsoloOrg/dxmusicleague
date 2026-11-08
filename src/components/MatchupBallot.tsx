@@ -237,7 +237,7 @@ export function MatchupBallot({ detail }: { detail: LeagueDetail }) {
               setError(err instanceof Error ? err.message : "Couldn't submit your picks.");
               setBusy(false);
               // The server referees against the round as it stands now (a
-              // departure or rejoin changes what's votable): show it that way.
+              // departure changes what's votable): show it that way.
               reloadView();
               // ...and if it's no longer in voting at all, say so.
               data

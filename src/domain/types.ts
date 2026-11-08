@@ -27,8 +27,9 @@ export interface LeagueSettings {
    *  because leagues stored before it was removed may still hold `true`.
    *  Mirrors backend/src/domain/types.ts. */
   allowSelfVote: boolean;
-  /** Submissions allowed per player per round. Locked to 1 today; kept as a
-   *  field so multiple-per-player can be enabled later without a migration. */
+  /** Submissions allowed per player per round: 1 (the default) up to 5, set
+   *  by the owner in league settings. Head-to-head leagues are locked to 1
+   *  (`H2H_FORCED_SETTINGS`). */
   submissionsPerPlayer: number;
   /** Anti-votes each voter may place per round (0 disables; each subtracts
    *  a point at tally — totals can go negative). Optional to spend. */

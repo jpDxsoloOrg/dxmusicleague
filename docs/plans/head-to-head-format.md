@@ -37,10 +37,11 @@ Why the head-to-head counts differ:
   finishing early and the completion % from ever reaching 100.
 - **A ballot row isn't proof of a vote.** A member with nothing to vote on can
   still leave a comments-only ballot, and a ballot cast while a player was
-  departed has no pick in that player's pair once they rejoin (the pair is a
-  contest again). A member counts as voted only when their ballot picks one of
-  the two songs in every matchup they can vote in now — exactly the picks the
-  tally would count.
+  departed would have no pick in that player's pair if they rejoined (the pair
+  a contest again — no longer reachable since HTH-14, see
+  [Leave / kick mid-season](#leave--kick-mid-season)). A member counts as voted
+  only when their ballot picks one of the two songs in every matchup they can
+  vote in now — exactly the picks the tally would count.
 
 ### A round nobody can vote in goes straight to the reveal
 
@@ -116,19 +117,20 @@ than the panel (BUG-06). A ballot row from a member the panel shows waiting is
 itself identifying: every eligible voter must cast a complete ballot, so such a
 row was written while a departure mid-voting had left its author less to vote
 on, and a comments-only one while they had nothing at all, i.e. while their
-matchup was the round's only contest. Once the departed player rejoins (every
-member can vote again), an entry for that waiting member would name them as one
-of that contest's pair, and so tell the other player who their anonymous
-opponent is. Also left out: a ballot left incomplete by that rejoin (its
-author is waiting again until they re-cast), and a departed voter's ballot
-(they are in neither panel list).
+matchup was the round's only contest. Had the departed player rejoined (every
+member able to vote again — no longer reachable since HTH-14), an entry for
+that waiting member would name them as one of that contest's pair, and so tell
+the other player who their anonymous opponent is. Also left out: a ballot left
+incomplete by such a rejoin (its author waiting again until they re-cast), and
+a departed voter's ballot (they are in neither panel list).
 
 One predicate, `votersNameable` in `domain/matchups.ts`, drives both the panel
 (`votingPanelNames`) and the feed (`ballotAuthorVisible`, which adds the
 done-list condition); the HTH-09 MockClient imports and calls both (BUG-07),
 so mock mode's panel and feed match the API's for every viewer.
 
-Remaining residuals, both read across time:
+Residuals, both read across time (only the first is still reachable since
+HTH-14; the second is kept as the reasoning for if rejoining ever returns):
 
 - Names shown while everyone could vote (voters in the panel's done list, and
   their feed entries) stay in a viewer's memory. If a departure mid-voting then
@@ -136,7 +138,8 @@ Remaining residuals, both read across time:
   voted before, which can narrow down who is in that contest. That needs a
   leave or kick mid-voting that drops the round to a single contest, and a
   viewer who looked before it.
-- The reverse, after a rejoin. Each feed entry carries its ballot's cast time
+- The reverse, after a rejoin (no longer reachable since HTH-14: a locked
+  season can't be rejoined). Each feed entry carries its ballot's cast time
   (its id, and "time ago"), which the panel doesn't. A done voter whose ballot
   was cast while the departed player was away must be that player's opponent:
   anyone else would now have to pick in the restored matchup as well, so their
@@ -166,7 +169,7 @@ so after round 1 opens nobody joins or rejoins: `seasonJoinRefusal`
 rejoin this head-to-head season — …"), and both repositories' season-gated
 join refuses everyone once frozen. The lobby (before round 1) can still be
 left and joined again. The departed set of a round in play therefore only
-grows, so the rejoin handling in this file's notes above and below (a ballot
+grows, so the rejoin handling in this file's notes above (a ballot
 "incomplete since a rejoin", the restored-contest residual) is no longer a live
 path; the code keeps it as harmless defence.
 

@@ -2,10 +2,12 @@
 // plain CRUD over the Repository port (no rules engine). Same shape as the
 // league handlers: (deps, caller, ...input) -> result, throwing ApiError.
 //
-// Lifecycle this slice covers: draft -> submitting -> voting. `revealed` is
-// reached only via the (future) reveal endpoint, never a raw status change —
-// with one head-to-head exception (HTH-08): opening voting on a round nobody
-// can vote in reveals it on the spot (progression.ts `revealIfNobodyCanVote`).
+// Lifecycle this PATCH drives: draft -> submitting -> previewing -> voting.
+// `revealed` is reached only by a reveal (the reveal endpoint, voting.ts
+// `revealRound`, or a timed league's auto-advance — both `finalizeReveal`),
+// never a raw status change — with one head-to-head exception (HTH-08):
+// opening voting on a round nobody can vote in reveals it on the spot
+// (progression.ts `revealIfNobodyCanVote`).
 //
 // Head-to-head leagues (HTH-03): opening round 1 (draft -> submitting) freezes
 // the season — see `freezeSeasonIfNeeded`. This PATCH is the ONLY place any
@@ -99,7 +101,8 @@ export async function createRound(
 
 // The only status moves a PATCH may make. `revealed`/`complete` are off-limits
 // here (reveal endpoint owns them); nothing moves backwards or skips a step.
-// submitting → previewing is where the playlist gets created (later slice).
+// submitting → previewing is where a Spotify league's round playlist gets
+// created (in updateRound below, and in the timed auto-advance).
 const ALLOWED_NEXT: Record<RoundStatus, RoundStatus[]> = {
   draft: ["submitting"],
   submitting: ["previewing"],

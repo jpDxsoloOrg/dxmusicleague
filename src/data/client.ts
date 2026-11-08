@@ -103,9 +103,9 @@ export interface DataClient {
    *  overwrites. The server referees (400 with a readable message); a
    *  standard round refuses it. */
   castMatchupBallot(roundId: string, picks: Record<string, string>, comments?: Record<string, string>): Promise<void>;
-  /** The caller's cast ballot for a round (null before voting) — pre-fills the
-   *  vote page so an edit doesn't silently wipe earlier points/comments (or,
-   *  head-to-head, picks). */
+  /** The caller's cast ballot for a round (null until they've voted) —
+   *  pre-fills the vote page so an edit doesn't silently wipe earlier
+   *  points/comments (or, head-to-head, picks). */
   getMyBallot(roundId: string): Promise<MyBallot | null>;
   /** Head-to-head only: the round's matchups, anonymous, with the caller's
    *  own flagged `isMine`, plus the bye's exhibition song. Members from

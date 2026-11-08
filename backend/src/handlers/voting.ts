@@ -138,8 +138,10 @@ async function headToHeadBallot(
 
   // The round as it stands (departed players' songs withdrawn) referees the
   // ballot; the round as scheduled (nobody withdrawn) recognises a pick or a
-  // comment made before a departure, so a re-cast keeps it and a rejoin
-  // brings it back. Both through the shared loader.
+  // comment made before a departure, so a pre-filled re-cast keeps it. (A
+  // rejoin would bring the pick back into play, but since HTH-14 a locked
+  // season can't be rejoined — see the top of domain/matchups.ts.) Both
+  // through the shared loader.
   const [matchups, asScheduled] = await Promise.all([
     loadRoundMatchups(deps, league, round),
     loadRoundMatchups(deps, league, round, { departed: [] }),
@@ -155,7 +157,8 @@ async function headToHeadBallot(
     // and the bye's exhibition song. A departed player's withdrawn song too,
     // as a standard ballot keeps comments on a departed player's song: the
     // vote page no longer shows it, but a pre-filled re-cast mustn't lose the
-    // comment (and a rejoin shows it again).
+    // comment. (A rejoin would show it again, but since HTH-14 a locked
+    // season can't be rejoined.)
     comments: cleanComments(input?.comments, new Set(roundSongs(asScheduled).map((s) => s.id))),
     castAt: new Date().toISOString(),
   };

@@ -21,9 +21,10 @@
 // the member list as it is now: a departed player's song is withdrawn even if
 // they submitted it before leaving, so their pair plays as a walkover for
 // whoever stayed (HTH-07's rule) and voters are never asked to judge it.
-// Rejoining puts the song back. (Deliberately more than the ticket's "no
-// special casing beyond null songs": a departed player's submission is still
-// stored, so without the withdrawal their pair would stay a contest.)
+// Rejoining would put the song back (unreachable since HTH-14 — below).
+// (Deliberately more than the ticket's "no special casing beyond null songs":
+// a departed player's submission is still stored, so without the withdrawal
+// their pair would stay a contest.)
 //
 // HTH-14: that rejoin can no longer happen. A round is only in play (past
 // draft) once the season is frozen, and from then on a player who leaves or
@@ -211,16 +212,18 @@ export function inMatchup(m: RoundMatchup, userId: string): boolean {
  *  after picks may already be cast in it, and my-ballot pre-fills those picks
  *  on a re-cast. So ballot validation (`validateH2HBallot`, domain/rules.ts)
  *  never rejects a pick on a walkover / no-contest matchup: it keeps one made
- *  before a departure (so a rejoin restores it) and drops anything else.
+ *  before a departure (a rejoin would restore it — unreachable since HTH-14,
+ *  see the top of this file) and drops anything else.
  *  Count only picks in THIS set (as it stands at the reveal) — a stored
  *  ballot can hold inert picks outside it.
  *
  *  HTH-08 (completion %, everyone-voted): a ballot row is not proof of a
  *  vote. A member whose set is empty (e.g. both players of a two-player
  *  league) can still store a comments-only row, and a row cast while a
- *  player was departed has no pick in that pair if the player rejoins. So
- *  progress counts only voters whose set is non-empty, and only ballots
- *  that pick in all of it — see `votingTurnout`. */
+ *  player was departed would have no pick in that pair if the player
+ *  rejoined (defence only since HTH-14). So progress counts only voters
+ *  whose set is non-empty, and only ballots that pick in all of it — see
+ *  `votingTurnout`. */
 export function votableMatchups(set: RoundMatchupSet, voterId: string): RoundMatchup[] {
   return set.matchups.filter((m) => matchupState(m) === "contest" && !inMatchup(m, voterId));
 }
@@ -244,8 +247,9 @@ export function votableMatchups(set: RoundMatchupSet, voterId: string): RoundMat
 //     and the completion % from ever reaching 100. And a member counts as
 //     voted only when their ballot picks in EVERY matchup they can vote in
 //     now — exactly the picks the tally would count — so a comments-only row,
-//     or a row cast before a departed player rejoined (their pair is a contest
-//     again, with no pick in it), isn't mistaken for a vote.
+//     or a row cast before a departed player rejoined (their pair a contest
+//     again, with no pick in it — defence only since HTH-14), isn't mistaken
+//     for a vote.
 //
 // When nobody can vote at all (every pair a walkover / no contest, or a
 // two-player league), the voting phase has nothing to wait for: the round
@@ -277,18 +281,19 @@ export function votableMatchups(set: RoundMatchupSet, voterId: string): RoundMat
 // nobody. And while it's true, the feed names another member only once the
 // panel shows them done (in `voted`). Every eligible voter must cast a
 // complete ballot, so a row from a member the panel shows waiting was
-// written while a departure had left them less to vote on (it's incomplete
-// since the departed player rejoined), and a comments-only one while they
-// had nothing at all — i.e. while they were in the round's only contest,
-// which names them as its pair, e.g. the viewer's anonymous opponent
-// (BUG-06). The feed's other-member entries are thus always the panel's
-// done list (a departed voter is in neither, so their ballot is left out
-// too): it never names more than the panel. Two residuals remain, both read
-// across time. Names shown while every member could vote remain in a
-// viewer's memory if a departure mid-voting then leaves a single contest,
-// and the count after it can be read against them. And the reverse, after
-// a rejoin (no longer reachable since HTH-14, see the top of this file):
-// each feed entry carries its ballot's cast time (in its id and
+// written while a departure had left them less to vote on (incomplete since
+// the departed player rejoined — unreachable since HTH-14), and a
+// comments-only one while they had nothing at all — i.e. while they were in
+// the round's only contest, which names them as its pair, e.g. the viewer's
+// anonymous opponent (BUG-06). The feed's other-member entries are thus
+// always the panel's done list (a departed voter is in neither, so their
+// ballot is left out too): it never names more than the panel. That leaves
+// two residuals, both read across time; only the first is still reachable
+// since HTH-14. Names shown while every member could vote
+// remain in a viewer's memory if a departure mid-voting then leaves a single
+// contest, and the count after it can be read against them. And the
+// reverse, after a rejoin (no longer reachable since HTH-14, see the top of
+// this file): each feed entry carries its ballot's cast time (in its id and
 // time-ago), which the panel doesn't. A done voter whose ballot was cast
 // while the departed player was away must be that player's opponent, since
 // anyone else would now have to pick in the restored matchup too. So whoever
@@ -399,8 +404,9 @@ export function votersNameable(turnout: VotingTurnout, memberIds: readonly strin
  * departure had left their matchup the round's only contest — which names
  * them as its pair, e.g. the viewer's anonymous opponent (BUG-06). Those rows
  * are left out, as are rows left incomplete when a departed player rejoined
- * and departed voters' ballots (in neither panel list). Applies only while
- * the round is in voting; once it's revealed, so is everything else.
+ * (unreachable since HTH-14) and departed voters' ballots (in neither panel
+ * list). Applies only while the round is in voting; once it's revealed, so
+ * is everything else.
  */
 export function ballotAuthorVisible(
   turnout: VotingTurnout,

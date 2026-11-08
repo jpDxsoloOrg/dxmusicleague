@@ -12,10 +12,13 @@ export interface Repository {
   // ---- Leagues ----
   createLeague(league: League): Promise<void>;
   /** `consistent`: a strongly consistent read (DynamoDB's default reads are
-   *  eventually consistent and can miss a write that just landed). Only the
-   *  head-to-head freeze asks for it, to see every member right after its
-   *  conditional write; everything else reads as before (getRound has the
-   *  same option, for the head-to-head reveal). */
+   *  eventually consistent and can miss a write that just landed), for a
+   *  caller that needs read-after-write: the head-to-head freeze, to see every
+   *  member right after its conditional write (HTH-03); a head-to-head join
+   *  the season gate refused, to answer from the league as it is now
+   *  (HTH-14); and the rematch pointer's reads (BUG-13). Everything else
+   *  reads as before (getRound, getBallotsForRound and deleteLeague have the
+   *  same option). */
   getLeague(leagueId: string, opts?: { consistent?: boolean }): Promise<League | undefined>;
   /** Leagues the user is a member of. */
   getLeaguesForUser(userId: string): Promise<League[]>;
@@ -26,7 +29,11 @@ export interface Repository {
   getAllLeagues(): Promise<League[]>;
   /** Add a member to a league (idempotent). Returns the updated league. */
   addMember(leagueId: string, userId: string): Promise<League>;
-  /** Remove a member and their standing from a league (idempotent). */
+  /** Remove a member's membership (idempotent). Their standing row is kept,
+   *  off the board (the board shows current members only) — a returning
+   *  player gets it back, in a standard league or a head-to-head lobby; a
+   *  locked head-to-head season can't be rejoined (HTH-14). Only
+   *  deleteLeague's cascade removes standings. */
   removeMember(leagueId: string, userId: string): Promise<void>;
   /** Replace a league's settings. Returns the updated league. */
   updateLeagueSettings(leagueId: string, settings: LeagueSettings): Promise<League>;

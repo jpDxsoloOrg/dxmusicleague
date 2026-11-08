@@ -11,9 +11,10 @@
 
 - **Cognito owns identity.** The caller's `userId` is the JWT `sub` claim; it is never
   taken from the request body. Spotify auth stays entirely separate (host account only).
-- **The server is the referee.** Every rule (full-pool ballots, per-song cap, no self-vote,
-  one submission per player, deadlines) is validated server-side. The client UI mirrors the
-  rules for UX, but a hand-crafted request must not be able to break them.
+- **The server is the referee.** Every rule (ballots that spend the whole effective pool,
+  per-song cap, no self-vote, the songs-per-player allowance, deadlines) is validated
+  server-side. The client UI mirrors the rules for UX, but a hand-crafted request must not be
+  able to break them.
 - **Provider-agnostic.** Submissions store a normalized `Track` snapshot (provider + native
   id + title/artist/art), never a Spotify-specific shape. All Spotify access is one Lambda
   proxy implementation behind the `MusicProvider` seam.
@@ -22,16 +23,19 @@
 
 ## 1. DynamoDB — single-table design
 
-One table `MusicLeague`, partition key `PK`, sort key `SK`, plus two GSIs. Single-table
-because every read below is a point-get or a single-partition `Query` — no cross-entity joins.
+One table `MusicLeague`, partition key `PK`, sort key `SK`, plus one GSI (a second is sketched
+below, not built). Single-table because every read below is a point-get or a single-partition
+`Query` — no cross-entity joins. The one exception is the non-member lists (public discovery and
+browse): a filtered `Scan` for the league META rows (`scanLeagues` in
+[backend/src/data/dynamo.ts](../backend/src/data/dynamo.ts)), fine at this scale.
 
 | Entity | PK | SK | Key attributes |
 |---|---|---|---|
-| League meta | `LEAGUE#<leagueId>` | `META` | `name, ownerId, musicProvider, format, settings{}, roundCount, createdAt`, head-to-head only once frozen: `h2hParticipants[], h2hSalt`; once rematched: `rematchLeagueId` (its one live rematch — claimed by a conditional write, replaced only once that league is deleted) |
-| Membership | `LEAGUE#<leagueId>` | `MEMBER#<userId>` | `joinedAt, displayName` |
-| Round | `LEAGUE#<leagueId>` | `ROUND#<index4>` | `roundId, theme, description, status, submissionDeadline, voteDeadline, playlistUrl`; head-to-head once revealed: `h2hDeparted[]` (who had departed at the reveal) and `h2hTally[]` (`{ matchupId, votesA, votesB }` as the reveal counted them); standard once revealed: `pointsTally[]` (`{ submissionId, pointsFor, pointsAgainst, distinctVoters }` per song, as the reveal counted them) |
-| Submission | `ROUND#<roundId>` | `SUB#<userId>` | `track{}, submittedAt` |
-| Vote ballot | `ROUND#<roundId>` | `BALLOT#<voterId>` | `allocations{subId:pts}, comments{subId:text}, castAt`; head-to-head: `picks{matchupId:subId}` with `allocations` empty |
+| League meta | `LEAGUE#<leagueId>` | `META` | `name, ownerId, musicProvider, format, settings{}, inviteCode, visibility, maxMembers, roundCount, progression, startAt, phaseDays, createdAt`, head-to-head only once frozen: `h2hParticipants[], h2hSalt`; once rematched: `rematchLeagueId` (its one live rematch — claimed by a conditional write, replaced only once that league is deleted) |
+| Membership | `LEAGUE#<leagueId>` | `MEMBER#<userId>` | `leagueId, userId, joinedAt` + the GSI1 keys (display names come from the user directory — Cognito — not this row) |
+| Round | `LEAGUE#<leagueId>` | `ROUND#<index4>` | `roundId, theme, description, status, submissionDeadline, previewDeadline, voteDeadline, playlistUrl`; head-to-head once revealed: `h2hDeparted[]` (who had departed at the reveal) and `h2hTally[]` (`{ matchupId, votesA, votesB }` as the reveal counted them); standard once revealed: `pointsTally[]` (`{ submissionId, pointsFor, pointsAgainst, distinctVoters }` per song, as the reveal counted them) |
+| Submission | `ROUND#<roundId>` | `SUB#<userId>#<submissionId>` (legacy rows: `SUB#<userId>`, still read) | `id, userId, track{}, comment, submittedAt` |
+| Vote ballot | `ROUND#<roundId>` | `BALLOT#<voterId>` | `allocations{subId:pts}, downvotes{subId:n}, comments{subId:text}, castAt`; head-to-head: `picks{matchupId:subId}` with `allocations` empty |
 | Standing | `LEAGUE#<leagueId>` | `STANDING#<userId>` | `points` (running season total); `wins, losses, draws` (head-to-head record — absent on older rows, read as 0) |
 | Invite code | `INVITE#<code>` | `META` | `leagueId` |
 
@@ -42,9 +46,11 @@ partition.
 
 - **GSI1 — "my leagues"**: `GSI1PK = USER#<userId>`, `GSI1SK = LEAGUE#<leagueId>`. Projected
   onto every Membership item. Query `GSI1PK = USER#<me>` → all my league ids in one shot.
-- **GSI2 — round-status sweep (optional, Phase 6)**: `GSI2PK = STATUS#<status>`,
-  `GSI2SK = <deadline ISO>`. Lets an EventBridge job find rounds due to transition. Skip until
-  deadlines are automated.
+- **GSI2 — round-status sweep (not built)**: `GSI2PK = STATUS#<status>`,
+  `GSI2SK = <deadline ISO>` would let a scheduled (EventBridge) job find rounds due to
+  transition. Not needed so far: timed leagues advance lazily — whenever a league is read
+  (`GET /leagues`, `GET /leagues/{id}`) and right after a song or a ballot lands
+  (`autoAdvanceRound`, `backend/src/handlers/progression.ts`) — so nothing sweeps by status.
 
 ### Rule storage
 
@@ -52,7 +58,7 @@ The per-league knobs live in the `settings` map on the League META item, mirrori
 [`LeagueSettings`](../src/domain/types.ts) exactly:
 
 ```json
-{ "votePoolSize": 10, "maxPointsPerSong": 5, "allowSelfVote": false, "submissionsPerPlayer": 1 }
+{ "votePoolSize": 10, "maxPointsPerSong": 5, "allowSelfVote": false, "submissionsPerPlayer": 1, "downvotePoolSize": 0 }
 ```
 
 **Self-voting is not a setting** — no league allows it. `allowSelfVote` is deprecated and always
@@ -140,9 +146,21 @@ afresh at its own round 1). Standard leagues never get either attribute.
 
 ### Why submission/vote keys are what they are
 
-- `SUB#<userId>` as the sort key means a player physically *cannot* have two submissions in a
-  round — a re-submit is a `PutItem` overwrite of the same key. That's `submissionsPerPlayer: 1`
-  enforced by the schema itself, not just by code.
+- `SUB#<userId>#<submissionId>` gives every pick its own row, so a player can hold several songs
+  in a round (`submissionsPerPlayer`, 1–5; head-to-head leagues are locked to 1). The key
+  doesn't enforce the allowance — `submitSong` (`backend/src/handlers/submissions.ts`) does: with
+  an allowance of 1 a re-submit keeps the pick's id, so its `PutItem` overwrites that same row
+  (a legacy row excepted, below); with more, each submit adds a row until the allowance is full
+  (400 after that — remove a pick to change it). The `userId` prefix keeps a player's picks
+  together: one `Query` on `begins_with(SK, "SUB#<userId>")` finds them, filtered on the
+  `userId` attribute (the prefix also matches longer user ids that start with this one). Rows
+  written before multi-submission are keyed `SUB#<userId>` with no id suffix; nothing writes
+  that shape any more, but every read still finds them (they filter on the attribute, not the
+  key), and removing a pick looks its row up first, so a legacy key deletes too. One known gap:
+  an allowance-1 re-submit over a legacy row keeps its id but writes the new-style key, so it
+  lands *beside* the legacy row rather than overwriting it, and reads then return that pick
+  twice (old and new song, same id). Only a round that has been submitting since before
+  multi-submission shipped can hit it.
 - `BALLOT#<voterId>` (one item holding the whole allocation map) means a ballot is atomic:
   it is validated as a complete unit (effective pool, caps) and written once. No partial rows.
   A head-to-head ballot is the same one item per voter (its `picks` map instead of points),
@@ -170,9 +188,10 @@ The tables name the routes that matter to the game rules, not all of them;
 | `GET` | `/leagues/{leagueId}` | — | `LeagueDetail` | `getLeagueDetail` |
 | `POST` | `/leagues/join` | `{ code }` | `{ league }` \| 4xx | `joinLeague` |
 
-- **Create**: owner = `:me`, `settings = DEFAULT_LEAGUE_SETTINGS`, member list seeded with
-  the owner, and a fresh invite code minted (write League META + Membership + Invite items in
-  one `TransactWriteItems`).
+- **Create**: owner = `:me`, `settings = DEFAULT_LEAGUE_SETTINGS` (clamped to the format's
+  forced settings, `applyFormatSettings`), member list seeded with the owner, and a fresh invite
+  code minted. League META + the owner's Membership are written in one `TransactWriteItems`;
+  the Invite item and the owner's Standing(0) follow as separate writes.
 - **Join**: point-get `INVITE#<code.toUpperCase()>`; 404 → "That code doesn't match any
   league."; already a member → 409 "You're already a member of {name}." with
   `code: "already-member"` and the `leagueId` (the client opens that league); a frozen head-to-head
@@ -199,16 +218,19 @@ The tables name the routes that matter to the game rules, not all of them;
 | Method | Path | Body | Notes |
 |---|---|---|---|
 | `POST` | `/leagues/{leagueId}/rounds` | `{ theme, description?, submissionDeadline?, voteDeadline? }` | Creates a `draft` round, `index = max+1`. |
-| `PATCH` | `/leagues/{leagueId}/rounds/{roundId}` | `{ status?, theme?, ...deadlines }` | Drives the `draft → submitting → previewing → voting → revealed` lifecycle. |
+| `PATCH` | `/leagues/{leagueId}/rounds/{roundId}` | `{ status?, theme?, ...deadlines }` | Drives the `draft → submitting → previewing → voting` lifecycle (`revealed` only via a reveal, below). |
 
-Status transitions are validated (no skipping/reversing). `revealed` is reached only via the
-reveal endpoint below, not a raw PATCH. A PATCH that read the round before it was revealed is
-written only while the round is still unsettled (`updateRoundUnlessSettled`), so it can't put a
-revealed round back in voting (to be revealed, and banked, again) — it answers `409` "That round
-was just revealed. Reload to see the results." instead; the timed auto-advance writes the same
-way. Both formats (head-to-head since HTH-07, standard since BUG-04). If the league was deleted
-under the PATCH, the refused write answers `404` "That round doesn't exist." instead. A PATCH
-that read the round already revealed (a theme fix) is an ordinary write.
+Status transitions are validated (no skipping/reversing). A PATCH asking for `revealed` (or
+`complete`) is refused (400): a round is revealed only by a reveal — the reveal endpoint below,
+a timed league's auto-advance, or, head to head, a PATCH opening voting on a round nobody can
+vote in, which reveals it on the spot ([plans/head-to-head-format.md](plans/head-to-head-format.md#a-round-nobody-can-vote-in-goes-straight-to-the-reveal)).
+A PATCH that read the round before it was revealed is written only while the round is still
+unsettled (`updateRoundUnlessSettled`), so it can't put a revealed round back in voting (to be
+revealed, and banked, again) — it answers `409` "That round was just revealed. Reload to see the
+results." instead; the timed auto-advance writes the same way. Both formats (head-to-head since
+HTH-07, standard since BUG-04). If the league was deleted under the PATCH, the refused write
+answers `404` "That round doesn't exist." instead. A PATCH that read the round already revealed
+(a theme fix) is an ordinary write.
 
 ### Submissions
 
@@ -221,7 +243,7 @@ that read the round already revealed (a theme fix) is an ordinary write.
 deadline not passed; not a song, or an artist, already in the round (400). With
 `submissionsPerPlayer` 1 a re-submit replaces the pick (same id); otherwise each submit adds
 one, up to the allowance (400 at the cap — remove a pick to change it). `GET` returns the
-anonymized list **excluding the caller's own pick**, only once submissions close (`previewing`
+anonymized list **excluding the caller's own picks**, only once submissions close (`previewing`
 or `voting`). The list is in submission-id order, never the order the repository reads in: that
 follows the submitter (insertion time in memory, user id via DynamoDB's `SUB#<userId>#<subId>`
 key), so it would say whose song is whose. The round's public Spotify playlist lists its tracks
@@ -231,8 +253,8 @@ in the same order.
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| `POST` | `/rounds/{roundId}/ballot` | `{ allocations: {submissionId: points}, comments?: {submissionId: text} }` — head-to-head: `{ picks: {matchupId: submissionId}, comments? }` | `{ ok: true }` |
-| `GET` | `/rounds/{roundId}/my-ballot` | — | `{ allocations, downvotes, comments }` (+ `picks` in head-to-head leagues), or `null` before voting |
+| `POST` | `/rounds/{roundId}/ballot` | `{ allocations: {submissionId: points}, downvotes?: {submissionId: n}, comments?: {submissionId: text} }` — head-to-head: `{ picks: {matchupId: submissionId}, comments? }` | `{ ok: true }` |
+| `GET` | `/rounds/{roundId}/my-ballot` | — | `{ allocations, downvotes, comments }` (+ `picks` in head-to-head leagues), or `null` until the caller has cast a ballot |
 | `POST` | `/rounds/{roundId}/reveal` | — (owner-only) | `RoundResult[]` — head-to-head: `{ format: "headToHead", matchups, bye }` |
 | `GET` | `/rounds/{roundId}/results` | — | same as the reveal |
 
@@ -249,7 +271,9 @@ in the same order.
    own. It is the whole pool unless those songs can't take it (a
    two-player league, players who didn't submit, a low cap); with no songs on offer it is 0, and the
    empty ballot still counts as the caller's vote.
-6. One ballot per voter: overwrite of `BALLOT#<me>` allowed until the deadline.
+6. Anti-votes are optional: each a whole number ≥ 0, at most `downvotePoolSize` in total (0 —
+   the default — means the league doesn't use them). Each subtracts a point at the tally.
+7. One ballot per voter: overwrite of `BALLOT#<me>` allowed until the deadline.
 
 **Head-to-head ballots** (`validateH2HBallot`, `domain/rules.ts`) pick a winner per matchup,
 over the same derived matchups as `GET /matchups` — reject the whole ballot if any fail:
@@ -278,8 +302,9 @@ pre-filled re-cast loses nothing. Stored as `allocations: {}` + `picks`; a re-ca
 the row.
 
 **Reveal** (owner triggers once): tally points per submission from all ballots, rank with the
-fixed tie-break (points → distinct voters → title), increment each member's `STANDING#`
-total, set status `revealed` (the Spotify playlist was made earlier, when submissions closed —
+fixed tie-break (points → distinct voters → title), increment each submitter's `STANDING#`
+total (a player who has left since still banks: their songs rank and score, and their row is
+kept), set status `revealed` (the Spotify playlist was made earlier, when submissions closed —
 see [Music provider proxy](#music-provider-proxy)). `GET /results` is the read side — available
 only once `revealed`, and
 returns submitters, points, ranks, and all voter comments (matching
@@ -399,7 +424,8 @@ Non-members before the reveal → 403; a standard league's round → 400.
 
 No route of their own: the board comes embedded in the league detail,
 `GET /leagues/{leagueId}` → `LeagueDetail.standings` (`Standing[]`; the frontend's
-`getStandings` reads it from there). It reads the `STANDING#` items, sorts them in the league
+`getStandings` reads it from there). It reads the `STANDING#` items, keeps the current members'
+rows (a player who left or was kicked keeps theirs, off the board), sorts them in the league
 format's board order (below), assigns rank. Maintained incrementally at reveal, so this is a
 cheap single-partition query — no recomputation over all votes.
 

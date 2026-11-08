@@ -1,5 +1,6 @@
-// Lazy round auto-advance for timed leagues. There's no scheduler: whenever the
-// league or its round is read (and right after a submission/ballot), we check
+// Lazy round auto-advance for timed leagues. There's no scheduler: whenever a
+// league is read (listMyLeagues, getLeagueDetail — the round-level reads don't
+// advance) and right after a submission/ballot lands, we check
 // whether the current phase should end and advance it — cascading through any
 // phases that all elapsed while nobody was looking. Manual leagues are a no-op.
 //

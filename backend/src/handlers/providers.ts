@@ -5,7 +5,8 @@
 // cached in memory across invocations. Players never authenticate with Spotify.
 //
 // Returns the simplified `{ tracks }` shape the frontend SpotifyMusicProvider
-// already expects. Playlist creation (host token) is a separate, later slice.
+// already expects. Playlist creation is `createPlaylistForRound` below: it uses
+// the host account's refresh token, and runs when a round leaves submitting.
 
 import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import { badRequest } from "../domain/errors.ts";
