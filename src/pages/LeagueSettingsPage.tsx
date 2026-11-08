@@ -352,10 +352,10 @@ function Stepper({
         <span className="setting-label">{label}</span>
         <span className="field-hint">{hint}</span>
       </div>
-      <div className="stepper">
-        <button type="button" className="stepper-btn" onClick={dec} disabled={value <= min} aria-label={`Decrease ${label}`}>–</button>
-        <span className="stepper-value">{value}</span>
-        <button type="button" className="stepper-btn" onClick={inc} disabled={max != null && value >= max} aria-label={`Increase ${label}`}>+</button>
+      <div className="num-stepper">
+        <button type="button" className="num-stepper-btn" onClick={dec} disabled={value <= min} aria-label={`Decrease ${label}`}>–</button>
+        <span className="num-stepper-value">{value}</span>
+        <button type="button" className="num-stepper-btn" onClick={inc} disabled={max != null && value >= max} aria-label={`Increase ${label}`}>+</button>
       </div>
     </div>
   );

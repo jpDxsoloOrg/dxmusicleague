@@ -34,8 +34,9 @@
 .setting-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .setting-label { font-size: 15px; font-weight: 700; }
 
-/* number stepper */
-.stepper {
+/* number stepper — its own class names: the league overview's round stepper
+   owns .stepper, and every page's CSS is global (BUG-20). */
+.num-stepper {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -45,7 +46,7 @@
   padding: 4px;
   flex: none;
 }
-.stepper-btn {
+.num-stepper-btn {
   width: 30px; height: 30px;
   display: grid; place-items: center;
   border: none; border-radius: 50%;
@@ -53,9 +54,9 @@
   color: var(--text);
   font-size: 18px; font-weight: 700; line-height: 1;
 }
-.stepper-btn:hover:not(:disabled) { filter: brightness(1.2); }
-.stepper-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-.stepper-value { min-width: 28px; text-align: center; font-weight: 700; font-size: 16px; }
+.num-stepper-btn:hover:not(:disabled) { filter: brightness(1.2); }
+.num-stepper-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.num-stepper-value { min-width: 28px; text-align: center; font-weight: 700; font-size: 16px; }
 
 .settings-save { margin-top: 20px; width: 100%; justify-content: center; padding: 13px; }
 .settings-save:disabled { opacity: 0.5; cursor: not-allowed; filter: none; }
