@@ -1,7 +1,8 @@
 // Rules-engine unit tests — pure, no infra. Run: `npm test` (node --test).
 // Proves "the server is the referee" logic in isolation: points ballots (the
-// effective pool, BUG-02) and their tally, head-to-head ballots (HTH-06), and
-// the head-to-head tally, outcomes and the W/L/D each reveal banks (HTH-07).
+// effective pool, BUG-02; the self-vote rule over every own song, BUG-11) and
+// their tally, head-to-head ballots (HTH-06), and the head-to-head tally,
+// outcomes and the W/L/D each reveal banks (HTH-07).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -25,7 +26,7 @@ import type { MatchupSide, RoundMatchupSet } from "./matchups.ts";
 const ctx = {
   settings: DEFAULT_LEAGUE_SETTINGS, // pool 10, cap 5, no self-vote
   validSubmissionIds: new Set(["s1", "s2", "s3"]),
-  ownSubmissionId: "s1",
+  ownSubmissionIds: new Set(["s1"]),
   votableSongCount: 2, // s2 + s3 — the voter's own s1 isn't on offer
 };
 
@@ -64,7 +65,7 @@ test("effectivePool = min(pool, songs on offer × cap)", () => {
 });
 
 test("two-player league (pool 10, cap 5): one song on offer → a 5-point ballot is the full ballot", () => {
-  const two = { settings: DEFAULT_LEAGUE_SETTINGS, validSubmissionIds: new Set(["s1", "s2"]), ownSubmissionId: "s1", votableSongCount: 1 };
+  const two = { settings: DEFAULT_LEAGUE_SETTINGS, validSubmissionIds: new Set(["s1", "s2"]), ownSubmissionIds: new Set(["s1"]), votableSongCount: 1 };
   assert.deepEqual(validateBallot({ allocations: { s2: 5 } }, two), { allocations: { s2: 5 }, downvotes: {} });
   assert.throws(() => validateBallot({ allocations: { s2: 4 } }, two), {
     message: "You must spend exactly 5 points (you spent 4) — that's all the songs on offer can take this round.",
@@ -75,11 +76,11 @@ test("two-player league (pool 10, cap 5): one song on offer → a 5-point ballot
 
 test("pool 12 / cap 4: two songs on offer take 8, three take the whole 12", () => {
   const settings = { ...DEFAULT_LEAGUE_SETTINGS, votePoolSize: 12, maxPointsPerSong: 4 };
-  const twoSongs = { settings, validSubmissionIds: new Set(["s1", "s2", "s3"]), ownSubmissionId: "s1", votableSongCount: 2 };
+  const twoSongs = { settings, validSubmissionIds: new Set(["s1", "s2", "s3"]), ownSubmissionIds: new Set(["s1"]), votableSongCount: 2 };
   assert.deepEqual(validateBallot({ allocations: { s2: 4, s3: 4 } }, twoSongs).allocations, { s2: 4, s3: 4 });
   assert.throws(() => validateBallot({ allocations: { s2: 4, s3: 3 } }, twoSongs), /exactly 8 points \(you spent 7\)/);
   // A voter with no song in the round has all three on offer: the full pool.
-  const threeSongs = { settings, validSubmissionIds: new Set(["s1", "s2", "s3"]), votableSongCount: 3 };
+  const threeSongs = { settings, validSubmissionIds: new Set(["s1", "s2", "s3"]), ownSubmissionIds: new Set<string>(), votableSongCount: 3 };
   assert.deepEqual(validateBallot({ allocations: { s1: 4, s2: 4, s3: 4 } }, threeSongs).allocations, { s1: 4, s2: 4, s3: 4 });
   assert.throws(() => validateBallot({ allocations: { s2: 4, s3: 4 } }, threeSongs), {
     message: "You must spend exactly 12 points (you spent 8).",
@@ -91,7 +92,7 @@ test("a low cap (pool 10, cap 1) with six songs on offer → 6 points is the ful
   const lowCap = {
     settings: { ...DEFAULT_LEAGUE_SETTINGS, maxPointsPerSong: 1 },
     validSubmissionIds: new Set(ids),
-    ownSubmissionId: "s1",
+    ownSubmissionIds: new Set(["s1"]),
     votableSongCount: 6,
   };
   const all = Object.fromEntries(ids.slice(1).map((id) => [id, 1]));
@@ -100,7 +101,7 @@ test("a low cap (pool 10, cap 1) with six songs on offer → 6 points is the ful
 });
 
 test("no songs on offer (only the voter submitted) → the effective pool is 0: an empty ballot passes, a point doesn't", () => {
-  const none = { settings: DEFAULT_LEAGUE_SETTINGS, validSubmissionIds: new Set(["s1"]), ownSubmissionId: "s1", votableSongCount: 0 };
+  const none = { settings: DEFAULT_LEAGUE_SETTINGS, validSubmissionIds: new Set(["s1"]), ownSubmissionIds: new Set(["s1"]), votableSongCount: 0 };
   assert.deepEqual(validateBallot({ allocations: {} }, none), { allocations: {}, downvotes: {} });
   assert.deepEqual(validateBallot({ allocations: { s1: 0 } }, none), { allocations: {}, downvotes: {} });
   assert.throws(() => validateBallot({ allocations: { s1: 1 } }, none), /your own/);
@@ -116,6 +117,58 @@ test("rejects exceeding the per-song cap", () => {
 
 test("rejects self-votes when disallowed", () => {
   assert.throws(() => validateBallot({ allocations: { s1: 5, s2: 5 } }, ctx), /your own/);
+});
+
+// ---- The self-vote rule guards EVERY own song (BUG-11) ---------------------
+//
+// With more than one song per player the voter owns several submissions; the
+// rule used to compare against a single id, so only one of them was guarded.
+
+/** Two songs each (pool 10, cap 5, 1 anti-vote): the voter owns s1 and s2. */
+const twoOwn = {
+  settings: { ...DEFAULT_LEAGUE_SETTINGS, submissionsPerPlayer: 2, downvotePoolSize: 1 },
+  validSubmissionIds: new Set(["s1", "s2", "s3", "s4"]),
+  ownSubmissionIds: new Set(["s1", "s2"]),
+  votableSongCount: 2, // s3 + s4
+};
+
+test("self-voting off, two own songs: points on EITHER one are refused with the existing message", () => {
+  for (const own of ["s1", "s2"]) {
+    assert.throws(() => validateBallot({ allocations: { [own]: 5, s3: 5 } }, twoOwn), {
+      message: "You can't vote for your own submission.",
+    });
+  }
+  // Zero points on an own song is no vote: accepted and dropped.
+  assert.deepEqual(validateBallot({ allocations: { s1: 0, s2: 0, s3: 5, s4: 5 } }, twoOwn).allocations, { s3: 5, s4: 5 });
+});
+
+test("self-voting off, two own songs: anti-votes on EITHER one are refused with the existing message", () => {
+  for (const own of ["s1", "s2"]) {
+    assert.throws(() => validateBallot({ allocations: { s3: 5, s4: 5 }, downvotes: { [own]: 1 } }, twoOwn), {
+      message: "You can't anti-vote your own submission.",
+    });
+  }
+  assert.deepEqual(validateBallot({ allocations: { s3: 5, s4: 5 }, downvotes: { s1: 0, s3: 1 } }, twoOwn).downvotes, { s3: 1 });
+});
+
+test("self-voting on, two own songs: either one takes points and anti-votes, as before", () => {
+  const selfVote = { ...twoOwn, settings: { ...twoOwn.settings, allowSelfVote: true } };
+  assert.deepEqual(validateBallot({ allocations: { s1: 5, s3: 5 }, downvotes: { s2: 1 } }, selfVote), {
+    allocations: { s1: 5, s3: 5 },
+    downvotes: { s2: 1 },
+  });
+  assert.deepEqual(validateBallot({ allocations: { s2: 5, s4: 5 }, downvotes: { s1: 1 } }, selfVote), {
+    allocations: { s2: 5, s4: 5 },
+    downvotes: { s1: 1 },
+  });
+});
+
+test("a voter with no song in the round (empty own set) may vote for anything", () => {
+  const spectatorish = { ...twoOwn, ownSubmissionIds: new Set<string>(), votableSongCount: 4 };
+  assert.deepEqual(validateBallot({ allocations: { s1: 5, s2: 5 }, downvotes: { s3: 1 } }, spectatorish), {
+    allocations: { s1: 5, s2: 5 },
+    downvotes: { s3: 1 },
+  });
 });
 
 test("rejects unknown submission ids", () => {

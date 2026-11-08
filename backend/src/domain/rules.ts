@@ -19,8 +19,11 @@ export interface BallotContext {
   settings: LeagueSettings;
   /** Submission ids that exist in this round. */
   validSubmissionIds: Set<string>;
-  /** The caller's own submission id in this round, if any. */
-  ownSubmissionId?: string;
+  /** EVERY one of the caller's submission ids in this round (empty when they
+   *  didn't submit). With `submissionsPerPlayer` > 1 a voter has several
+   *  songs, and the self-vote rule guards all of them — not just whichever
+   *  one the repository happens to return first (BUG-11). */
+  ownSubmissionIds: ReadonlySet<string>;
   /** How many songs the voter has on offer: the vote page's list — every
    *  submission in the round except ALL of the voter's own, whatever
    *  `allowSelfVote` says (handlers/submissions.ts `listVotableSubmissions`).
@@ -53,13 +56,14 @@ export function effectivePool(
  * only) on pass. Mirrors the ballot rules in the design doc. The effective
  * pool (`effectivePool`: the vote pool, or what the songs on offer can take
  * when that's less) must be spent exactly; anti-votes are optional (0 up to
- * downvotePoolSize).
+ * downvotePoolSize). Unless the league allows self-voting, no points and no
+ * anti-votes on ANY of the voter's own songs (`ownSubmissionIds`).
  */
 export function validateBallot(
   input: BallotInput,
   ctx: BallotContext,
 ): { allocations: Record<string, number>; downvotes: Record<string, number> } {
-  const { settings, validSubmissionIds, ownSubmissionId, votableSongCount } = ctx;
+  const { settings, validSubmissionIds, ownSubmissionIds, votableSongCount } = ctx;
   const entries = Object.entries(input.allocations);
 
   let total = 0;
@@ -73,7 +77,7 @@ export function validateBallot(
     if (points > settings.maxPointsPerSong) {
       throw badRequest(`No song may get more than ${settings.maxPointsPerSong} points.`);
     }
-    if (!settings.allowSelfVote && submissionId === ownSubmissionId && points > 0) {
+    if (!settings.allowSelfVote && ownSubmissionIds.has(submissionId) && points > 0) {
       throw badRequest("You can't vote for your own submission.");
     }
     total += points;
@@ -98,7 +102,7 @@ export function validateBallot(
     if (!Number.isInteger(antiVotes) || antiVotes < 0) {
       throw badRequest("Each anti-vote must be a whole number, 0 or more.");
     }
-    if (!settings.allowSelfVote && submissionId === ownSubmissionId && antiVotes > 0) {
+    if (!settings.allowSelfVote && ownSubmissionIds.has(submissionId) && antiVotes > 0) {
       throw badRequest("You can't anti-vote your own submission.");
     }
     downTotal += antiVotes;

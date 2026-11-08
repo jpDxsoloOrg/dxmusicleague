@@ -75,8 +75,9 @@ export async function castBallot(
 }
 
 /** A standard (points) league's ballot — the original path, apart from
- *  refusing head-to-head picks and spending the effective pool (BUG-02: the
- *  pool, or what the songs on offer can take when that's less). */
+ *  refusing head-to-head picks, spending the effective pool (BUG-02: the
+ *  pool, or what the songs on offer can take when that's less) and guarding
+ *  every one of the caller's songs from self-votes (BUG-11). */
 async function pointsBallot(
   deps: Deps,
   caller: string,
@@ -89,7 +90,10 @@ async function pointsBallot(
   }
   const subs = await deps.repo.getSubmissionsForRound(round.id);
   const validSubmissionIds = new Set(subs.map((s) => s.id));
-  const ownSubmissionId = subs.find((s) => s.userId === caller)?.id;
+  // ALL of the caller's songs — with more than one song per player, guarding
+  // only the first the repository returns let the others take self-votes
+  // (BUG-11).
+  const ownSubmissionIds = new Set(subs.filter((s) => s.userId === caller).map((s) => s.id));
   // The songs on offer: exactly the vote page's list (listVotableSubmissions —
   // every song but ALL of the caller's own, whatever allowSelfVote says), so
   // the effective pool the referee demands is the one the page can place.
@@ -103,7 +107,7 @@ async function pointsBallot(
   // cleaned (positive-only) allocations and downvotes on success.
   const cleaned = validateBallot(
     { allocations, downvotes: input?.downvotes, comments: input?.comments },
-    { settings: league.settings, validSubmissionIds, ownSubmissionId, votableSongCount },
+    { settings: league.settings, validSubmissionIds, ownSubmissionIds, votableSongCount },
   );
 
   return {

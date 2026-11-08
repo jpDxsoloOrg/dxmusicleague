@@ -196,7 +196,8 @@ in the same order.
 
 1. Round status is `voting`; vote deadline not passed; caller is a member.
 2. Every `submissionId` belongs to this round.
-3. `allowSelfVote` is false → no points on the caller's own submission.
+3. `allowSelfVote` is false → no points and no anti-votes on any of the caller's own submissions
+   in the round.
 4. Each allocation is an integer `0 ≤ p ≤ maxPointsPerSong`.
 5. `sum(points) === effectivePool` exactly — no partial ballots. The effective pool is
    `min(votePoolSize, songsOnOffer × maxPointsPerSong)` (`effectivePool`, `domain/rules.ts`), where

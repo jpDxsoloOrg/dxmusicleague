@@ -13,8 +13,10 @@
 // whole pool (a two-player league, players who didn't submit, a low cap) —
 // the voter spends exactly what those songs can take, end to end through the
 // reveal and the timed everyone-voted reveal.
-// BUG-04 (last): in a timed standard league, the last two ballots cast at
-// once reveal — and bank — the round once.
+// BUG-04: in a timed standard league, the last two ballots cast at once
+// reveal — and bank — the round once.
+// BUG-11 (last): with more than one song per player and self-voting off,
+// points and anti-votes on ANY of the voter's songs are refused.
 // Every league is driven through the real flow (open round 1 → freeze,
 // submit, close, open voting) over MemoryRepository, with the freeze RNG
 // seeded through deps.
@@ -23,7 +25,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MemoryRepository, MemoryUserDirectory } from "../data/memory.ts";
 import type { Deps } from "./leagues.ts";
-import { createLeague, joinLeague, leaveLeague } from "./leagues.ts";
+import { createLeague, joinLeague, leaveLeague, updateLeagueSettings } from "./leagues.ts";
 import { createRound, updateRound } from "./rounds.ts";
 import { listVotableSubmissions, submitSong } from "./submissions.ts";
 import { listMatchups } from "./matchups.ts";
@@ -844,4 +846,97 @@ test("timed standard league: the last two ballots cast at the same moment reveal
   assert.equal((await repo.getRound(round.id))!.status, "revealed");
   const points = Object.fromEntries((await repo.getStandings(lg.id)).map((s) => [s.userId, s.points]));
   assert.deepEqual(points, { "u-me": 10, "u-sarah": 10, "u-james": 10 }, "three ballots of 5 + 5: 10 each, banked once");
+});
+
+// ---- Standard ballots: every one of the voter's songs is their own (BUG-11) -
+//
+// With more than one song per player, the self-vote rule must guard ALL of
+// the voter's songs in the round, not just the first one the repository
+// happens to return (insertion order here, SK order in DynamoDB).
+
+/** The ticket's repro through the real handlers: Sarah's standard league
+ *  (pool 10, cap 5, 2 songs per player, 1 anti-vote), James and Mia join,
+ *  Sarah submits two songs in `sarahOrder`, the others one each, and the
+ *  round moves on to voting. */
+async function twoSongsEachRound({
+  allowSelfVote = false,
+  sarahOrder = ["Midnight City", "Nightcall"],
+}: { allowSelfVote?: boolean; sarahOrder?: string[] } = {}) {
+  const tracks: Record<string, string> = {
+    "Midnight City": "M83",
+    Nightcall: "Kavinsky",
+    Resonance: "HOME",
+    "The Sound of Silence": "Simon & Garfunkel",
+  };
+  const repo = new MemoryRepository(false);
+  const deps: Deps = { repo, users: new MemoryUserDirectory() };
+  const lg = await createLeague(deps, "u-sarah", { name: "Two Songs Each", musicProvider: "mock", roundCount: 3 });
+  await updateLeagueSettings(deps, "u-sarah", lg.id, {
+    votePoolSize: 10, maxPointsPerSong: 5, allowSelfVote, submissionsPerPlayer: 2, downvotePoolSize: 1,
+  });
+  for (const p of ["u-james", "u-mia"]) await joinLeague(deps, p, lg.inviteCode);
+  const round = await createRound(deps, "u-sarah", lg.id, { theme: "Night drives" });
+  await updateRound(deps, "u-sarah", lg.id, round.id, { status: "submitting" });
+  const song: Record<string, string> = {};
+  const submit = async (user: string, title: string) => {
+    const track = { id: `mock-${title}`, provider: "mock" as const, providerTrackId: `mock-${title}`, title, artists: [tracks[title]!] };
+    song[title] = (await submitSong(deps, user, round.id, { track })).id;
+  };
+  for (const title of sarahOrder) await submit("u-sarah", title);
+  await submit("u-james", "Resonance");
+  await submit("u-mia", "The Sound of Silence");
+  for (const status of ["previewing", "voting"] as const) await updateRound(deps, "u-sarah", lg.id, round.id, { status });
+  return { deps, repo, roundId: round.id, song };
+}
+
+const OWN_POINTS = /^You can't vote for your own submission\.$/;
+const OWN_ANTI = /^You can't anti-vote your own submission\.$/;
+
+for (const sarahOrder of [["Midnight City", "Nightcall"], ["Nightcall", "Midnight City"]]) {
+  test(`allowSelfVote off, 2 songs per player (submitted ${sarahOrder.join(" then ")}): points and anti-votes on EITHER own song → 400, nothing stored; the reveal credits no self-vote`, async () => {
+    const { deps, repo, roundId, song } = await twoSongsEachRound({ sarahOrder });
+    const [midnight, nightcall, resonance, silence] = ["Midnight City", "Nightcall", "Resonance", "The Sound of Silence"].map((t) => song[t]!);
+
+    // The vote page offers neither of Sarah's songs.
+    const offered = (await listVotableSubmissions(deps, "u-sarah", roundId)).map((s) => s.id).sort();
+    assert.deepEqual(offered, [resonance, silence].sort());
+
+    // Points on either own song (repro steps 2 and 3).
+    for (const own of [midnight, nightcall]) {
+      await assert.rejects(castBallot(deps, "u-sarah", roundId, { allocations: { [own!]: 5, [resonance!]: 5 } }), isStatus(400, OWN_POINTS));
+    }
+    // Anti-votes on either own song, on an otherwise valid ballot (step 4).
+    for (const own of [midnight, nightcall]) {
+      await assert.rejects(
+        castBallot(deps, "u-sarah", roundId, { allocations: { [silence!]: 5, [resonance!]: 5 }, downvotes: { [own!]: 1 } }),
+        isStatus(400, OWN_ANTI),
+      );
+    }
+    assert.equal(await repo.getBallot(roundId, "u-sarah"), undefined, "no refused ballot was stored");
+
+    // Zero on an own song is no vote: still accepted, and cleaned away.
+    await castBallot(deps, "u-sarah", roundId, {
+      allocations: { [silence!]: 5, [resonance!]: 5, [nightcall!]: 0 },
+      downvotes: { [midnight!]: 0 },
+    });
+    assert.deepEqual((await getMyBallot(deps, "u-sarah", roundId))!.allocations, { [silence!]: 5, [resonance!]: 5 });
+
+    // Repro step 5: the reveal credits Sarah's songs only with others' points.
+    await castBallot(deps, "u-james", roundId, { allocations: { [nightcall!]: 5, [silence!]: 5 } });
+    await castBallot(deps, "u-mia", roundId, { allocations: { [midnight!]: 5, [resonance!]: 5 } });
+    const results = (await revealRound(deps, "u-sarah", roundId)) as Array<{ track: { title: string }; points: number }>;
+    const points = Object.fromEntries(results.map((r) => [r.track.title, r.points]));
+    assert.deepEqual(points, { "Midnight City": 5, Nightcall: 5, Resonance: 10, "The Sound of Silence": 10 });
+  });
+}
+
+test("allowSelfVote on, 2 songs per player: both own songs still take points and anti-votes, as before", async () => {
+  const { deps, repo, roundId, song } = await twoSongsEachRound({ allowSelfVote: true });
+  const [midnight, nightcall, resonance] = ["Midnight City", "Nightcall", "Resonance"].map((t) => song[t]!);
+  for (const [up, down] of [[midnight, nightcall], [nightcall, midnight]]) {
+    await castBallot(deps, "u-sarah", roundId, { allocations: { [up!]: 5, [resonance!]: 5 }, downvotes: { [down!]: 1 } });
+    const stored = (await repo.getBallot(roundId, "u-sarah"))!;
+    assert.deepEqual(stored.allocations, { [up!]: 5, [resonance!]: 5 });
+    assert.deepEqual(stored.downvotes, { [down!]: 1 });
+  }
 });
