@@ -19,14 +19,17 @@ import type { Ballot, MatchupTally, Submission as ServerSubmission } from "../..
 import { compareMatchupIds } from "../../backend/src/domain/schedule.ts";
 import {
   anonymousSong,
+  ballotAuthorVisible,
   departedParticipants,
   deriveRoundMatchups,
   inAnonymousOrder,
   matchupsView,
+  membersWithSong,
   roundSettled,
-  votableMatchups,
+  votingPanelNames,
+  votingTurnout,
 } from "../../backend/src/domain/matchups.ts";
-import type { DeriveOptions, RoundMatchupSet } from "../../backend/src/domain/matchups.ts";
+import type { DeriveOptions, RoundMatchupSet, VotingTurnout } from "../../backend/src/domain/matchups.ts";
 import {
   matchupRecords,
   resolveMatchups,
@@ -190,12 +193,16 @@ export const rounds: Round[] = [
   { id: "r-rf-1", leagueId: "lg-retro", index: 1, theme: "80s sci-fi soundtracks", status: "draft" },
   { id: "r-ub-1", leagueId: "lg-urban", index: 1, theme: "Lo-fi study session", status: "draft" },
   // The head-to-head league's rounds. The reveal's pins (h2hDeparted /
-  // h2hTally) live in the H2H store instead. Known shape gap: the API's
-  // GET /leagues/:id still carries them on revealed H2H rounds. They are
-  // internal settlement state that no page reads, and only exist after the
-  // reveal (nothing to deanonymize), so pages must not rely on them. Closing
-  // the gap means stripping them in the backend's league-detail mapper
-  // (getLeagueDetail, HTH-07/HTH-08's code).
+  // h2hTally) live in the H2H store instead. Known shape gap: the API still
+  // carries them on revealed H2H rounds wherever it sends a whole round —
+  // GET /leagues/:id (`rounds` and `currentRound`), the GET /leagues
+  // summaries (`currentRound`), and PATCH /leagues/:id/rounds/:rid (the
+  // round it returns after an edit of a revealed round, or when opening
+  // voting auto-reveals a round nobody can vote in). They are internal
+  // settlement state that no page reads, and only exist after the reveal
+  // (nothing to deanonymize), so pages must not rely on them. Closing the gap
+  // means stripping them in those backend handlers: getLeagueDetail and
+  // listMyLeagues in handlers/leagues.ts, and updateRound in handlers/rounds.ts.
   ...H2H_SEED.rounds.map(({ h2hDeparted: _departed, h2hTally: _tally, ...round }) => round),
 ];
 
@@ -636,10 +643,11 @@ export function getStandings(leagueId: string): Standing[] {
 /** Who's done vs. still pending for the live phase. Identities only — no
  *  tracks, no point allocations. */
 export interface RoundParticipation {
-  /** Head-to-head voting names only members with a matchup to pick in (the
-   *  backend may name just the caller, HTH-08 `votingPanelNames`), so a member
-   *  in neither list has nothing to vote on this round. The round overview's
-   *  CTA relies on that; keep MockClient and the API honoring it. */
+  /** Head-to-head voting names only members with a matchup to pick in —
+   *  and unless every member has one, only the viewer, if they do (HTH-08
+   *  `votingPanelNames`, which MockClient and the API both call) — so a
+   *  viewer in neither list has nothing to vote on this round. The round
+   *  overview's CTA relies on that. */
   submitted: User[];
   waiting: User[];
   /** Units done vs. expected: songs (members × allowance) while submitting,
@@ -995,10 +1003,13 @@ export function rematchLeague(leagueId: string): League {
 //     picked in every matchup they can vote in; members with nothing to vote
 //     on are left out of the voting count, panel and completion %; and a
 //     round nobody can vote in goes straight to the reveal when voting
-//     opens. (`membersWithSong` / `turnout` below are local copies of
-//     HTH-08's domain/matchups.ts `membersWithSong` / `votingTurnout`, which
-//     this branch's base predates — swap them for the imports once both
-//     tickets are integrated.)
+//     opens. The who-voted panel and the activity feed keep HTH-08's
+//     anonymity rule: unless every member can vote, neither names anyone
+//     but the viewer, and the feed never shows another member's ballot
+//     before the panel shows them done (BUG-06). All of it is the backend's
+//     domain/matchups.ts — `membersWithSong`, `votingTurnout`,
+//     `votingPanelNames`, `ballotAuthorVisible` — imported, not copied
+//     (BUG-07).
 // Not simulated (as for standard mock leagues): timed auto-advance and
 // deadlines stamping, playlists.
 // ============================================================================
@@ -1125,42 +1136,22 @@ function headToHeadStandings(league: League): Standing[] {
 
 // ---- progress, completion %, activity (handlers/leagues.ts + HTH-08) ----
 
-/** Current members who have their one song in the round (a departed
- *  player's withdrawn song doesn't stand in for anyone). Member order. */
-function membersWithSong(league: League, round: Round): string[] {
-  const submitted = new Set(roundSubmissions(round.id).map((s) => s.userId));
-  return league.memberIds.filter((id) => submitted.has(id));
-}
-
-/** Who a voting round waits on (HTH-08): `eligible` = current members with at
- *  least one votable matchup (a contest that isn't their own) — nobody else
- *  can ever vote; `voted` = the eligible members whose ballot picks one of
- *  the two songs in every one of them (a comments-only row isn't a vote). */
-function turnout(league: League, round: Round): { eligible: string[]; voted: string[] } {
-  const set = roundMatchups(league, round);
-  const picksBy = new Map(roundBallots(round.id).map((b) => [b.voterId, b.picks ?? {}]));
-  const eligible: string[] = [];
-  const voted: string[] = [];
-  for (const id of league.memberIds) {
-    const votable = votableMatchups(set, id);
-    if (votable.length === 0) continue;
-    eligible.push(id);
-    const picks = picksBy.get(id);
-    if (picks && votable.every((m) => picks[m.matchupId] === m.a.submission!.id || picks[m.matchupId] === m.b.submission!.id)) {
-      voted.push(id);
-    }
-  }
-  return { eligible, voted };
+/** A voting round's turnout (HTH-08) — handlers/matchups.ts
+ *  `loadVotingTurnout`: domain `votingTurnout` over the round as it stands
+ *  (departed players' songs withdrawn) and the current members. */
+function roundTurnout(league: League, round: Round): VotingTurnout {
+  return votingTurnout(roundMatchups(league, round), league.memberIds, roundBallots(round.id));
 }
 
 function h2hCompletionPct(league: League, round: Round | undefined): number {
   if (!round) return 0;
   const pct = (done: number, total: number) => (total === 0 ? 100 : Math.min(100, Math.round((done / total) * 100)));
   if (round.status === "submitting") {
-    return league.memberIds.length === 0 ? 0 : pct(membersWithSong(league, round).length, league.memberIds.length);
+    const done = membersWithSong(league.memberIds, roundSubmissions(round.id)).length;
+    return league.memberIds.length === 0 ? 0 : pct(done, league.memberIds.length);
   }
   if (round.status === "voting") {
-    const { eligible, voted } = turnout(league, round);
+    const { eligible, voted } = roundTurnout(league, round);
     return pct(voted.length, eligible.length); // nobody can vote → 100: only the reveal is left
   }
   return roundSettled(round) ? 100 : 0;
@@ -1176,7 +1167,11 @@ function timeAgo(iso: string): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-/** The live round's who's-done panels and activity feed, from the store. */
+/** The live round's who's-done panels and activity feed, from the store —
+ *  handlers/leagues.ts `getLeagueDetail`, for the current user. While voting,
+ *  the panel names whom `votingPanelNames` allows (everyone eligible, or just
+ *  the viewer) and the feed keeps only the ballots `ballotAuthorVisible`
+ *  allows, so mock mode never names a voter the API hides. */
 function headToHeadLiveRound(
   league: League,
   round: Round | undefined,
@@ -1193,19 +1188,27 @@ function headToHeadLiveRound(
 
   let submissionProgress: RoundParticipation | undefined;
   let votingProgress: RoundParticipation | undefined;
+  let showBallotBy = (_voterId: string) => true;
   if (round.status === "submitting") {
     // People, not rows: a member is done once they have their one song.
-    const doneIds = new Set(membersWithSong(league, round));
+    const doneIds = new Set(membersWithSong(league.memberIds, subs));
     submissionProgress = split(league.memberIds, doneIds, { done: doneIds.size, total: league.memberIds.length });
   } else if (round.status === "voting") {
-    // Only members with something to vote on are listed and counted (HTH-08).
-    const { eligible, voted } = turnout(league, round);
-    votingProgress = split(eligible, new Set(voted), { done: voted.length, total: eligible.length });
+    // Only members with something to vote on are counted (HTH-08); names
+    // only while every member can vote, else just the viewer's own.
+    const turnout = roundTurnout(league, round);
+    votingProgress = split(votingPanelNames(turnout, league.memberIds, currentUser.id), new Set(turnout.voted), {
+      done: turnout.voted.length,
+      total: turnout.eligible.length,
+    });
+    showBallotBy = (voterId) => ballotAuthorVisible(turnout, league.memberIds, currentUser.id, voterId);
   }
 
   const activity: ActivityItem[] = [
     ...subs.filter((s) => s.submittedAt).map((s) => ({ userId: s.userId, text: "submitted a song", at: s.submittedAt! })),
-    ...ballots.filter((b) => b.castAt).map((b) => ({ userId: b.voterId, text: "cast their votes", at: b.castAt })),
+    ...ballots
+      .filter((b) => b.castAt && showBallotBy(b.voterId))
+      .map((b) => ({ userId: b.voterId, text: "cast their votes", at: b.castAt })),
   ]
     .sort((a, b) => b.at.localeCompare(a.at))
     .slice(0, 12)
@@ -1273,7 +1276,7 @@ export function advanceHeadToHeadRound(leagueId: string, roundId: string, status
   if (round.status === "draft") freezeSeasonIfNeeded(league, round);
   round.status = status;
 
-  if (status === "voting" && turnout(league, round).eligible.length === 0) {
+  if (status === "voting" && roundTurnout(league, round).eligible.length === 0) {
     settleRound(league, round); // nobody can vote on anything: reveal now
   }
   return round;

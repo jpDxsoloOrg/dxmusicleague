@@ -88,7 +88,8 @@ signal, HTH-05). So the panel names voters only while **every** member can vote
 nobody but the viewer, and only if they can vote, which they already know from
 their own matchups. The counts are still sent (the number of eligible voters
 follows from the matchups payload anyway). `votingPanelNames` in
-`domain/matchups.ts` is the rule; the HTH-09 MockClient must mirror it.
+`domain/matchups.ts` is the rule; the HTH-09 MockClient imports and calls it,
+so mock mode names exactly whom the API names.
 
 A useful side effect: a member who appears in **neither** list has nothing to
 vote on this round (the pair of the only contest), which the round overview can
@@ -123,7 +124,8 @@ author is waiting again until they re-cast), and a departed voter's ballot
 
 One predicate, `votersNameable` in `domain/matchups.ts`, drives both the panel
 (`votingPanelNames`) and the feed (`ballotAuthorVisible`, which adds the
-done-list condition); the HTH-09 MockClient must mirror both.
+done-list condition); the HTH-09 MockClient imports and calls both (BUG-07),
+so mock mode's panel and feed match the API's for every viewer.
 
 Remaining residuals, both read across time:
 
