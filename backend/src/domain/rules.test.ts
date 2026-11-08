@@ -1,11 +1,12 @@
 // Rules-engine unit tests — pure, no infra. Run: `npm test` (node --test).
-// Proves "the server is the referee" logic in isolation: points ballots and
-// their tally, head-to-head ballots (HTH-06), and the head-to-head tally,
-// outcomes and the W/L/D each reveal banks (HTH-07).
+// Proves "the server is the referee" logic in isolation: points ballots (the
+// effective pool, BUG-02) and their tally, head-to-head ballots (HTH-06), and
+// the head-to-head tally, outcomes and the W/L/D each reveal banks (HTH-07).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  effectivePool,
   matchupOutcome,
   matchupRecords,
   rankSubmissions,
@@ -25,6 +26,7 @@ const ctx = {
   settings: DEFAULT_LEAGUE_SETTINGS, // pool 10, cap 5, no self-vote
   validSubmissionIds: new Set(["s1", "s2", "s3"]),
   ownSubmissionId: "s1",
+  votableSongCount: 2, // s2 + s3 — the voter's own s1 isn't on offer
 };
 
 test("accepts a full, in-bounds ballot and drops zero entries", () => {
@@ -34,6 +36,78 @@ test("accepts a full, in-bounds ballot and drops zero entries", () => {
 
 test("rejects ballots that don't spend the whole pool", () => {
   assert.throws(() => validateBallot({ allocations: { s2: 5, s3: 4 } }, ctx), /exactly 10/);
+});
+
+test("the exact-pool message is unchanged when the songs on offer can take the whole pool", () => {
+  assert.throws(() => validateBallot({ allocations: { s2: 5, s3: 4 } }, ctx), {
+    message: "You must spend exactly 10 points (you spent 9).",
+  });
+  assert.throws(() => validateBallot({ allocations: {} }, ctx), {
+    message: "You must spend exactly 10 points (you spent 0).",
+  });
+});
+
+// ---- The effective pool (BUG-02): what the songs on offer can take ---------
+//
+// No song takes more than the cap, so when (songs on offer × cap) < pool the
+// full pool can't be placed: the ballot spends exactly what can be.
+
+test("effectivePool = min(pool, songs on offer × cap)", () => {
+  assert.equal(effectivePool(DEFAULT_LEAGUE_SETTINGS, 2), 10); // 2 × 5 = 10: the whole pool
+  assert.equal(effectivePool(DEFAULT_LEAGUE_SETTINGS, 5), 10);
+  assert.equal(effectivePool(DEFAULT_LEAGUE_SETTINGS, 1), 5); // a two-player league
+  assert.equal(effectivePool(DEFAULT_LEAGUE_SETTINGS, 0), 0); // nothing on offer
+  assert.equal(effectivePool({ votePoolSize: 12, maxPointsPerSong: 4 }, 2), 8);
+  assert.equal(effectivePool({ votePoolSize: 12, maxPointsPerSong: 4 }, 3), 12);
+  assert.equal(effectivePool({ votePoolSize: 10, maxPointsPerSong: 1 }, 6), 6);
+  assert.equal(effectivePool({ votePoolSize: 10, maxPointsPerSong: 2 }, 4), 8); // mock Synthwave Souls at cap 2
+});
+
+test("two-player league (pool 10, cap 5): one song on offer → a 5-point ballot is the full ballot", () => {
+  const two = { settings: DEFAULT_LEAGUE_SETTINGS, validSubmissionIds: new Set(["s1", "s2"]), ownSubmissionId: "s1", votableSongCount: 1 };
+  assert.deepEqual(validateBallot({ allocations: { s2: 5 } }, two), { allocations: { s2: 5 }, downvotes: {} });
+  assert.throws(() => validateBallot({ allocations: { s2: 4 } }, two), {
+    message: "You must spend exactly 5 points (you spent 4) — that's all the songs on offer can take this round.",
+  });
+  assert.throws(() => validateBallot({ allocations: { s2: 6 } }, two), /more than 5/);
+  assert.throws(() => validateBallot({ allocations: { s1: 5 } }, two), /your own/);
+});
+
+test("pool 12 / cap 4: two songs on offer take 8, three take the whole 12", () => {
+  const settings = { ...DEFAULT_LEAGUE_SETTINGS, votePoolSize: 12, maxPointsPerSong: 4 };
+  const twoSongs = { settings, validSubmissionIds: new Set(["s1", "s2", "s3"]), ownSubmissionId: "s1", votableSongCount: 2 };
+  assert.deepEqual(validateBallot({ allocations: { s2: 4, s3: 4 } }, twoSongs).allocations, { s2: 4, s3: 4 });
+  assert.throws(() => validateBallot({ allocations: { s2: 4, s3: 3 } }, twoSongs), /exactly 8 points \(you spent 7\)/);
+  // A voter with no song in the round has all three on offer: the full pool.
+  const threeSongs = { settings, validSubmissionIds: new Set(["s1", "s2", "s3"]), votableSongCount: 3 };
+  assert.deepEqual(validateBallot({ allocations: { s1: 4, s2: 4, s3: 4 } }, threeSongs).allocations, { s1: 4, s2: 4, s3: 4 });
+  assert.throws(() => validateBallot({ allocations: { s2: 4, s3: 4 } }, threeSongs), {
+    message: "You must spend exactly 12 points (you spent 8).",
+  });
+});
+
+test("a low cap (pool 10, cap 1) with six songs on offer → 6 points is the full ballot", () => {
+  const ids = ["s1", "s2", "s3", "s4", "s5", "s6", "s7"];
+  const lowCap = {
+    settings: { ...DEFAULT_LEAGUE_SETTINGS, maxPointsPerSong: 1 },
+    validSubmissionIds: new Set(ids),
+    ownSubmissionId: "s1",
+    votableSongCount: 6,
+  };
+  const all = Object.fromEntries(ids.slice(1).map((id) => [id, 1]));
+  assert.deepEqual(validateBallot({ allocations: all }, lowCap).allocations, all);
+  assert.throws(() => validateBallot({ allocations: { ...all, s6: 0 } }, lowCap), /exactly 6 points \(you spent 5\)/);
+});
+
+test("no songs on offer (only the voter submitted) → the effective pool is 0: an empty ballot passes, a point doesn't", () => {
+  const none = { settings: DEFAULT_LEAGUE_SETTINGS, validSubmissionIds: new Set(["s1"]), ownSubmissionId: "s1", votableSongCount: 0 };
+  assert.deepEqual(validateBallot({ allocations: {} }, none), { allocations: {}, downvotes: {} });
+  assert.deepEqual(validateBallot({ allocations: { s1: 0 } }, none), { allocations: {}, downvotes: {} });
+  assert.throws(() => validateBallot({ allocations: { s1: 1 } }, none), /your own/);
+  // Self-voting on: the own song still isn't counted (the vote page never
+  // offers it), so the safe smaller pool still holds.
+  const selfVote = { ...none, settings: { ...DEFAULT_LEAGUE_SETTINGS, allowSelfVote: true } };
+  assert.throws(() => validateBallot({ allocations: { s1: 1 } }, selfVote), /exactly 0 points \(you spent 1\)/);
 });
 
 test("rejects exceeding the per-song cap", () => {

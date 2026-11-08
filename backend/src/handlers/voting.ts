@@ -1,8 +1,8 @@
 // Voting handlers — cast a ballot, reveal a round, read results. The actual
-// game rules (full-pool ballots, per-song cap, no self-vote, the tie-break; for
-// head-to-head leagues the winner-pick rules) live in domain/rules.ts and are
-// reused here; these handlers just supply context and do the I/O. Same
-// (deps, caller, ...) shape as the other handlers.
+// game rules (spend the whole effective pool, per-song cap, no self-vote, the
+// tie-break; for head-to-head leagues the winner-pick rules) live in
+// domain/rules.ts and are reused here; these handlers just supply context and
+// do the I/O. Same (deps, caller, ...) shape as the other handlers.
 //
 // Head-to-head (HTH-06): a ballot is one winner pick per matchup the voter can
 // vote in, stored on the SAME one-row-per-voter Ballot item as a points ballot
@@ -74,8 +74,9 @@ export async function castBallot(
   return { ok: true };
 }
 
-/** A standard (points) league's ballot — the original path, unchanged apart
- *  from refusing head-to-head picks. */
+/** A standard (points) league's ballot — the original path, apart from
+ *  refusing head-to-head picks and spending the effective pool (BUG-02: the
+ *  pool, or what the songs on offer can take when that's less). */
 async function pointsBallot(
   deps: Deps,
   caller: string,
@@ -89,6 +90,12 @@ async function pointsBallot(
   const subs = await deps.repo.getSubmissionsForRound(round.id);
   const validSubmissionIds = new Set(subs.map((s) => s.id));
   const ownSubmissionId = subs.find((s) => s.userId === caller)?.id;
+  // The songs on offer: exactly the vote page's list (listVotableSubmissions —
+  // every song but ALL of the caller's own, whatever allowSelfVote says), so
+  // the effective pool the referee demands is the one the page can place.
+  // Never add own songs back for a self-voting league: the page can't show
+  // them, and the smaller count stays safe for an API caller who self-votes.
+  const votableSongCount = subs.filter((s) => s.userId !== caller).length;
 
   const allocations = input?.allocations && typeof input.allocations === "object" ? input.allocations : {};
 
@@ -96,7 +103,7 @@ async function pointsBallot(
   // cleaned (positive-only) allocations and downvotes on success.
   const cleaned = validateBallot(
     { allocations, downvotes: input?.downvotes, comments: input?.comments },
-    { settings: league.settings, validSubmissionIds, ownSubmissionId },
+    { settings: league.settings, validSubmissionIds, ownSubmissionId, votableSongCount },
   );
 
   return {

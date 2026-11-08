@@ -21,19 +21,45 @@ export interface BallotContext {
   validSubmissionIds: Set<string>;
   /** The caller's own submission id in this round, if any. */
   ownSubmissionId?: string;
+  /** How many songs the voter has on offer: the vote page's list — every
+   *  submission in the round except ALL of the voter's own, whatever
+   *  `allowSelfVote` says (handlers/submissions.ts `listVotableSubmissions`).
+   *  Sizes the effective pool (`effectivePool`). */
+  votableSongCount: number;
+}
+
+/**
+ * The points a voter must spend: the league's pool, or — when the songs on
+ * offer can't take it all — as many as they can. No song takes more than
+ * `maxPointsPerSong`, so `votableSongCount` songs hold at most
+ * `votableSongCount × maxPointsPerSong`; a two-player league (one song on
+ * offer), players who didn't submit or a low cap can leave that short of the
+ * pool, and demanding the full pool there would make every ballot invalid.
+ * Zero songs on offer (e.g. only the voter submitted) → 0: an empty ballot, which
+ * still counts as the voter's ballot (the timed everyone-voted reveal).
+ * Isomorphic: the vote page uses it for its submit gate and copy, so the page
+ * and the referee agree on the number.
+ */
+export function effectivePool(
+  settings: Pick<LeagueSettings, "votePoolSize" | "maxPointsPerSong">,
+  votableSongCount: number,
+): number {
+  return Math.max(0, Math.min(settings.votePoolSize, votableSongCount * settings.maxPointsPerSong));
 }
 
 /**
  * Validate a ballot as a complete unit. Throws ApiError(400) on the first
  * broken rule; returns the cleaned allocations and downvotes (positive entries
- * only) on pass. Mirrors the ballot rules in the design doc. The vote pool
- * must be spent exactly; anti-votes are optional (0 up to downvotePoolSize).
+ * only) on pass. Mirrors the ballot rules in the design doc. The effective
+ * pool (`effectivePool`: the vote pool, or what the songs on offer can take
+ * when that's less) must be spent exactly; anti-votes are optional (0 up to
+ * downvotePoolSize).
  */
 export function validateBallot(
   input: BallotInput,
   ctx: BallotContext,
 ): { allocations: Record<string, number>; downvotes: Record<string, number> } {
-  const { settings, validSubmissionIds, ownSubmissionId } = ctx;
+  const { settings, validSubmissionIds, ownSubmissionId, votableSongCount } = ctx;
   const entries = Object.entries(input.allocations);
 
   let total = 0;
@@ -53,8 +79,13 @@ export function validateBallot(
     total += points;
   }
 
-  if (total !== settings.votePoolSize) {
-    throw badRequest(`You must spend exactly ${settings.votePoolSize} points (you spent ${total}).`);
+  const pool = effectivePool(settings, votableSongCount);
+  if (total !== pool) {
+    throw badRequest(
+      pool === settings.votePoolSize
+        ? `You must spend exactly ${pool} points (you spent ${total}).`
+        : `You must spend exactly ${pool} ${pool === 1 ? "point" : "points"} (you spent ${total}) — that's all the songs on offer can take this round.`,
+    );
   }
 
   const downvotePool = settings.downvotePoolSize ?? 0;

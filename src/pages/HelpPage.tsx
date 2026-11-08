@@ -455,7 +455,7 @@ export function HelpPage() {
               <li>You get a <strong>pool of points</strong> to spend (10 by default).</li>
               <li>Use the <strong>−</strong> and <strong>+</strong> steppers to place points on the songs you liked.</li>
               <li>There's a <strong>cap per song</strong> (5 by default) so you have to spread your points around rather than dumping them all on one favourite.</li>
-              <li>You must spend <strong>every point</strong> in your pool before you can submit — the counter shows how many you have left.</li>
+              <li>You must spend <strong>every point</strong> in your pool before you can submit — or, when the songs on offer can't take that many (say, just one other song in a two-player league), as many as they can take. The counter shows how many you have left.</li>
               <li>You can add an optional <strong>comment</strong> to any song; it's shown next to that song when the round is revealed.</li>
               <li>Some leagues also give you <strong>anti-votes</strong> (💔): each subtracts a point from a song. Spending them is optional, and totals can go negative.</li>
             </ul>
@@ -686,7 +686,7 @@ export function HelpPage() {
               </details>
               <details>
                 <summary>Why can't I submit my votes?</summary>
-                <p>You have to spend your entire point pool first. Check the “points left” counter — it has to reach zero. In a head-to-head league, you need a pick in every matchup you can vote in; the “picks left” counter has to reach zero.</p>
+                <p>You have to spend all your points first: your entire point pool, or as many as the songs on offer can take when that's fewer. Check the “points left” counter — it has to reach zero. In a head-to-head league, you need a pick in every matchup you can vote in; the “picks left” counter has to reach zero.</p>
               </details>
               <details>
                 <summary>Who am I up against in a head-to-head round?</summary>

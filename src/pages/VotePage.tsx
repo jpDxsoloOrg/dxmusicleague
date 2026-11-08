@@ -7,6 +7,7 @@ import { formatDuration } from "../music";
 import { useAsync } from "../lib/useAsync";
 import { TrackArt } from "../components/TrackArt";
 import { MatchupBallot } from "../components/MatchupBallot";
+import { effectivePool } from "../../backend/src/domain/rules.ts";
 import "./VotePage.css";
 
 export function VotePage() {
@@ -35,11 +36,17 @@ export function VotePage() {
   return <PointsBallot detail={detail} />;
 }
 
+/** "1 point" / "8 points" — an effective pool of 1 is an ordinary state
+ *  (a two-player league with cap 1), so the copy says it properly. */
+function pointsLabel(n: number): string {
+  return `${n} ${n === 1 ? "point" : "points"}`;
+}
+
 /** The standard (points) ballot. */
 function PointsBallot({ detail }: { detail: LeagueDetail }) {
   // Voting always targets the league's current round.
   const roundId = detail.currentRound?.id ?? "";
-  const { data: subs } = useAsync(
+  const { data: subs, loading: subsLoading } = useAsync(
     () => (roundId ? data.getVotableSubmissions(roundId) : Promise.resolve([])),
     [roundId],
   );
@@ -73,15 +80,26 @@ function PointsBallot({ detail }: { detail: LeagueDetail }) {
   }, [myBallot]);
 
   const { league, currentRound } = detail;
-  const pool = league.settings.votePoolSize;
   const perSongMax = league.settings.maxPointsPerSong;
+  // The points to spend: the league's pool, or — when the songs on offer can't
+  // take it all (a two-player league, players who didn't submit, a low cap) —
+  // as many as they can: the referee's own `effectivePool`, so the page and
+  // the server agree. Only once the current round's song list has loaded: an
+  // empty list would read as a pool of 0 and enable Submit, so while it loads,
+  // with no current round, or if it couldn't load, the pool reads as the
+  // league's and Submit stays disabled (as it always did there).
+  const songsLoaded = roundId !== "" && subs !== undefined;
+  const pool = songsLoaded ? effectivePool(league.settings, submissions.length) : league.settings.votePoolSize;
+  const poolReduced = pool < league.settings.votePoolSize;
+  // Nothing on offer (e.g. only the voter submitted): an empty ballot to send.
+  const nothingToVoteOn = songsLoaded && submissions.length === 0;
   const antiPool = league.settings.downvotePoolSize ?? 0;
   const spent = Object.values(allocations).reduce((a, b) => a + b, 0);
   const remaining = pool - spent;
   const antiSpent = Object.values(downvotes).reduce((a, b) => a + b, 0);
   const antiRemaining = antiPool - antiSpent;
-  // The vote pool must be spent exactly; anti-votes are optional.
-  const canSubmit = remaining === 0;
+  // The (effective) vote pool must be spent exactly; anti-votes are optional.
+  const canSubmit = songsLoaded && remaining === 0;
 
   const setPoints = (id: string, next: number) => {
     const clamped = Math.max(0, next);
@@ -107,10 +125,14 @@ function PointsBallot({ detail }: { detail: LeagueDetail }) {
         <div className="vote-done">
           <div className="submitted-check">✓</div>
           <h2>Votes locked in</h2>
-          <p>
-            You spent all {pool} points. You can come back and adjust your votes until voting
-            closes; results appear when the round is revealed.
-          </p>
+          {pool > 0 ? (
+            <p>
+              You spent all {pointsLabel(pool)}. You can come back and adjust your votes until voting
+              closes; results appear when the round is revealed.
+            </p>
+          ) : (
+            <p>There were no songs for you to vote on this round. Results appear when the round is revealed.</p>
+          )}
           <Link to={`/leagues/${league.id}`} className="btn btn-primary">Back to league</Link>
         </div>
       </div>
@@ -123,7 +145,18 @@ function PointsBallot({ detail }: { detail: LeagueDetail }) {
         <div>
           <Link to={`/leagues/${league.id}`} className="link-muted">← {league.name}</Link>
           <h1>Vote{currentRound ? `: ${currentRound.theme}` : ""}</h1>
-          <p className="vote-sub">Spread your points across the songs you want to win — up to {perSongMax} on any one song. Submitters stay hidden until reveal.</p>
+          {!nothingToVoteOn && (
+            <p className="vote-sub">Spread your points across the songs you want to win — up to {perSongMax} on any one song. Submitters stay hidden until reveal.</p>
+          )}
+          {poolReduced && (
+            <p className="vote-pool-note">
+              {!nothingToVoteOn
+                ? `Only ${pointsLabel(pool)} can be placed this round: ${submissions.length} ${submissions.length === 1 ? "song is" : "songs are"} on offer, up to ${perSongMax} each.`
+                : hasVoted
+                  ? "There are no songs for you to vote on this round — your empty ballot is recorded."
+                  : "There are no songs for you to vote on this round — submit to record your ballot."}
+            </p>
+          )}
         </div>
         <div className="vote-pools">
           <div className={`points-left${remaining === 0 ? " spent" : ""}`}>
@@ -219,8 +252,10 @@ function PointsBallot({ detail }: { detail: LeagueDetail }) {
           {busy ? "Submitting…" : hasVoted ? "Update votes" : "Submit votes"}
         </button>
         {error && <span className="vote-hint" style={{ color: "#ff8a8a" }}>{error}</span>}
-        {!canSubmit && !error && (
-          <span className="vote-hint">Allocate all {pool} points to submit ({remaining} left)</span>
+        {/* not while the song list loads: a pre-filled re-cast would flash
+            "(N left)" against the league's pool rather than the effective one */}
+        {!canSubmit && !error && !subsLoading && (
+          <span className="vote-hint">Allocate all {pointsLabel(pool)} to submit ({remaining} left)</span>
         )}
       </div>
     </div>

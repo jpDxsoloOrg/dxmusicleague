@@ -9,6 +9,10 @@
 // `picks`) — stored on the voter's one Ballot row, refereed by
 // validateH2HBallot over the same derived matchups, re-cast + my-ballot
 // pre-fill, comments, format cross-checks, and the timed auto-reveal.
+// BUG-02: a standard (points) ballot when the songs on offer can't take the
+// whole pool (a two-player league, players who didn't submit, a low cap) —
+// the voter spends exactly what those songs can take, end to end through the
+// reveal and the timed everyone-voted reveal.
 // Every league is driven through the real flow (open round 1 → freeze,
 // submit, close, open voting) over MemoryRepository, with the freeze RNG
 // seeded through deps.
@@ -21,14 +25,14 @@ import { joinLeague, leaveLeague } from "./leagues.ts";
 import { updateRound } from "./rounds.ts";
 import { listVotableSubmissions, submitSong } from "./submissions.ts";
 import { listMatchups } from "./matchups.ts";
-import { castBallot, getMyBallot } from "./voting.ts";
+import { castBallot, getMyBallot, revealRound } from "./voting.ts";
 import { ApiError } from "../domain/errors.ts";
 import type { RandomInt } from "../domain/freeze.ts";
 import type { RoundMatchupsView } from "../domain/matchups.ts";
 import { matchupsForRound } from "../domain/schedule.ts";
 import type { RoundMatchups } from "../domain/schedule.ts";
 import { DEFAULT_LEAGUE_SETTINGS, H2H_FORCED_SETTINGS } from "../domain/types.ts";
-import type { League, Round, RoundStatus, Submission } from "../domain/types.ts";
+import type { League, LeagueSettings, Round, RoundStatus, Submission } from "../domain/types.ts";
 import { buildRoutes, matchRoute } from "../http/routes.ts";
 
 const LEAGUE = "duel";
@@ -684,4 +688,127 @@ test("POST /rounds/:roundId/ballot forwards `picks` through the route table's fi
     call("POST", `/rounds/${ROUND}/ballot`, "u-ben", { allocations: { [subs.get(OWNER)!.id]: 10 } }),
     isStatus(400, /head-to-head/),
   );
+});
+
+// ---- Standard ballots: the effective pool (BUG-02) --------------------------
+//
+// A voter can always cast a valid points ballot: when the songs on offer (the
+// vote page's list — every song but the voter's own) times the per-song cap
+// fall short of the pool, the ballot spends exactly what they can take.
+
+const TINY = "tiny";
+const TINY_ROUND = `${TINY}~0001`;
+
+/** A small standard league driven through the real flow: `members` (owner
+ *  first), songs from `submitters`, then the owner moves the round on to
+ *  previewing and voting (a timed league may already be past submitting). */
+async function smallPointsRound(
+  members: string[],
+  { submitters = members, settings = {}, timed = false }: { submitters?: string[]; settings?: Partial<LeagueSettings>; timed?: boolean } = {},
+) {
+  const repo = new MemoryRepository(false);
+  await repo.createLeague({
+    id: TINY, name: "Tiny League", ownerId: OWNER, musicProvider: "mock", format: "standard",
+    settings: { ...DEFAULT_LEAGUE_SETTINGS, ...settings }, memberIds: [...members], inviteCode: "TINY-1",
+    visibility: "private", roundCount: 3,
+    ...(timed ? { progression: "timed" as const, phaseDays: 3 } : { progression: "manual" as const }),
+  });
+  for (const id of members) await repo.addStandingPoints(TINY, id, 0);
+  await repo.createRound({ id: TINY_ROUND, leagueId: TINY, index: 1, theme: "Openers", status: "submitting" });
+  const deps: Deps = { repo, users: new MemoryUserDirectory() };
+  for (const id of submitters) {
+    const song = SONGS[members.indexOf(id)]!;
+    await submitSong(deps, id, TINY_ROUND, {
+      track: { id: `mock-${song.title}`, provider: "mock", providerTrackId: `mock-${song.title}`, ...song },
+    });
+  }
+  const order: RoundStatus[] = ["submitting", "previewing", "voting"];
+  for (const next of ["previewing", "voting"] as const) {
+    const { status } = (await repo.getRound(TINY_ROUND))!;
+    if (order.indexOf(status) < order.indexOf(next)) await updateRound(deps, OWNER, TINY, TINY_ROUND, { status: next });
+  }
+  assert.equal((await repo.getRound(TINY_ROUND))!.status, "voting");
+  const subs = new Map((await repo.getSubmissionsForRound(TINY_ROUND)).map((x) => [x.userId, x]));
+  return { deps, repo, subs };
+}
+
+/** Each song's points in a standard round's results, by submitter. */
+const pointsBySubmitter = (results: unknown) =>
+  Object.fromEntries((results as Array<{ submitter: { id: string }; points: number }>).map((r) => [r.submitter.id, r.points]));
+
+test("a two-player standard league (pool 10, cap 5): each voter has one song on offer, so 5 points is the full ballot — both are accepted and the reveal tallies them", async () => {
+  const { deps, repo, subs } = await smallPointsRound([OWNER, "u-ben"]);
+  const [offered] = await listVotableSubmissions(deps, OWNER, TINY_ROUND);
+  assert.equal((await listVotableSubmissions(deps, OWNER, TINY_ROUND)).length, 1, "the vote page shows one song");
+  assert.equal(offered!.id, subs.get("u-ben")!.id);
+
+  // Short of what the song can take, or over the cap → still refused.
+  await assert.rejects(
+    castBallot(deps, OWNER, TINY_ROUND, { allocations: { [offered!.id]: 4 } }),
+    isStatus(400, /^You must spend exactly 5 points \(you spent 4\)/),
+  );
+  await assert.rejects(castBallot(deps, OWNER, TINY_ROUND, { allocations: { [offered!.id]: 6 } }), isStatus(400, /more than 5/));
+  assert.equal(await repo.getBallot(TINY_ROUND, OWNER), undefined, "nothing stored");
+
+  await castBallot(deps, OWNER, TINY_ROUND, { allocations: { [offered!.id]: 5 }, comments: { [offered!.id]: "great" } });
+  await castBallot(deps, "u-ben", TINY_ROUND, { allocations: { [subs.get(OWNER)!.id]: 5 } });
+  assert.deepEqual((await getMyBallot(deps, OWNER, TINY_ROUND))!.allocations, { [offered!.id]: 5 });
+
+  const results = await revealRound(deps, OWNER, TINY_ROUND);
+  assert.deepEqual(pointsBySubmitter(results), { [OWNER]: 5, "u-ben": 5 });
+  const standings = Object.fromEntries((await repo.getStandings(TINY)).map((s) => [s.userId, s.points]));
+  assert.deepEqual(standings, { [OWNER]: 5, "u-ben": 5 });
+});
+
+test("allowSelfVote on: the voter's own song isn't added back — the server counts exactly the songs the vote page offers", async () => {
+  const { deps, subs } = await smallPointsRound([OWNER, "u-ben"], { settings: { allowSelfVote: true } });
+  assert.equal((await listVotableSubmissions(deps, OWNER, TINY_ROUND)).length, 1);
+  const own = subs.get(OWNER)!.id;
+  const other = subs.get("u-ben")!.id;
+  // The page can only place 5 (one song); the server wants exactly that.
+  await assert.rejects(
+    castBallot(deps, OWNER, TINY_ROUND, { allocations: { [own]: 5, [other]: 5 } }),
+    isStatus(400, /exactly 5 points \(you spent 10\)/),
+  );
+  await castBallot(deps, OWNER, TINY_ROUND, { allocations: { [other]: 5 } });
+  // An API caller who does self-vote stays within the same smaller pool.
+  await castBallot(deps, "u-ben", TINY_ROUND, { allocations: { [subs.get("u-ben")!.id]: 2, [own]: 3 } });
+});
+
+test("players who didn't submit: a non-submitter has every song on offer (the full pool), a submitter only the others' (pool 12, cap 4)", async () => {
+  const members = [OWNER, "u-ben", "u-cyd", "u-dot"];
+  const { deps, subs } = await smallPointsRound(members, {
+    submitters: [OWNER, "u-ben", "u-cyd"],
+    settings: { votePoolSize: 12, maxPointsPerSong: 4 },
+  });
+  const [ana, ben, cyd] = [OWNER, "u-ben", "u-cyd"].map((u) => subs.get(u)!.id);
+  // u-dot didn't submit: three songs × 4 = 12, the whole pool, message unchanged.
+  await assert.rejects(
+    castBallot(deps, "u-dot", TINY_ROUND, { allocations: { [ana!]: 4, [ben!]: 4 } }),
+    (e: unknown) => e instanceof ApiError && e.message === "You must spend exactly 12 points (you spent 8).",
+  );
+  await castBallot(deps, "u-dot", TINY_ROUND, { allocations: { [ana!]: 4, [ben!]: 4, [cyd!]: 4 } });
+  // A submitter has two songs on offer: 2 × 4 = 8.
+  await assert.rejects(castBallot(deps, OWNER, TINY_ROUND, { allocations: { [ben!]: 4, [cyd!]: 3 } }), isStatus(400, /exactly 8 points/));
+  await castBallot(deps, OWNER, TINY_ROUND, { allocations: { [ben!]: 4, [cyd!]: 4 } });
+  const results = await revealRound(deps, OWNER, TINY_ROUND);
+  assert.deepEqual(pointsBySubmitter(results), { [OWNER]: 4, "u-ben": 8, "u-cyd": 8 });
+});
+
+test("timed: the lone submitter has no songs on offer — their empty ballot is accepted and counts, so the everyone-voted reveal fires", async () => {
+  const { deps, repo, subs } = await smallPointsRound([OWNER, "u-ben"], { submitters: [OWNER], timed: true });
+  assert.deepEqual(await listVotableSubmissions(deps, OWNER, TINY_ROUND), []);
+  await assert.rejects(castBallot(deps, OWNER, TINY_ROUND, { allocations: { [subs.get(OWNER)!.id]: 1 } }), isStatus(400, /your own/));
+  await castBallot(deps, OWNER, TINY_ROUND, { allocations: {} });
+  assert.equal((await repo.getRound(TINY_ROUND))!.status, "voting", "u-ben hasn't voted yet");
+  await castBallot(deps, "u-ben", TINY_ROUND, { allocations: { [subs.get(OWNER)!.id]: 5 } });
+  assert.equal((await repo.getRound(TINY_ROUND))!.status, "revealed", "both ballots in → the timed reveal");
+});
+
+test("timed two-player league: both 5-point ballots trigger the everyone-voted reveal", async () => {
+  const { deps, repo, subs } = await smallPointsRound([OWNER, "u-ben"], { timed: true });
+  await castBallot(deps, OWNER, TINY_ROUND, { allocations: { [subs.get("u-ben")!.id]: 5 } });
+  assert.equal((await repo.getRound(TINY_ROUND))!.status, "voting");
+  await castBallot(deps, "u-ben", TINY_ROUND, { allocations: { [subs.get(OWNER)!.id]: 5 } });
+  assert.equal((await repo.getRound(TINY_ROUND))!.status, "revealed");
 });

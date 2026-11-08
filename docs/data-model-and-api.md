@@ -116,7 +116,7 @@ afresh at its own round 1). Standard leagues never get either attribute.
   round — a re-submit is a `PutItem` overwrite of the same key. That's `submissionsPerPlayer: 1`
   enforced by the schema itself, not just by code.
 - `BALLOT#<voterId>` (one item holding the whole allocation map) means a ballot is atomic:
-  it is validated as a complete unit (full pool, caps) and written once. No partial rows.
+  it is validated as a complete unit (effective pool, caps) and written once. No partial rows.
   A head-to-head ballot is the same one item per voter (its `picks` map instead of points),
   so per-voter counts — completion %, the timed everyone-voted reveal — hold for both formats.
 
@@ -191,7 +191,12 @@ in the same order.
 2. Every `submissionId` belongs to this round.
 3. `allowSelfVote` is false → no points on the caller's own submission.
 4. Each allocation is an integer `0 ≤ p ≤ maxPointsPerSong`.
-5. `sum(points) === votePoolSize` exactly — no partial ballots.
+5. `sum(points) === effectivePool` exactly — no partial ballots. The effective pool is
+   `min(votePoolSize, songsOnOffer × maxPointsPerSong)` (`effectivePool`, `domain/rules.ts`), where
+   the songs on offer are the vote page's list: every song in the round except all of the caller's
+   own, whatever `allowSelfVote` says. It is the whole pool unless those songs can't take it (a
+   two-player league, players who didn't submit, a low cap); with no songs on offer it is 0, and the
+   empty ballot still counts as the caller's vote.
 6. One ballot per voter: overwrite of `BALLOT#<me>` allowed until the deadline.
 
 **Head-to-head ballots** (`validateH2HBallot`, `domain/rules.ts`) pick a winner per matchup,
