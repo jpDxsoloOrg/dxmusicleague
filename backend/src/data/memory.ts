@@ -2,7 +2,7 @@
 // fixture leagues/rounds/users as the frontend mock (src/data/mock.ts) so the
 // app behaves identically whether it talks to this or to DynamoDB.
 
-import type { Ballot, League, LeagueSettings, Round, Submission } from "../domain/types.ts";
+import type { Ballot, League, LeagueSettings, Round, Submission, Track } from "../domain/types.ts";
 import { DEFAULT_LEAGUE_SETTINGS, leagueFormat } from "../domain/types.ts";
 import type { StandingPointsDelta, StandingRecordDelta, StandingTotals } from "../domain/standings.ts";
 import { mergePointDeltas, recordIncrements } from "../domain/standings.ts";
@@ -10,6 +10,9 @@ import type { SeasonFreeze } from "../domain/freeze.ts";
 import { roundSettled } from "../domain/matchups.ts";
 import type { Repository, UserDirectory } from "./repository.ts";
 import { headToHeadSeed } from "./seedHeadToHead.ts";
+
+const HOUR_MS = 60 * 60_000;
+const DAY_MS = 24 * HOUR_MS;
 
 /** Fixed display-name directory, mirroring the frontend mock's `users`. */
 const SEED_USERS: Record<string, string> = {
@@ -48,8 +51,13 @@ export class MemoryRepository implements Repository {
   // applies the same read-time zero defaults as DynamoRepository.
   private standings = new Map<string, StoredStanding>();
 
-  constructor(seed = true) {
-    if (seed) this.loadSeed();
+  /** `seed` loads the fixture leagues (local dev; handler tests pass false).
+   *  `now` is the clock the seed is laid out from — its deadlines and
+   *  activity timestamps — defaulting to the moment the repo is built (the
+   *  local server's start), so the seeded rounds are playable whenever it
+   *  starts. Tests inject a fixed one. */
+  constructor(seed = true, opts: { now?: Date } = {}) {
+    if (seed) this.loadSeed(opts.now ?? new Date());
   }
 
   // ---- Leagues ----
@@ -285,13 +293,17 @@ export class MemoryRepository implements Repository {
   }
 
   // ---- Seed (mirrors src/data/mock.ts) ----
-  private loadSeed(): void {
-    const isoInDays = (days: number): string => {
-      // Fixed epoch base keeps seed deterministic across runs/tests.
-      const base = new Date("2026-06-28T00:00:00.000Z");
-      base.setDate(base.getDate() + days);
-      return base.toISOString();
-    };
+  /** Load the fixture leagues. Every date in it hangs off `now` — deadlines
+   *  `days` ahead, like the mock's `isoInDays`, and the head-to-head
+   *  fixture's activity timestamps behind — so one clock lays out the whole
+   *  seed and its live rounds are open whenever the server starts. (A fixed
+   *  base date here once expired every seeded deadline three days after it
+   *  was written, BUG-08.) The seeded leagues are manual, so a deadline only
+   *  gates submits and ballots — nothing auto-advances; a server left running
+   *  past one sees that round close, and a restart re-seeds it. */
+  private loadSeed(now: Date): void {
+    const isoInDays = (days: number): string => new Date(now.getTime() + days * DAY_MS).toISOString();
+    const isoHoursAgo = (hours: number): string => new Date(now.getTime() - hours * HOUR_MS).toISOString();
 
     const seedLeagues: League[] = [
       { id: "lg-synthwave", name: "Synthwave Souls", ownerId: "u-me", musicProvider: "youtube-music", format: "standard",
@@ -330,6 +342,27 @@ export class MemoryRepository implements Repository {
     ];
     for (const r of seedRounds) this.rounds.set(r.id, r);
 
+    // Vaporwave's round 1 is in voting, so it needs its songs: one per member,
+    // the mock's canonical picks (src/data/mock.ts CANON_SUBMISSIONS — same
+    // ids, mock-catalog tracks and note; J-Pop, who has none there, takes the
+    // left-over "Blinding Lights"). With all four in, every voter has three
+    // songs on offer, and 3 × the 5-point cap takes the league's whole
+    // 12-point pool (two songs would shrink what a voter spends to the 10
+    // they can take — `effectivePool`, domain/rules.ts).
+    const canonTrack = (pid: string, title: string, artist: string, album: string, durationMs: number): Track =>
+      ({ id: `mock:${pid}`, provider: "mock", providerTrackId: pid, title, artists: [artist], album, durationMs });
+    const seedSubmissions: Submission[] = [
+      { id: "sub-1", roundId: "r-vw-1", userId: "u-sarah", track: canonTrack("m6", "Levitating", "Dua Lipa", "Future Nostalgia", 203000),
+        comment: "Instant serotonin — I had to.", submittedAt: isoHoursAgo(30) },
+      { id: "sub-2", roundId: "r-vw-1", userId: "u-jpop", track: canonTrack("m5", "Blinding Lights", "The Weeknd", "After Hours", 200000),
+        submittedAt: isoHoursAgo(28) },
+      { id: "sub-4", roundId: "r-vw-1", userId: "u-luna", track: canonTrack("m10", "Heat Waves", "Glass Animals", "Dreamland", 238000),
+        submittedAt: isoHoursAgo(27) },
+      { id: "sub-5", roundId: "r-vw-1", userId: "u-me", track: canonTrack("m1", "Midnight City", "M83", "Hurry Up, We're Dreaming", 243000),
+        submittedAt: isoHoursAgo(26) },
+    ];
+    for (const s of seedSubmissions) this.submissions.set(`${s.roundId}/${s.userId}/${s.id}`, s);
+
     // Seed running standings so league-detail looks alive (mirrors mock STANDINGS).
     const seedStandings: Record<string, Array<[string, number]>> = {
       "lg-synthwave": [["u-james", 450], ["u-sarah", 420], ["u-mia", 390], ["u-me", 360], ["u-luna", 300]],
@@ -339,12 +372,21 @@ export class MemoryRepository implements Repository {
     for (const [leagueId, rows] of Object.entries(seedStandings)) {
       for (const [userId, points] of rows) this.standings.set(`${leagueId}/${userId}`, { points });
     }
+    // Every other seeded member gets the row create / join / claim would have
+    // written — points 0, in member order — so a board never leaves out a
+    // member (Indie Anthems and the public draft leagues had none).
+    for (const lg of seedLeagues) {
+      for (const userId of lg.memberIds) {
+        const key = `${lg.id}/${userId}`;
+        if (!this.standings.has(key)) this.standings.set(key, { points: 0 });
+      }
+    }
 
     // The head-to-head league (HTH-09): mid-season, frozen, round 1 revealed
     // and banked, round 2 in voting — the same fixture module the frontend
     // mock loads (data/seedHeadToHead.ts), so both modes show one league.
-    // Its timestamps are relative to now (activity feed only; no deadlines).
-    const h2h = headToHeadSeed();
+    // Its timestamps hang off the same `now` (activity feed only; no deadlines).
+    const h2h = headToHeadSeed(now);
     this.leagues.set(h2h.league.id, h2h.league);
     this.invites.set(h2h.league.inviteCode, h2h.league.id);
     for (const r of h2h.rounds) this.rounds.set(r.id, r);

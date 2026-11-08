@@ -614,6 +614,30 @@ const STANDINGS: Record<string, Array<{ userId: string; points: number; note?: s
     { userId: "u-jpop", points: 360 },
     { userId: "u-luna", points: 340 },
   ],
+  // Leagues seeded without a score: every member at 0, in member order — the
+  // rows the backend seed writes for them (BUG-08), so each seeded member is
+  // on these boards in both modes. (Unlike the backend, the mock's standard
+  // create / join / claim add no row, so a player who joins later is not.)
+  "lg-indie": [
+    { userId: "u-luna", points: 0 },
+    { userId: "u-mia", points: 0 },
+    { userId: "u-jpop", points: 0 },
+  ],
+  "lg-midnight": [
+    { userId: "u-sarah", points: 0 },
+    { userId: "u-james", points: 0 },
+    { userId: "u-luna", points: 0 },
+  ],
+  "lg-retro": [
+    { userId: "u-jpop", points: 0 },
+    { userId: "u-mia", points: 0 },
+  ],
+  "lg-urban": [
+    { userId: "u-luna", points: 0 },
+    { userId: "u-james", points: 0 },
+    { userId: "u-sarah", points: 0 },
+    { userId: "u-mia", points: 0 },
+  ],
 };
 
 const ACTIVITY: Record<string, ActivityItem[]> = {
