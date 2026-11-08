@@ -21,7 +21,7 @@ defined once in `backend/src/domain/matchups.ts` ("turnout"):
 | Voting is done when… | a ballot row per member (and songs exist) | every member **who has a matchup to pick in** has picked in all of them |
 | Completion % | songs / slots, ballots / members | the same people-counts as the row above (100 when nobody can vote) |
 | Who-voted panel names | every member, voted or waiting | every member while everyone can vote; otherwise only the viewer (see below) |
-| Activity feed "cast their votes" | every ballot | every ballot while everyone can vote; otherwise only the viewer's own (see below) |
+| Activity feed "cast their votes" | every ballot | the viewer's own; others' only while everyone can vote, and only once they have voted (the panel's done list; see below) |
 
 Why the head-to-head counts differ:
 
@@ -105,17 +105,45 @@ counting only eligible voters is what makes the names identifying.) So while
 the panel withholds names, the feed shows each viewer **only their own**
 ballot entry; other members' ballots (comments-only rows and departed voters'
 ballots included) are left out until the reveal, when the feed shows them all
-again. While every member can vote, the feed is unchanged. One predicate,
-`votersNameable` in `domain/matchups.ts`, drives both the panel
-(`votingPanelNames`) and the feed (`ballotAuthorVisible`); the HTH-09
-MockClient must mirror both.
+again.
 
-Remaining residual: names shown while everyone could vote stay in a viewer's
-memory. If a departure mid-voting then leaves a single contest, the count after
-it can be read against who had voted before, which can narrow down who is in
-that contest. That needs a leave or kick mid-voting that drops the round to a
-single contest, and a viewer who looked before it. Closing it would mean never
-naming head-to-head voters at all, in the panel or the feed; that is a product
+While every member can vote, the feed shows another member's entry **only once
+they have voted** (they are in the panel's done list), so its other-member
+entries are always exactly the panel's done list and the feed never names more
+than the panel (BUG-06). A ballot row from a member the panel shows waiting is
+itself identifying: every eligible voter must cast a complete ballot, so such a
+row was written while a departure mid-voting had left its author less to vote
+on, and a comments-only one while they had nothing at all, i.e. while their
+matchup was the round's only contest. Once the departed player rejoins (every
+member can vote again), an entry for that waiting member would name them as one
+of that contest's pair, and so tell the other player who their anonymous
+opponent is. Also left out: a ballot left incomplete by that rejoin (its
+author is waiting again until they re-cast), and a departed voter's ballot
+(they are in neither panel list).
+
+One predicate, `votersNameable` in `domain/matchups.ts`, drives both the panel
+(`votingPanelNames`) and the feed (`ballotAuthorVisible`, which adds the
+done-list condition); the HTH-09 MockClient must mirror both.
+
+Remaining residuals, both read across time:
+
+- Names shown while everyone could vote (voters in the panel's done list, and
+  their feed entries) stay in a viewer's memory. If a departure mid-voting then
+  leaves a single contest, the count after it can be read against who had
+  voted before, which can narrow down who is in that contest. That needs a
+  leave or kick mid-voting that drops the round to a single contest, and a
+  viewer who looked before it.
+- The reverse, after a rejoin. Each feed entry carries its ballot's cast time
+  (its id, and "time ago"), which the panel doesn't. A done voter whose ballot
+  was cast while the departed player was away must be that player's opponent:
+  anyone else would now have to pick in the restored matchup as well, so their
+  ballot would be incomplete and they would show as waiting. Whoever knows when
+  the player was away, above all the player who left and came back, can read
+  their opponent from one snapshot. (Without the times, the panel's done list
+  says the same when read against a look from before the departure.)
+
+Closing these would mean never naming head-to-head voters at all, in the panel
+or the feed (or at least coarsening or hiding ballot times); that is a product
 call for the lead, not made here.
 
 ### Leave / kick mid-season

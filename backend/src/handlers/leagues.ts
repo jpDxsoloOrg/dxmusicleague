@@ -75,8 +75,9 @@ interface RoundParticipation {
 
 /** One row of the current round's activity feed — who did what, when. Derived
  *  on read from submission/ballot timestamps (no event log). Names only.
- *  Head-to-head voting: other members' ballots are left out while the
- *  who-voted panel withholds names (HTH-08, `ballotAuthorVisible`). */
+ *  Head-to-head voting: other members' ballots show only once the who-voted
+ *  panel names them as done — none while it withholds names (HTH-08,
+ *  BUG-06, `ballotAuthorVisible`). */
 interface ActivityItem {
   id: string;
   user: UserView;
@@ -538,8 +539,11 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
   // panel withholds names, its "cast their votes" entries show the caller's
   // own ballot only — next to the voted / eligible count, any other named
   // ballot would say which side of the only contest its author is on
-  // (`ballotAuthorVisible`). Otherwise every ballot shows, comments-only
-  // rows included, as for a standard league.
+  // (`ballotAuthorVisible`). Otherwise they show the caller's own ballot and
+  // those of the members the panel shows as done — never the row of a member
+  // it shows waiting (comments-only, or incomplete since a rejoin), which can
+  // say its author was in the only contest a departure had left (BUG-06),
+  // nor a departed voter's.
   let submissionProgress: RoundParticipation | undefined;
   let votingProgress: RoundParticipation | undefined;
   let showBallotBy = (_voterId: string) => true;

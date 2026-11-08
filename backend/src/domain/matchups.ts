@@ -264,9 +264,26 @@ export function votableMatchups(set: RoundMatchupSet, voterId: string): RoundMat
 // the rule is one predicate, `votersNameable`: while it's false, nobody but
 // the viewer is named as having voted, in the panel or the feed
 // (`ballotAuthorVisible`). What's left is the count itself, which names
-// nobody. The one residual: names shown while every member could vote
-// remain in a viewer's memory if a departure mid-voting then leaves a
-// single contest, and the count after it can be read against them.
+// nobody. And while it's true, the feed names another member only once the
+// panel shows them done (in `voted`). Every eligible voter must cast a
+// complete ballot, so a row from a member the panel shows waiting was
+// written while a departure had left them less to vote on (it's incomplete
+// since the departed player rejoined), and a comments-only one while they
+// had nothing at all — i.e. while they were in the round's only contest,
+// which names them as its pair, e.g. the viewer's anonymous opponent
+// (BUG-06). The feed's other-member entries are thus always the panel's
+// done list (a departed voter is in neither, so their ballot is left out
+// too): it never names more than the panel. Two residuals remain, both read
+// across time. Names shown while every member could vote remain in a
+// viewer's memory if a departure mid-voting then leaves a single contest,
+// and the count after it can be read against them. And the reverse, after
+// a rejoin: each feed entry carries its ballot's cast time (in its id and
+// time-ago), which the panel doesn't. A done voter whose ballot was cast
+// while the departed player was away must be that player's opponent, since
+// anyone else would now have to pick in the restored matchup too. So whoever
+// knows the absence window, the player who left and came back above all,
+// can read the opponent from one snapshot. (Without the times, the panel's
+// done list says the same when read against a look from before the leave.)
 
 /** The current members who have a song in the round — a head-to-head
  *  round's submission phase is done when every member is in this set (one
@@ -356,12 +373,23 @@ export function votersNameable(turnout: VotingTurnout, memberIds: readonly strin
 
 /**
  * Whether a head-to-head voting round's activity feed may show `viewerId`
- * the "cast their votes" entry for `voterId`'s ballot: always their own,
- * anyone's while `votersNameable`. Otherwise another member's entry next to
- * the voted / eligible count would say which side of the only contest they
- * are on — in a three-player league, who has the bye — so it's left out
- * (comments-only rows and departed voters' ballots included). Applies only
- * while the round is in voting; once it's revealed, so is everything else.
+ * the "cast their votes" entry for `voterId`'s ballot: always their own;
+ * another member's only while `votersNameable` AND once they're in
+ * `turnout.voted` — exactly the names the who-voted panel shows as done, so
+ * the feed never names more than the panel. (Its entries' cast times are
+ * the one thing it adds; see the residuals under "Anonymity" above.)
+ *
+ * Without `votersNameable`, another member's entry next to the voted /
+ * eligible count would say which side of the only contest they are on — in
+ * a three-player league, who has the bye. And while everyone can vote, a row
+ * from a member the panel shows waiting is just as telling: every eligible
+ * voter must cast a complete ballot (`validateH2HBallot`), so a comments-only
+ * row was written while its author had nothing to vote on — while a
+ * departure had left their matchup the round's only contest — which names
+ * them as its pair, e.g. the viewer's anonymous opponent (BUG-06). Those rows
+ * are left out, as are rows left incomplete when a departed player rejoined
+ * and departed voters' ballots (in neither panel list). Applies only while
+ * the round is in voting; once it's revealed, so is everything else.
  */
 export function ballotAuthorVisible(
   turnout: VotingTurnout,
@@ -369,7 +397,7 @@ export function ballotAuthorVisible(
   viewerId: string,
   voterId: string,
 ): boolean {
-  return voterId === viewerId || votersNameable(turnout, memberIds);
+  return voterId === viewerId || (votersNameable(turnout, memberIds) && turnout.voted.includes(voterId));
 }
 
 // ---- the voting-phase payload (GET /rounds/:roundId/matchups) --------------

@@ -1239,7 +1239,8 @@ test("H2H kick mid-voting: the kicked player's pair resolves as a walkover at th
   const theirs = before.matchups.find((m) => m.a.userId !== DUEL_OWNER && m.b.userId !== DUEL_OWNER)!;
   const owners = before.matchups.find((m) => m !== theirs)!;
   const [kicked, stayer] = [theirs.a.userId, theirs.b.userId];
-  // While everyone can vote, the feed names every ballot.
+  // While everyone can vote, the feed names a complete ballot (its author is
+  // in the panel's done list).
   await castBallot(f.deps, DUEL_OWNER, round.id, { picks: duelPicks(before, DUEL_OWNER) });
   assert.deepEqual(await ballotFeedAs(f, "u-luna"), [DUEL_OWNER]);
   await leaveLeague(f.deps, DUEL_OWNER, f.leagueId, kicked);
@@ -1273,6 +1274,69 @@ test("H2H kick mid-voting: the kicked player's pair resolves as a walkover at th
   assert.equal(board.get(kicked), "0-0-0");
   assert.equal(board.get(owners.b.userId), "1-0-0");
   assert.equal(board.get(owners.a.userId), "0-1-0");
+});
+
+test("H2H leave → comments-only row → vote → rejoin (BUG-06): once everyone can vote again, the feed names only members in the panel's done list — the contest player's comments-only row stays hidden, so it can't say who the viewer's anonymous opponent is", async () => {
+  const f = await duel();
+  const round = await openDuelRound(f);
+  for (const p of DUELISTS) await duelSubmit(f, round.id, p);
+  await advance(f, round.id, "previewing");
+  await advance(f, round.id, "voting");
+  const before = await duelSet(f, round.id);
+  // leaver–partner and the owner's matchup (owner vs opponent).
+  const theirs = before.matchups.find((m) => m.a.userId !== DUEL_OWNER && m.b.userId !== DUEL_OWNER)!;
+  const owners = before.matchups.find((m) => m !== theirs)!;
+  const [leaver, partner] = [theirs.a.userId, theirs.b.userId];
+  const opponent = owners.a.userId === DUEL_OWNER ? owners.b.userId : owners.a.userId;
+  const ownerSong = (owners.a.userId === DUEL_OWNER ? owners.a : owners.b).submission!.id;
+
+  // The leaver goes: their pair is a walkover, the owner's matchup the only
+  // contest. Its pair has nothing to vote on; the opponent comments on the
+  // owner's song — a comments-only row, the only kind they can write now.
+  await leaveLeague(f.deps, leaver, f.leagueId, leaver);
+  const shrunk = await duelSet(f, round.id);
+  assert.deepEqual(votableMatchups(shrunk, opponent), []);
+  await castBallot(f.deps, opponent, round.id, { comments: { [ownerSong]: "see you in the final" } });
+  // The walkover partner, the only one who can vote, picks in that contest.
+  await castBallot(f.deps, partner, round.id, { picks: duelPicks(shrunk, partner) });
+
+  // The leaver rejoins (a frozen participant may): two contests again, so
+  // every member can vote and the panel names everyone.
+  await joinLeague(f.deps, leaver, f.inviteCode);
+  const members = (await f.repo.getLeague(f.leagueId))!.memberIds;
+  const waiting = members.filter((id) => id !== partner);
+  for (const viewer of [...DUELISTS, "u-luna"]) {
+    assert.deepEqual(await votingPanelAs(f, viewer), { done: [partner], waiting, counts: [1, 4] }, viewer);
+  }
+  // The opponent is shown waiting; a feed entry for them would say they wrote
+  // a row while they had nothing to vote on — i.e. that they're the owner's
+  // opponent. Only the partner (done) and one's own row show.
+  assert.deepEqual(await ballotFeedAs(f, DUEL_OWNER), [partner]);
+  assert.deepEqual(await ballotFeedAs(f, "u-luna"), [partner]);
+  assert.deepEqual(await ballotFeedAs(f, leaver), [partner]);
+  assert.deepEqual(await ballotFeedAs(f, partner), [partner]);
+  assert.deepEqual(await ballotFeedAs(f, opponent), [opponent, partner].sort(), "their own row still shows");
+  // The other members' feed entries never say more than the panel's done list.
+  for (const viewer of [...DUELISTS, "u-luna"]) {
+    const others = (await ballotFeedAs(f, viewer)).filter((id) => id !== viewer);
+    const { done } = await votingPanelAs(f, viewer);
+    assert.deepEqual(others, [...done!].filter((id) => id !== viewer).sort(), viewer);
+  }
+
+  // Completing their picks puts the opponent in the done list — and the feed.
+  const restored = await duelSet(f, round.id);
+  await castBallot(f.deps, opponent, round.id, { picks: duelPicks(restored, opponent) });
+  const done = [opponent, partner];
+  for (const viewer of [DUEL_OWNER, "u-luna"]) {
+    const panel = { done: members.filter((id) => done.includes(id)), waiting: members.filter((id) => !done.includes(id)), counts: [2, 4] };
+    assert.deepEqual(await votingPanelAs(f, viewer), panel, viewer);
+    assert.deepEqual(await ballotFeedAs(f, viewer), [...done].sort(), viewer);
+  }
+
+  // Revealed: every ballot shows.
+  for (const voter of [DUEL_OWNER, leaver]) await castBallot(f.deps, voter, round.id, { picks: duelPicks(restored, voter) });
+  await revealRound(f.deps, DUEL_OWNER, round.id);
+  assert.deepEqual(await ballotFeedAs(f, "u-luna"), [...DUELISTS].sort());
 });
 
 test("three-player H2H league: the who-voted panel and the activity feed name nobody's ballot but the viewer's, so the bye song and each contest player's opponent stay anonymous until the reveal", async () => {
@@ -1443,7 +1507,8 @@ test("finished flow: a 4-player H2H league plays its 3 rounds → finished; the 
     }
     const detail = await getLeagueDetail(f.deps, DUEL_OWNER, f.leagueId);
     assert.equal(await pctOf(f), 100, `round ${i}: everyone voted`);
-    // Two contests: everyone can vote, so the feed names every ballot.
+    // Two contests and every ballot complete: everyone is in the panel's done
+    // list, so the feed names every ballot.
     assert.deepEqual(await ballotFeedAs(f, "u-luna"), [...DUELISTS].sort(), `round ${i}: feed`);
     assert.equal(detail.finished, false);
     await revealRound(f.deps, DUEL_OWNER, round.id);

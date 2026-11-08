@@ -379,15 +379,52 @@ test("votingPanelNames: everyone eligible (two+ contests) → every member named
   assert.deepEqual(votingPanelNames(votingTurnout(dead, ["u-ana", "u-ben"], []), ["u-ana", "u-ben"], "u-ana"), []);
 });
 
-test("ballotAuthorVisible: the feed names other members' ballots only while everyone can vote (votersNameable); otherwise each viewer sees just their own — a three-player round's bye voter isn't attributable", () => {
+test("ballotAuthorVisible: while everyone can vote, the feed names another member's ballot only once they're in `voted` (the panel's done list) — a comments-only or incomplete row, or a departed voter's, would name someone the panel shows waiting; otherwise each viewer sees just their own — a three-player round's bye voter isn't attributable", () => {
   const two: RoundMatchupSet = {
     matchups: [m(0, ["u-ana", true], ["u-ben", true]), m(1, ["u-cyd", true], ["u-dot", true])],
     bye: side("u-eli", true),
   };
-  const all = votingTurnout(two, FIVE, []);
+  const [m0, m1] = two.matchups.map((x) => x.matchupId) as [string, string];
+  // ana and dot pick in every matchup they can vote in; ben's row is
+  // comments-only; eli (the bye: both matchups) picked in m0 only — e.g. a
+  // ballot cast while m1 was a walkover, left incomplete when its player
+  // rejoined; cyd has no row; u-zed voted, then left.
+  const ballots = [
+    { voterId: "u-ana", picks: { [m1]: "sub-cyd" } },
+    { voterId: "u-ben" },
+    { voterId: "u-dot", picks: { [m0]: "sub-ben" } },
+    { voterId: "u-eli", picks: { [m0]: "sub-ana" } },
+    { voterId: "u-zed", picks: { [m0]: "sub-ana", [m1]: "sub-dot" } },
+  ];
+  const all = votingTurnout(two, FIVE, ballots);
+  assert.deepEqual(all, { eligible: FIVE, voted: ["u-ana", "u-dot"] });
   assert.equal(votersNameable(all, FIVE), true);
-  for (const viewer of [...FIVE, "u-zed"]) {
-    for (const voter of [...FIVE, "u-zed"]) assert.equal(ballotAuthorVisible(all, FIVE, viewer, voter), true, `${viewer} sees ${voter}`);
+  for (const viewer of [...FIVE, "u-zed", "u-spec"]) {
+    for (const voter of [...FIVE, "u-zed"]) {
+      const expected = voter === viewer || voter === "u-ana" || voter === "u-dot";
+      assert.equal(ballotAuthorVisible(all, FIVE, viewer, voter), expected, `${viewer} sees ${voter}'s ballot?`);
+    }
+  }
+  // Spelled out: one's own row always shows, whatever it holds.
+  assert.equal(ballotAuthorVisible(all, FIVE, "u-ben", "u-ben"), true, "own comments-only row");
+  assert.equal(ballotAuthorVisible(all, FIVE, "u-eli", "u-eli"), true, "own incomplete row");
+  // A voter in `voted` shows to every member and to a spectator.
+  assert.equal(ballotAuthorVisible(all, FIVE, "u-cyd", "u-dot"), true);
+  assert.equal(ballotAuthorVisible(all, FIVE, "u-spec", "u-ana"), true);
+  // An eligible member who hasn't completed their picks is hidden: the panel
+  // shows them waiting, and every eligible voter must cast a complete ballot,
+  // so a waiting member's row was written while a departure left them less to
+  // vote on — a comments-only one, nothing: they were in the only contest.
+  assert.equal(ballotAuthorVisible(all, FIVE, "u-ana", "u-ben"), false, "comments-only");
+  assert.equal(ballotAuthorVisible(all, FIVE, "u-ana", "u-eli"), false, "incomplete after a rejoin");
+  // A departed voter is in neither panel list, so the feed leaves them out too.
+  assert.equal(ballotAuthorVisible(all, FIVE, "u-ana", "u-zed"), false, "departed");
+
+  // The feed's other-member entries are exactly the panel's done list.
+  for (const viewer of [...FIVE, "u-spec"]) {
+    const shown = ballots.map((b) => b.voterId).filter((v) => v !== viewer && ballotAuthorVisible(all, FIVE, viewer, v));
+    const done = votingPanelNames(all, FIVE, viewer).filter((id) => all.voted.includes(id) && id !== viewer);
+    assert.deepEqual(shown, done, viewer);
   }
 
   // Three players: one contest (ana–ben) and eli's bye. Only eli can vote, so
