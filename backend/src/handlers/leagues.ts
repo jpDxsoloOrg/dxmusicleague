@@ -10,7 +10,7 @@ import { badRequest, conflict, forbidden, notFound } from "../domain/errors.ts";
 import { sortStandings } from "../domain/standings.ts";
 import { SEASON_LOCKED_MESSAGE, lockedOutOfSeason, seasonLocked } from "../domain/freeze.ts";
 import type { RandomInt } from "../domain/freeze.ts";
-import { ballotAuthorVisible, membersWithSong, votingPanelNames } from "../domain/matchups.ts";
+import { ballotAuthorVisible, memberSongCount, membersWithAllSongs, membersWithBallot, membersWithSong, votingPanelNames } from "../domain/matchups.ts";
 import type { Repository, UserDirectory } from "../data/repository.ts";
 import { autoAdvanceRound } from "./progression.ts";
 import { loadVotingTurnout } from "./matchups.ts";
@@ -67,8 +67,11 @@ interface RoundParticipation {
   waiting: UserView[];
   /** Units done vs. expected: songs (members × allowance) while submitting,
    *  ballots (one per member) while voting. Drives the "X of N in" count.
-   *  Head-to-head: members with their song; members who've picked in every
-   *  matchup they can vote in, of those with one to pick in. */
+   *  Current members only (BUG-09): each member's songs count up to their
+   *  allowance and a departed player's songs or ballot not at all, so done
+   *  never passes total. Head-to-head: members with their song; members
+   *  who've picked in every matchup they can vote in, of those with one to
+   *  pick in. */
   doneCount: number;
   totalCount: number;
 }
@@ -162,9 +165,13 @@ function timeAgo(iso: string): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-/** Real completion %: for a voting round, ballots-cast / members; for a
- *  submitting round, submissions / total slots; otherwise 0/100 by status.
- *  Head-to-head leagues count people instead (`headToHeadCompletionPct`). */
+/** Real completion %: for a voting round, members who've cast a ballot /
+ *  members; for a submitting round, members' songs (each member's counted up
+ *  to their allowance) / total slots; otherwise 0/100 by status. Current
+ *  members only (BUG-09, domain/matchups.ts "points turnout"): a departed
+ *  player's songs and ballot count toward nobody, so the % follows the
+ *  members still to go and never passes 100. Head-to-head leagues count
+ *  their own people (`headToHeadCompletionPct`). */
 async function completionPct(deps: Deps, league: League, round: Round | undefined): Promise<number> {
   if (!round) return 0;
   if (leagueFormat(league) === "headToHead") return headToHeadCompletionPct(deps, league, round);
@@ -172,12 +179,13 @@ async function completionPct(deps: Deps, league: League, round: Round | undefine
   const members = league.memberIds.length || 1;
   if (round.status === "submitting") {
     const subs = await repo.getSubmissionsForRound(round.id);
-    const slots = members * (league.settings.submissionsPerPlayer || 1);
-    return Math.min(100, Math.round((subs.length / slots) * 100));
+    const allowance = league.settings.submissionsPerPlayer || 1;
+    const songs = memberSongCount(league.memberIds, subs, allowance);
+    return Math.min(100, Math.round((songs / (members * allowance)) * 100));
   }
   if (round.status === "voting") {
     const ballots = await repo.getBallotsForRound(round.id);
-    return Math.round((ballots.length / members) * 100);
+    return Math.min(100, Math.round((membersWithBallot(league.memberIds, ballots).length / members) * 100));
   }
   return round.status === "revealed" || round.status === "complete" ? 100 : 0;
 }
@@ -533,8 +541,14 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
 
   // Who's done vs. pending for the live phase (identities only): submissions
   // while submitting, ballots while voting. With a multi-song allowance a
-  // member counts as done once they've used every slot. The same reads feed
-  // the activity list ("X submitted a song", "Y cast their votes").
+  // member counts as done once they've used every slot. The counts are the
+  // current members' too (BUG-09): "X of N songs in" counts each member's
+  // songs up to their allowance, "X of N ballots in" the members with a
+  // ballot — a departed player's songs and ballot (which still rank and
+  // score) count for nobody, so the numbers match the names beside them and
+  // done never passes the total. The same reads feed the activity list
+  // ("X submitted a song", "Y cast their votes"), which still shows every
+  // row.
   //
   // Head-to-head (HTH-08) counts people, as progression and the completion %
   // do (domain/matchups.ts "turnout"): "X of N songs in" counts members with
@@ -575,11 +589,9 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
       });
     } else if (currentRound.status === "submitting") {
       const allowance = league.settings.submissionsPerPlayer || 1;
-      const countByUser = new Map<string, number>();
-      for (const s of subs) countByUser.set(s.userId, (countByUser.get(s.userId) ?? 0) + 1);
-      const doneIds = new Set(league.memberIds.filter((id) => (countByUser.get(id) ?? 0) >= allowance));
+      const doneIds = new Set(membersWithAllSongs(league.memberIds, subs, allowance));
       submissionProgress = await splitByDone(deps.users, league.memberIds, doneIds, {
-        done: subs.length,
+        done: memberSongCount(league.memberIds, subs, allowance),
         total: league.memberIds.length * allowance,
       });
     } else if (currentRound.status === "voting" && headToHead) {
@@ -591,8 +603,9 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
       });
       showBallotBy = (voterId) => ballotAuthorVisible(turnout, league.memberIds, caller, voterId);
     } else if (currentRound.status === "voting") {
-      votingProgress = await splitByDone(deps.users, league.memberIds, new Set(ballots.map((b) => b.voterId)), {
-        done: ballots.length,
+      const voted = membersWithBallot(league.memberIds, ballots);
+      votingProgress = await splitByDone(deps.users, league.memberIds, new Set(voted), {
+        done: voted.length,
         total: league.memberIds.length,
       });
     }

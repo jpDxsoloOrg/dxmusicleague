@@ -24,6 +24,7 @@ import {
   deriveRoundMatchups,
   inAnonymousOrder,
   matchupsView,
+  memberSongCount,
   membersWithSong,
   roundSettled,
   votingPanelNames,
@@ -948,9 +949,13 @@ export function getLeagueDetail(leagueId: string): LeagueDetail | undefined {
     };
   }
   if (currentRound?.status === "submitting") {
+    // The canned songs are the same for every league, so some are by players
+    // who aren't members here. Like the API's "X of N songs in" (BUG-09), count
+    // only members' songs, each up to the allowance, so done never passes the
+    // total (Indie's 3 members read "5 of 3" before).
     const allowance = league.settings.submissionsPerPlayer || 1;
     submissionProgress = splitByDone(new Set(CANON_SUBMISSIONS.map((s) => s.submitterId)), {
-      done: CANON_SUBMISSIONS.length,
+      done: memberSongCount(league.memberIds, CANON_SUBMISSIONS.map((s) => ({ userId: s.submitterId })), allowance),
       total: members.length * allowance,
     });
   } else if (currentRound?.status === "voting") {

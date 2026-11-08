@@ -6,7 +6,12 @@
 // A phase ends when EITHER its deadline passes OR everyone has finished it
 // (all members submitted / all members voted). Advancing re-bases the next
 // phase's deadline to `phaseDays` from now, so finishing early shortens the
-// round instead of leaving dead time.
+// round instead of leaving dead time. "Everyone" counts only CURRENT members,
+// in either format (domain/matchups.ts, "turnout"; in head-to-head voting,
+// only those with a matchup to pick in — see below): a departed player's
+// songs and ballot stay in the round but never stand in for a member who
+// stayed — the phase would close on that member, and a round never moves
+// backwards, so they'd be locked out of it (BUG-09 for standard leagues).
 //
 // The owner can still advance manually in timed mode (rounds.updateRound /
 // revealRound) — this just automates it. See memory: round-automation.
@@ -27,7 +32,7 @@
 
 import type { League, Round, Submission } from "../domain/types.ts";
 import { leagueFormat } from "../domain/types.ts";
-import { everyoneEligibleVoted, membersWithSong } from "../domain/matchups.ts";
+import { everyoneEligibleVoted, membersWithAllSongs, membersWithBallot, membersWithSong } from "../domain/matchups.ts";
 import { createPlaylistForRound } from "./providers.ts";
 import { finalizeReveal } from "./results.ts";
 import { loadVotingTurnout } from "./matchups.ts";
@@ -46,7 +51,6 @@ export async function autoAdvanceRound(
 ): Promise<Round | undefined> {
   if (!round || league.progression !== "timed" || !league.phaseDays) return round;
   const phaseDays = league.phaseDays;
-  const memberCount = league.memberIds.length;
   let advanced = false;
 
   // submitting → previewing: deadline passed OR every member has used every
@@ -56,7 +60,7 @@ export async function autoAdvanceRound(
     const everyoneSubmitted =
       leagueFormat(league) === "headToHead"
         ? everyMemberHasSong(league, subs)
-        : everySlotFilled(league, subs, memberCount);
+        : everySlotFilled(league, subs);
     const deadlineHit = past(round.submissionDeadline);
     if (deadlineHit || everyoneSubmitted) {
       round.status = "previewing";
@@ -93,7 +97,7 @@ export async function autoAdvanceRound(
     const everyoneVoted =
       leagueFormat(league) === "headToHead"
         ? everyoneEligibleVoted(await loadVotingTurnout(deps, league, round))
-        : await everyMemberVoted(deps, round, memberCount);
+        : await everyMemberVoted(deps, league, round);
     if (past(round.voteDeadline) || everyoneVoted) {
       await finalizeReveal(deps, round); // tallies, banks points, persists
       return round;
@@ -104,10 +108,14 @@ export async function autoAdvanceRound(
   return round;
 }
 
-/** Standard everyone-submitted: as many songs as members × allowance. */
-function everySlotFilled(league: League, subs: Submission[], memberCount: number): boolean {
+/** Standard everyone-submitted: every current member has used every one of
+ *  their submission slots (BUG-09). Counted by member, not by row, so a
+ *  departed player's songs — which still rank — can't fill the slots of a
+ *  member who stayed and hasn't submitted yet. */
+function everySlotFilled(league: League, subs: Submission[]): boolean {
   const allowance = league.settings.submissionsPerPlayer || 1;
-  return memberCount > 0 && subs.length >= memberCount * allowance;
+  const members = league.memberIds;
+  return members.length > 0 && membersWithAllSongs(members, subs, allowance).length === members.length;
 }
 
 /** Head-to-head everyone-submitted: every current member has their one song
@@ -118,13 +126,16 @@ function everyMemberHasSong(league: League, subs: Submission[]): boolean {
   return league.memberIds.length > 0 && membersWithSong(league.memberIds, subs).length === league.memberIds.length;
 }
 
-/** Standard everyone-voted: a ballot row per member, and songs to rank. */
-async function everyMemberVoted(deps: Deps, round: Round, memberCount: number): Promise<boolean> {
+/** Standard everyone-voted: every current member has a ballot, and there are
+ *  songs to rank (BUG-09). A departed player's ballot still scores at the
+ *  reveal but doesn't stand in for a member who stayed and hasn't voted. */
+async function everyMemberVoted(deps: Deps, league: League, round: Round): Promise<boolean> {
   const [subs, ballots] = await Promise.all([
     deps.repo.getSubmissionsForRound(round.id),
     deps.repo.getBallotsForRound(round.id),
   ]);
-  return memberCount > 0 && ballots.length >= memberCount && subs.length > 0;
+  const members = league.memberIds;
+  return members.length > 0 && subs.length > 0 && membersWithBallot(members, ballots).length === members.length;
 }
 
 /**

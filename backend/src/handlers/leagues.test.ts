@@ -345,6 +345,81 @@ test("activity feed derives from submissions + ballots, newest first, no track d
   assert.equal(JSON.stringify(detail.activity).includes("Secret Song"), false);
 });
 
+// ---- standard progress after a departure (BUG-09) ----
+// The who-submitted / who-voted counts and the completion % count CURRENT
+// members, so they agree with the names beside them and never pass 100: a
+// departed player's songs and ballot stay in the round (they still rank and
+// score) but no longer count toward "X of N in".
+
+/** A manual standard league of `players` (owner first), round 1 open for
+ *  submissions; the owner's view of its progress panels and completion %. */
+async function pointsRound(players: readonly string[], songsPerPlayer = 1) {
+  const deps: Deps = { repo: new MemoryRepository(false), users: new MemoryUserDirectory() };
+  const owner = players[0]!;
+  const lg = await createLeague(deps, owner, { name: "Departures", musicProvider: "mock", roundCount: 3 });
+  await updateLeagueSettings(deps, owner, lg.id, { ...DEFAULT_LEAGUE_SETTINGS, submissionsPerPlayer: songsPerPlayer });
+  for (const p of players.slice(1)) await joinLeague(deps, p, lg.inviteCode);
+  const r = await createRound(deps, owner, lg.id, { theme: "Openers" });
+  await updateRound(deps, owner, lg.id, r.id, { status: "submitting" });
+  const song = (userId: string, n = 1) =>
+    submitSong(deps, userId, r.id, {
+      track: { id: `t-${userId}-${n}`, provider: "mock", providerTrackId: `t-${userId}-${n}`, title: `${userId} ${n}`, artists: [`Artist ${userId} ${n}`] },
+    });
+  const progress = async () => {
+    const detail = await getLeagueDetail(deps, owner, lg.id);
+    const panel = detail.submissionProgress ?? detail.votingProgress;
+    assert.ok(panel, "a live phase has a progress panel");
+    const pct = (await listMyLeagues(deps, owner)).find((s) => s.league.id === lg.id)!.completionPct;
+    return { done: panel.submitted.map((u) => u.id), waiting: panel.waiting.map((u) => u.id), counts: [panel.doneCount, panel.totalCount], pct };
+  };
+  return { deps, leagueId: lg.id, roundId: r.id, song, progress };
+}
+
+test("standard submitting progress (BUG-09): a departed player's songs leave the 'X of N songs in' count and the completion % — each member's songs count up to their allowance", async () => {
+  const f = await pointsRound(["u-me", "u-sarah", "u-james"], 2);
+  for (const n of [1, 2]) await f.song("u-sarah", n);
+  // Nobody has left: exactly as before — 2 of 3 × 2 slots.
+  assert.deepEqual(await f.progress(), { done: ["u-sarah"], waiting: ["u-me", "u-james"], counts: [2, 6], pct: 33 });
+
+  await leaveLeague(f.deps, "u-sarah", f.leagueId, "u-sarah");
+  assert.deepEqual(await f.progress(), { done: [], waiting: ["u-me", "u-james"], counts: [0, 4], pct: 0 });
+  await f.song("u-me", 1);
+  assert.deepEqual(await f.progress(), { done: [], waiting: ["u-me", "u-james"], counts: [1, 4], pct: 25 }, "one of u-me's two slots");
+  await f.song("u-me", 2);
+  // A row count read 4 of 4, 100%, with u-james still waiting.
+  assert.deepEqual(await f.progress(), { done: ["u-me"], waiting: ["u-james"], counts: [2, 4], pct: 50 });
+});
+
+test("standard voting progress (BUG-09): a departed voter's ballot leaves the 'X of N ballots in' count and the completion %, which stops at 100 — and still scores at the reveal", async () => {
+  const f = await pointsRound(["u-me", "u-sarah", "u-james", "u-mia"]);
+  const song = new Map<string, string>();
+  for (const p of ["u-me", "u-sarah", "u-james", "u-mia"]) song.set(p, (await f.song(p)).id);
+  await updateRound(f.deps, "u-me", f.leagueId, f.roundId, { status: "previewing" });
+  await updateRound(f.deps, "u-me", f.leagueId, f.roundId, { status: "voting" });
+  const vote = (voter: string, a: string, b: string) =>
+    castBallot(f.deps, voter, f.roundId, { allocations: { [song.get(a)!]: 5, [song.get(b)!]: 5 } });
+
+  await vote("u-sarah", "u-me", "u-james");
+  // Nobody has left: exactly as before.
+  assert.deepEqual(await f.progress(), { done: ["u-sarah"], waiting: ["u-me", "u-james", "u-mia"], counts: [1, 4], pct: 25 });
+
+  await leaveLeague(f.deps, "u-sarah", f.leagueId, "u-sarah");
+  assert.deepEqual(await f.progress(), { done: [], waiting: ["u-me", "u-james", "u-mia"], counts: [0, 3], pct: 0 });
+  await vote("u-me", "u-james", "u-mia");
+  await vote("u-james", "u-me", "u-mia");
+  // A row count read 3 of 3, 100%, with u-mia still listed as waiting.
+  assert.deepEqual(await f.progress(), { done: ["u-me", "u-james"], waiting: ["u-mia"], counts: [2, 3], pct: 67 });
+  await vote("u-mia", "u-me", "u-james");
+  // …and 4 of 3, 133%, once she had voted.
+  assert.deepEqual(await f.progress(), { done: ["u-me", "u-james", "u-mia"], waiting: [], counts: [3, 3], pct: 100 });
+
+  await revealRound(f.deps, "u-me", f.roundId);
+  const results = await getResults(f.deps, "u-me", f.roundId);
+  assert.ok(Array.isArray(results), "the standard results payload is unchanged: a bare RoundResult[]");
+  const pointsBy = Object.fromEntries(results.map((r) => [r.submitter.id, r.points]));
+  assert.equal(pointsBy["u-me"], 15, "u-sarah's ballot still scores (5 of u-me's 15)");
+});
+
 // ---- league finish + rematch ----
 
 test("a league finishes once its final round is revealed, and leaves the browse list", async () => {

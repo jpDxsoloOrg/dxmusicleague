@@ -17,9 +17,9 @@ defined once in `backend/src/domain/matchups.ts` ("turnout"):
 
 | Phase | Standard league | Head-to-head league |
 |---|---|---|
-| Submitting is done when… | songs ≥ members × songs-per-player | every **current** member has their one song |
-| Voting is done when… | a ballot row per member (and songs exist) | every member **who has a matchup to pick in** has picked in all of them |
-| Completion % | songs / slots, ballots / members | the same people-counts as the row above (100 when nobody can vote) |
+| Submitting is done when… | every **current** member has used all their songs-per-player slots | every **current** member has their one song |
+| Voting is done when… | every **current** member has a ballot (and songs exist) | every member **who has a matchup to pick in** has picked in all of them |
+| Completion % | members' songs (each up to the allowance) / slots, members with a ballot / members | the same people-counts as the row above (100 when nobody can vote) |
 | Who-voted panel names | every member, voted or waiting | every member while everyone can vote; otherwise only the viewer (see below) |
 | Activity feed "cast their votes" | every ballot | the viewer's own; others' only while everyone can vote, and only once they have voted (the panel's done list; see below) |
 
@@ -28,7 +28,8 @@ Why the head-to-head counts differ:
 - **A departed player's song doesn't count toward "everyone submitted".** Their
   song is withdrawn (their pair plays as a walkover), so it must not stand in
   for a member who stayed and hasn't submitted yet — in head-to-head that member
-  would lose by walkover the moment the phase closed early.
+  would lose by walkover the moment the phase closed early. (Standard leagues
+  count current members too since BUG-09, though there the song still ranks.)
 - **Members with nothing to vote on aren't waited for.** A voter's votable set is
   every contest (both songs present) that isn't their own matchup. It is empty
   for both players of a two-player league, and for the pair of a round whose
@@ -178,9 +179,11 @@ Flagged per the ticket, in case they point at a leak worth refactoring:
 
 All four read the one turnout definition in `domain/matchups.ts`, so they can't
 drift from each other or from ballot validation and the tally (which share
-`votableMatchups`). The standard league's row counts are untouched — including
-its known quirk that a departed member's song or ballot still counts toward
-"everyone".
+`votableMatchups`). The standard league's counts were row counts at the time,
+so a departed member's song or ballot still counted toward "everyone"; BUG-09
+later made them count current members too ("points turnout" in
+`domain/matchups.ts`). A departed member's songs and ballot still rank and
+score at a standard reveal — they just don't stand in for a member who stayed.
 
 ## Help, tour and copy (HTH-12)
 

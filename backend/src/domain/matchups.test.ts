@@ -11,7 +11,8 @@
 // helpers (HTH-10) read the same votable set off that view as the ballot
 // referee demands. BUG-01: anonymous song lists come out in submission-id
 // order (`inAnonymousOrder`), and the matchups view never follows the order
-// the repository read the submissions in.
+// the repository read the submissions in. BUG-09: the points-round turnout
+// counts current members, each up to their song allowance.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -26,6 +27,9 @@ import {
   inMatchup,
   matchupState,
   matchupsView,
+  memberSongCount,
+  membersWithAllSongs,
+  membersWithBallot,
   membersWithSong,
   viewMatchupState,
   viewPick,
@@ -449,6 +453,37 @@ test("ballotAuthorVisible: while everyone can vote, the feed names another membe
   assert.equal(votersNameable(none, ["u-ana", "u-ben"]), false);
   assert.equal(ballotAuthorVisible(none, ["u-ana", "u-ben"], "u-ana", "u-ben"), false);
   assert.equal(ballotAuthorVisible(none, ["u-ana", "u-ben"], "u-ben", "u-ben"), true);
+});
+
+// ---- points turnout (BUG-09): current members, each up to their allowance --
+
+test("membersWithAllSongs / memberSongCount: only current members' songs count, each member's up to the allowance — a departed player's songs fill nobody's slots", () => {
+  const subs = [
+    sub("u-eli"), sub("u-ana"), sub("u-ana", "sub-ana-2"),
+    sub("u-zed"), sub("u-zed", "sub-zed-2"), // u-zed has left
+    sub("u-cyd"), sub("u-cyd", "sub-cyd-2"), sub("u-cyd", "sub-cyd-3"), // over the allowance (lowered mid-round)
+  ];
+  assert.deepEqual(membersWithAllSongs(FIVE, subs, 2), ["u-ana", "u-cyd"], "in member order");
+  assert.deepEqual(membersWithAllSongs(FIVE, subs, 1), ["u-ana", "u-cyd", "u-eli"], "one slot each: membersWithSong");
+  assert.deepEqual(membersWithAllSongs(FIVE, subs, 1), membersWithSong(FIVE, subs));
+  // 2 (ana) + 2 of cyd's 3 + 1 (eli); u-zed's two count for nobody — 5 of 10, not 8.
+  assert.equal(memberSongCount(FIVE, subs, 2), 5);
+  assert.equal(memberSongCount(FIVE, subs, 1), 3);
+  assert.equal(memberSongCount(FIVE, [], 2), 0);
+  assert.equal(memberSongCount([], subs, 2), 0);
+  assert.deepEqual(membersWithAllSongs([], subs, 1), []);
+  // Nobody departed, nobody over the allowance: the old row count exactly.
+  const full = FIVE.flatMap((id) => [sub(id), sub(id, `sub-${id.slice(2)}-2`)]);
+  assert.equal(memberSongCount(FIVE, full, 2), full.length);
+  assert.deepEqual(membersWithAllSongs(FIVE, full, 2), FIVE);
+});
+
+test("membersWithBallot: current members with a ballot, in member order — a departed voter's ballot counts for nobody", () => {
+  const ballots = [{ voterId: "u-eli" }, { voterId: "u-zed" }, { voterId: "u-ben" }]; // u-zed has left
+  assert.deepEqual(membersWithBallot(FIVE, ballots), ["u-ben", "u-eli"]);
+  assert.deepEqual(membersWithBallot(FIVE, []), []);
+  assert.deepEqual(membersWithBallot([], ballots), []);
+  assert.deepEqual(membersWithBallot(FIVE, FIVE.map((voterId) => ({ voterId }))), FIVE);
 });
 
 // ---- the vote page's view-side helpers (HTH-10) ----------------------------

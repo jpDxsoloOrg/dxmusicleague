@@ -1,8 +1,9 @@
 // Timed auto-advance tests — a round whose phase deadlines are in the past
 // advances (cascading), and a manual league never does; concurrent reads of
 // a standard league reveal (and bank) a due round once, and a stale advance
-// can't write over a reveal (BUG-04). Head-to-head leagues (HTH-08) at the
-// bottom.
+// can't write over a reveal (BUG-04); a departed player's songs or ballot
+// don't close a standard phase on a member who stayed (BUG-09). Head-to-head
+// leagues (HTH-08) at the bottom.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -13,7 +14,7 @@ import type { RandomInt } from "../domain/freeze.ts";
 import { votableMatchups } from "../domain/matchups.ts";
 import type { RoundMatchup, RoundMatchupSet } from "../domain/matchups.ts";
 import type { Deps } from "./leagues.ts";
-import { createLeague, getLeagueDetail, joinLeague, leaveLeague } from "./leagues.ts";
+import { createLeague, getLeagueDetail, joinLeague, leaveLeague, updateLeagueSettings } from "./leagues.ts";
 import { createRound, updateRound } from "./rounds.ts";
 import { submitSong } from "./submissions.ts";
 import { castBallot } from "./voting.ts";
@@ -197,6 +198,108 @@ test("standard timed: an auto-advance holding a copy read before the round was a
   assert.deepEqual(await f.repo.getRound(f.roundId), settled);
   await assert.rejects(revealRound(f.deps, STD_OWNER, f.roundId), (e: unknown) => e instanceof Error && /in voting/.test(e.message));
   assert.deepEqual(await pointsOf(f), banked);
+});
+
+// ---- standard departures (BUG-09) --------------------------------------------
+// "Everyone" in a points round is every CURRENT member, as in head-to-head: a
+// departed player's songs and ballot stay (they still rank and score at the
+// reveal) but no longer stand in for a member who stayed. Counting rows let a
+// timed phase close early on a member who hadn't submitted or voted yet — and
+// rounds never move backwards, so that member was locked out for the round.
+
+/** A standard league of `players` (owner first) through the handlers, round 1
+ *  open for submissions. */
+async function pointsLeague(
+  players: readonly string[],
+  opts: { timed: boolean; songsPerPlayer?: number },
+): Promise<{ deps: Deps; repo: MemoryRepository; leagueId: string; roundId: string }> {
+  const repo = new MemoryRepository(false);
+  const d: Deps = { repo, users: new MemoryUserDirectory() };
+  const lg = await createLeague(d, players[0]!, {
+    name: "Departures", musicProvider: "mock", roundCount: 3,
+    ...(opts.timed ? { progression: "timed" as const, phaseDays: 3 } : {}),
+  });
+  if (opts.songsPerPlayer) {
+    await updateLeagueSettings(d, players[0]!, lg.id, { ...DEFAULT_LEAGUE_SETTINGS, submissionsPerPlayer: opts.songsPerPlayer });
+  }
+  for (const p of players.slice(1)) await joinLeague(d, p, lg.inviteCode);
+  const r = await createRound(d, players[0]!, lg.id, { theme: "Openers" });
+  await updateRound(d, players[0]!, lg.id, r.id, { status: "submitting" });
+  return { deps: d, repo, leagueId: lg.id, roundId: r.id };
+}
+
+const pointsSong = (d: Deps, userId: string, roundId: string, n = 1) =>
+  submitSong(d, userId, roundId, {
+    track: { id: `t-${userId}-${n}`, provider: "mock", providerTrackId: `t-${userId}-${n}`, title: `${userId} song ${n}`, artists: [`Artist ${userId} ${n}`] },
+  });
+
+test("standard timed (BUG-09): a departed player's song doesn't count toward everyone-submitted — the phase waits for the member who stayed, who can still submit", async () => {
+  const f = await pointsLeague(["u-me", "u-sarah", "u-james"], { timed: true });
+  await pointsSong(f.deps, "u-sarah", f.roundId);
+  await leaveLeague(f.deps, "u-sarah", f.leagueId, "u-sarah");
+  await pointsSong(f.deps, "u-me", f.roundId);
+  // Two songs for two members — a row count closed the phase here, three
+  // days early, and u-james could no longer submit.
+  assert.equal((await f.repo.getSubmissionsForRound(f.roundId)).length, 2);
+  assert.equal((await getLeagueDetail(f.deps, "u-me", f.leagueId)).currentRound?.status, "submitting");
+  await pointsSong(f.deps, "u-james", f.roundId);
+  assert.equal((await f.repo.getRound(f.roundId))!.status, "previewing", "every member who stayed has submitted");
+});
+
+test("standard timed (BUG-09), several songs per player: each member must fill their own slots — a departed player's songs fill none of them", async () => {
+  const f = await pointsLeague(["u-me", "u-sarah", "u-james"], { timed: true, songsPerPlayer: 2 });
+  for (const n of [1, 2]) await pointsSong(f.deps, "u-sarah", f.roundId, n);
+  await leaveLeague(f.deps, "u-me", f.leagueId, "u-sarah"); // kicked
+  for (const n of [1, 2]) await pointsSong(f.deps, "u-me", f.roundId, n);
+  await pointsSong(f.deps, "u-james", f.roundId, 1);
+  // Five songs for 2 members × 2 slots; u-james has used one of his.
+  assert.equal((await getLeagueDetail(f.deps, "u-me", f.leagueId)).currentRound?.status, "submitting");
+  await pointsSong(f.deps, "u-james", f.roundId, 2);
+  assert.equal((await f.repo.getRound(f.roundId))!.status, "previewing");
+});
+
+test("standard timed (BUG-09), songs-per-player lowered mid-round with nobody departed: a member's extra song doesn't fill another member's slot — the phase waits for the member with none", async () => {
+  const f = await pointsLeague(["u-me", "u-sarah", "u-james"], { timed: true, songsPerPlayer: 2 });
+  for (const n of [1, 2]) await pointsSong(f.deps, "u-me", f.roundId, n);
+  // updateLeagueSettings has no round lock: the owner drops the allowance to 1.
+  await updateLeagueSettings(f.deps, "u-me", f.leagueId, { ...DEFAULT_LEAGUE_SETTINGS, submissionsPerPlayer: 1 });
+  await pointsSong(f.deps, "u-sarah", f.roundId);
+  // Three songs for 3 members × 1 slot — a row count closed the phase here
+  // (and read "3 of 3") with u-james still to submit.
+  assert.equal((await f.repo.getSubmissionsForRound(f.roundId)).length, 3);
+  const detail = await getLeagueDetail(f.deps, "u-me", f.leagueId);
+  assert.equal(detail.currentRound?.status, "submitting");
+  assert.equal(detail.submissionProgress?.doneCount, 2, "u-me's second song counts for nobody");
+  assert.equal(detail.submissionProgress?.totalCount, 3);
+  assert.deepEqual(detail.submissionProgress?.waiting.map((u) => u.id), ["u-james"]);
+  await pointsSong(f.deps, "u-james", f.roundId);
+  assert.equal((await f.repo.getRound(f.roundId))!.status, "previewing", "every member has a song");
+});
+
+test("standard timed (BUG-09): a departed voter's ballot doesn't count toward everyone-voted — the round stays in voting until every member who stayed has voted, and the departed ballot still scores", async () => {
+  const four = ["u-me", "u-sarah", "u-james", "u-mia"];
+  const f = await pointsLeague(four, { timed: true });
+  const song = new Map<string, string>();
+  for (const p of four) song.set(p, (await pointsSong(f.deps, p, f.roundId)).id);
+  assert.equal((await f.repo.getRound(f.roundId))!.status, "previewing", "everyone submitted");
+  await updateRound(f.deps, "u-me", f.leagueId, f.roundId, { status: "voting" });
+  const vote = (voter: string, a: string, b: string) =>
+    castBallot(f.deps, voter, f.roundId, { allocations: { [song.get(a)!]: 5, [song.get(b)!]: 5 } });
+
+  await vote("u-sarah", "u-me", "u-james");
+  await leaveLeague(f.deps, "u-sarah", f.leagueId, "u-sarah");
+  await vote("u-me", "u-james", "u-mia");
+  await vote("u-james", "u-me", "u-mia");
+  // Three ballot rows for three members — a row count revealed the round
+  // here, before u-mia could vote.
+  assert.equal((await f.repo.getBallotsForRound(f.roundId)).length, 3);
+  assert.equal((await getLeagueDetail(f.deps, "u-me", f.leagueId)).currentRound?.status, "voting");
+  await vote("u-mia", "u-me", "u-james");
+  assert.equal((await f.repo.getRound(f.roundId))!.status, "revealed", "every member who stayed has voted");
+  const points = Object.fromEntries((await f.repo.getStandings(f.leagueId)).map((r) => [r.userId, r.points]));
+  assert.equal(points["u-me"], 15, "u-sarah's ballot still scores (5 of u-me's 15)");
+  assert.equal(points["u-james"], 15);
+  assert.equal(points["u-mia"], 10);
 });
 
 // ---- head-to-head (HTH-08) --------------------------------------------------

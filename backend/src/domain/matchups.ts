@@ -12,6 +12,8 @@
 //   - the tally and outcomes at reveal (HTH-07) — walkovers, no-contests, byes;
 //   - the round's turnout (HTH-08) — who can still vote, for the completion %,
 //     the voting panel and the everyone-voted advance.
+// It also holds the points-round turnout (BUG-09): the same people-counting
+// for standard leagues, which needs no matchups.
 //
 // A side "has no song" when that player didn't submit OR their song is
 // withdrawn because they departed (left or were kicked mid-season). While a
@@ -398,6 +400,65 @@ export function ballotAuthorVisible(
   voterId: string,
 ): boolean {
   return voterId === viewerId || (votersNameable(turnout, memberIds) && turnout.voted.includes(voterId));
+}
+
+// ---- points turnout: who a standard round is waiting on (BUG-09) ----------
+//
+// A points round counts people too, by the simpler rule it always meant:
+// every CURRENT member has used every one of their `submissionsPerPlayer`
+// slots, and every current member has a ballot. A departed player's songs and
+// ballot stay in the round — they still rank and score at the reveal — but
+// count toward nobody being done. Counting rows let them stand in for a member
+// who stayed: a timed phase closed early on someone who hadn't submitted or
+// voted (and rounds never move backwards, so they were locked out of the
+// round), the "X of N in" counts disagreed with the names beside them, and the
+// voting completion % passed 100. With nobody departed these read exactly as
+// the row counts did: a member holds one ballot at most, and no more songs
+// than their allowance — unless the owner lowered it mid-round, and then
+// their extra songs no longer fill another member's slots either.
+
+/** How many songs each submitter has in the round. */
+function songCounts(submissions: ReadonlyArray<Pick<Submission, "userId">>): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const s of submissions) counts.set(s.userId, (counts.get(s.userId) ?? 0) + 1);
+  return counts;
+}
+
+/** The current members who have used all `allowance` of their submission
+ *  slots — a points round's submission phase is done when every member is in
+ *  this set. In member order. (`membersWithSong` is head-to-head's one-song
+ *  case.) */
+export function membersWithAllSongs(
+  memberIds: readonly string[],
+  submissions: ReadonlyArray<Pick<Submission, "userId">>,
+  allowance: number,
+): string[] {
+  const counts = songCounts(submissions);
+  return memberIds.filter((id) => (counts.get(id) ?? 0) >= allowance);
+}
+
+/** The current members' songs in the round, each member's counted up to
+ *  their `allowance` — the "X of N songs in" count, out of members ×
+ *  allowance, so it never passes the total or credits one member's songs to
+ *  another. */
+export function memberSongCount(
+  memberIds: readonly string[],
+  submissions: ReadonlyArray<Pick<Submission, "userId">>,
+  allowance: number,
+): number {
+  const counts = songCounts(submissions);
+  return memberIds.reduce((n, id) => n + Math.min(counts.get(id) ?? 0, allowance), 0);
+}
+
+/** The current members with a ballot in the round — a points round's voting
+ *  phase is done when every member is in this set (and there are songs to
+ *  rank). In member order. */
+export function membersWithBallot(
+  memberIds: readonly string[],
+  ballots: ReadonlyArray<Pick<Ballot, "voterId">>,
+): string[] {
+  const voted = new Set(ballots.map((b) => b.voterId));
+  return memberIds.filter((id) => voted.has(id));
 }
 
 // ---- the voting-phase payload (GET /rounds/:roundId/matchups) --------------
