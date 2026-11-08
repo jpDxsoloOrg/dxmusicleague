@@ -383,8 +383,10 @@ export function HelpPage() {
               Public leagues show up in the <strong>Trending Leagues</strong> section
               on your Home page. Click one to open its <strong>preview</strong>, where
               you can see the theme, how many players have joined, and how many slots
-              are open. If there's room, hit <strong>Claim a spot</strong> to join — you
-              can still hop in while round 1 is accepting submissions.
+              are open. A head-to-head league carries an <strong>H2H</strong> tag on its
+              card and preview, and the preview sums up how it plays. If there's room,
+              hit <strong>Claim a spot</strong> to join — you can still hop in while
+              round 1 is accepting submissions.
             </p>
             <Callout kind="note" title="If a league is full or underway">
               You can't claim a spot once a public league hits its player cap or once

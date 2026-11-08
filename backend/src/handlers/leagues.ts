@@ -323,6 +323,9 @@ export async function createLeague(deps: Deps, caller: string, input: CreateLeag
 export interface PublicLeagueSummary {
   id: string;
   name: string;
+  /** The league's format, so a player sees a head-to-head league for what it
+   *  is before claiming a spot. Read via `leagueFormat()` (legacy → standard). */
+  format: LeagueFormat;
   memberCount: number;
   maxMembers: number;
   openSlots: number;
@@ -374,6 +377,7 @@ export async function listOpenPublicLeagues(
     open.push({
       id: league.id,
       name: league.name,
+      format: leagueFormat(league),
       memberCount: league.memberIds.length,
       maxMembers: cap,
       openSlots,
@@ -389,6 +393,8 @@ export async function listOpenPublicLeagues(
 export interface BrowseLeagueSummary {
   id: string;
   name: string;
+  /** As on `PublicLeagueSummary`: what a spectator is about to watch. */
+  format: LeagueFormat;
   visibility: LeagueVisibility;
   memberCount: number;
   totalRounds: number;
@@ -411,6 +417,7 @@ export async function listBrowseLeagues(deps: Deps, caller: string, limit = 24):
     out.push({
       id: league.id,
       name: league.name,
+      format: leagueFormat(league),
       visibility: league.visibility,
       memberCount: league.memberIds.length,
       totalRounds: league.roundCount || rounds.length,
@@ -426,6 +433,10 @@ export async function listBrowseLeagues(deps: Deps, caller: string, limit = 24):
 export interface PublicLeaguePreview {
   id: string;
   name: string;
+  /** As on `PublicLeagueSummary`. With it the page can also word a closed
+   *  head-to-head league right: its `hasStarted` turns true when round 1
+   *  OPENS (season locked), not when round 1's submissions close. */
+  format: LeagueFormat;
   memberCount: number;
   maxMembers: number;
   openSlots: number;
@@ -456,6 +467,7 @@ export async function getPublicLeaguePreview(
   return {
     id: league.id,
     name: league.name,
+    format: leagueFormat(league),
     memberCount: league.memberIds.length,
     maxMembers: cap,
     openSlots,

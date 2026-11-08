@@ -34,3 +34,8 @@
   font-size: 14px;
   color: var(--text-muted);
 }
+
+/* head-to-head: the H2H tag centred on the big title, and the one-line rules
+   under the slots line */
+.create-head h1 .format-tag { vertical-align: 5px; }
+.create-head .preview-format-note { margin-top: 8px; color: var(--text); }

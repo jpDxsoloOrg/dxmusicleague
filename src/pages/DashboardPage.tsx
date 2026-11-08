@@ -75,6 +75,18 @@ export function DashboardPage() {
   );
 }
 
+/** The "H2H" marker beside a head-to-head league's name: on its card under
+ *  Your Leagues, and — so nobody claims a spot without knowing the rules — on
+ *  the public card, the browse row and the public preview. Standard leagues
+ *  get no tag. Styled by `.format-tag` (DashboardPage.css). */
+export function FormatTag() {
+  return (
+    <span className="format-tag" title="Head-to-head league: 1v1 matchups, W–L standings">
+      H2H
+    </span>
+  );
+}
+
 /** Card for an open public league — links to its non-member preview. Shared
  *  by the dashboard's trending strip and the Leagues page's discover section. */
 export function PublicLeagueCard({ league }: { league: PublicLeagueSummary }) {
@@ -82,7 +94,10 @@ export function PublicLeagueCard({ league }: { league: PublicLeagueSummary }) {
     <Link to={`/leagues/${league.id}/preview`} className="trending-card">
       <div className="trending-art" aria-hidden />
       <div className="trending-info">
-        <strong>{league.name}</strong>
+        <strong>
+          {league.name}
+          {leagueFormat(league) === "headToHead" && <FormatTag />}
+        </strong>
         <span>{league.firstRoundTheme ?? "Round 1 coming soon"}</span>
         <span className="trending-slots">
           {league.memberCount}/{league.maxMembers} players · {league.openSlots} open
@@ -118,11 +133,7 @@ export function LeagueCard({ summary }: { summary: LeagueSummary }) {
 
       <h3 className="league-name">
         {league.name}
-        {headToHead && (
-          <span className="format-tag" title="Head-to-head league: 1v1 matchups, W–L standings">
-            H2H
-          </span>
-        )}
+        {headToHead && <FormatTag />}
       </h3>
       {finished ? <p className="league-theme">🏁 League complete</p> : currentRound && <p className="league-theme">{currentRound.theme}</p>}
 

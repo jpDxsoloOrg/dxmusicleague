@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { data } from "../data";
+import { leagueFormat } from "../domain/types";
 import { useAsync } from "../lib/useAsync";
 import { Avatar } from "../components/Avatar";
+import { FormatTag } from "./DashboardPage";
 import "./CreateLeaguePage.css";
 import "./PreviewLeaguePage.css";
 
@@ -12,6 +14,8 @@ export function PreviewLeaguePage() {
   const { data: preview, loading, error } = useAsync(() => data.getPublicLeaguePreview(leagueId), [leagueId]);
   const [busy, setBusy] = useState(false);
   const [claimError, setClaimError] = useState<string | null>(null);
+  // A missing `format` (an API that predates it) reads as standard.
+  const headToHead = preview ? leagueFormat(preview) === "headToHead" : false;
 
   async function handleClaim() {
     if (busy) return;
@@ -40,11 +44,19 @@ export function PreviewLeaguePage() {
         {preview && (
           <>
             <header className="create-head">
-              <h1>{preview.name}</h1>
+              <h1>
+                {preview.name}
+                {headToHead && <FormatTag />}
+              </h1>
               <p>
                 Public league · {preview.openSlots} of {preview.maxMembers} spot
                 {preview.maxMembers === 1 ? "" : "s"} open
               </p>
+              {headToHead && (
+                <p className="preview-format-note">
+                  Head-to-head: one song a round, pick winners in 1v1 matchups. Joining closes when round 1 opens.
+                </p>
+              )}
             </header>
 
             <section className="preview-block">
@@ -71,7 +83,14 @@ export function PreviewLeaguePage() {
                 You're already in — open league →
               </Link>
             ) : preview.hasStarted ? (
-              <p className="preview-status">Round 1 has closed submissions — this league isn't taking new members.</p>
+              // Head-to-head closes earlier: its season locks the moment round 1
+              // opens (while round 1 is still taking songs), so "closed
+              // submissions" would be false there.
+              <p className="preview-status">
+                {headToHead
+                  ? "Round 1 has opened — this head-to-head season is locked to new players."
+                  : "Round 1 has closed submissions — this league isn't taking new members."}
+              </p>
             ) : preview.isFull ? (
               <p className="preview-status">This league is full.</p>
             ) : (

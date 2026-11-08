@@ -204,6 +204,10 @@ export const rounds: Round[] = [
 export interface PublicLeagueSummary {
   id: string;
   name: string;
+  /** Optional here (always sent by the backend) so this frontend still works
+   *  against an API that predates it: read it via `leagueFormat(summary)`,
+   *  where a missing field means "standard". Same on the two types below. */
+  format?: LeagueFormat;
   memberCount: number;
   maxMembers: number;
   openSlots: number;
@@ -214,6 +218,7 @@ export interface PublicLeagueSummary {
 export interface BrowseLeagueSummary {
   id: string;
   name: string;
+  format?: LeagueFormat;
   visibility: LeagueVisibility;
   memberCount: number;
   totalRounds: number;
@@ -232,6 +237,7 @@ export function getBrowseLeagues(limit = 24): BrowseLeagueSummary[] {
       return {
         id: lg.id,
         name: lg.name,
+        format: leagueFormat(lg),
         visibility: lg.visibility,
         memberCount: lg.memberIds.length,
         totalRounds: lg.roundCount || leagueRounds.length,
@@ -274,6 +280,7 @@ export function getOpenPublicLeagues(limit = 12): PublicLeagueSummary[] {
       return {
         id: lg.id,
         name: lg.name,
+        format: leagueFormat(lg),
         memberCount: lg.memberIds.length,
         maxMembers: cap,
         openSlots: cap - lg.memberIds.length,
@@ -289,6 +296,10 @@ export function getOpenPublicLeagues(limit = 12): PublicLeagueSummary[] {
 export interface PublicLeaguePreview {
   id: string;
   name: string;
+  /** Also tells the page how to word `hasStarted`: a head-to-head league
+   *  closes when round 1 opens (season locked), not when it stops taking
+   *  songs. */
+  format?: LeagueFormat;
   memberCount: number;
   maxMembers: number;
   openSlots: number;
@@ -310,6 +321,7 @@ export function getPublicLeaguePreview(leagueId: string): PublicLeaguePreview | 
   return {
     id: lg.id,
     name: lg.name,
+    format: leagueFormat(lg),
     memberCount: lg.memberIds.length,
     maxMembers: cap,
     openSlots,

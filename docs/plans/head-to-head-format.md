@@ -205,8 +205,5 @@ its known quirk that a departed member's song or ballot still counts toward
   instead), "W/L" changed to "W–L" to match the standings table, and the
   head-to-head leave confirmation now mentions walkovers, as the owner's kick
   confirmation already did.
-- **Known gap, not fixed here:** the public league card and the public
-  preview page don't show the format, because `PublicLeagueSummary` and
-  `PublicLeaguePreview` don't carry it. A player can claim a spot without
-  knowing the league is head-to-head. Fixing this means changing the API
-  payload, which is outside a copy ticket.
+- **Format on discovery:** fixed in IMP-01 (the public card, preview and
+  browse row show the H2H tag).

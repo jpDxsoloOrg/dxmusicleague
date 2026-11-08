@@ -1,8 +1,9 @@
 import { Link } from "react-router-dom";
 import { data } from "../data";
 import type { RoundStatus } from "../domain/types";
+import { leagueFormat } from "../domain/types";
 import { useAsync } from "../lib/useAsync";
-import { LeagueCard, PublicLeagueCard } from "./DashboardPage";
+import { FormatTag, LeagueCard, PublicLeagueCard } from "./DashboardPage";
 import "./DashboardPage.css";
 import "./LeaguesPage.css";
 
@@ -82,7 +83,10 @@ export function LeaguesPage() {
             {browseLeagues.map((lg) => (
               <Link key={lg.id} to={`/leagues/${lg.id}`} className="browse-row">
                 <div className="browse-main">
-                  <strong>{lg.name}</strong>
+                  <strong>
+                    {lg.name}
+                    {leagueFormat(lg) === "headToHead" && <FormatTag />}
+                  </strong>
                   <span className="browse-round">
                     {lg.currentRound
                       ? `Round ${lg.currentRound.index} of ${lg.totalRounds} · ${lg.currentRound.theme}`

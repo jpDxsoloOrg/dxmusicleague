@@ -1044,6 +1044,121 @@ test("standard league: HTH-03 leaves the join window exactly as it was", async (
   }
 });
 
+// ---- the format on discovery, preview and browse (IMP-01) ----
+// A player must be able to tell a head-to-head league apart before claiming a
+// spot in it (or spectating it): the three non-member payloads carry
+// `format`, read through `leagueFormat()` so a legacy row says "standard".
+
+/** A MemoryRepository that hands the listed leagues back as raw legacy rows,
+ *  with no `format` attribute. Both real repositories already fill the format
+ *  in on read (MemoryRepository.readLeague, DynamoRepository.getLeague), so
+ *  over them a handler that emitted a bare `league.format` would still say
+ *  "standard". Over this one only the handlers' own `leagueFormat()` does. */
+class RawLegacyRepository extends MemoryRepository {
+  private readonly legacyIds: ReadonlySet<string>;
+  constructor(legacyIds: string[]) {
+    super(false);
+    this.legacyIds = new Set(legacyIds);
+  }
+  private raw(lg: League): League {
+    if (!this.legacyIds.has(lg.id)) return lg;
+    const { format: _dropped, ...row } = lg;
+    return row as League;
+  }
+  override async getLeague(...args: Parameters<MemoryRepository["getLeague"]>): Promise<League | undefined> {
+    const lg = await super.getLeague(...args);
+    return lg && this.raw(lg);
+  }
+  override async getPublicLeagues(): Promise<League[]> {
+    return (await super.getPublicLeagues()).map((lg) => this.raw(lg));
+  }
+  override async getAllLeagues(): Promise<League[]> {
+    return (await super.getAllLeagues()).map((lg) => this.raw(lg));
+  }
+}
+
+test("discovery, preview and browse carry the league format: standard, head-to-head, and a legacy row (no attribute) as standard", async () => {
+  const legacyOpen = league({ id: "old-pub", name: "Old Pub", visibility: "public" });
+  const legacyRun = league({ id: "old-run", name: "Old Run", visibility: "private" });
+  delete (legacyOpen as Partial<League>).format; // pre-format records, as old Dynamo rows would be
+  delete (legacyRun as Partial<League>).format;
+  const h2h = { format: "headToHead" as const, settings: { ...DEFAULT_LEAGUE_SETTINGS, ...H2H_FORCED_SETTINGS } };
+  const leagues = [
+    // Open public leagues (round 1 still in draft) → discovery + preview.
+    league({ id: "std-pub", name: "Std Pub", visibility: "public" }),
+    league({ id: "h2h-pub", name: "H2H Pub", visibility: "public", ...h2h }),
+    legacyOpen,
+    // Running leagues (round 1 past draft) → browse.
+    league({ id: "std-run", name: "Std Run", visibility: "private" }),
+    league({ id: "h2h-run", name: "H2H Run", visibility: "public", ...h2h }),
+    legacyRun,
+  ];
+  const rounds: Round[] = [
+    { id: "std-pub~1", leagueId: "std-pub", index: 1, theme: "One", status: "draft" },
+    { id: "h2h-pub~1", leagueId: "h2h-pub", index: 1, theme: "One", status: "draft" },
+    { id: "old-pub~1", leagueId: "old-pub", index: 1, theme: "One", status: "draft" },
+    { id: "std-run~1", leagueId: "std-run", index: 1, theme: "One", status: "voting" },
+    { id: "h2h-run~1", leagueId: "h2h-run", index: 1, theme: "One", status: "voting" },
+    { id: "old-run~1", leagueId: "old-run", index: 1, theme: "One", status: "voting" },
+  ];
+  const expected: Record<string, string> = {
+    "std-pub": "standard", "h2h-pub": "headToHead", "old-pub": "standard",
+    "std-run": "standard", "h2h-run": "headToHead", "old-run": "standard",
+  };
+  const formats = (rows: { id: string; format: string }[]) => Object.fromEntries(rows.map((r) => [r.id, r.format]));
+
+  // Twice: over the real MemoryRepository (end to end: a legacy row is
+  // normalised on read, as DynamoRepository does), then over a repository
+  // that hands the legacy rows back raw (pins the handlers' leagueFormat()).
+  const raw = new RawLegacyRepository(["old-pub", "old-run"]);
+  for (const lg of leagues) await raw.createLeague(lg);
+  for (const r of rounds) await raw.createRound(r);
+  assert.equal((await raw.getLeague("old-pub"))?.format, undefined, "the raw repo really drops the field");
+  assert.equal((await raw.getLeague("h2h-pub"))?.format, "headToHead");
+
+  for (const [label, deps] of [
+    ["memory repo", await depsWith(leagues, rounds)],
+    ["raw legacy rows", { repo: raw, users: new MemoryUserDirectory() }],
+  ] as const) {
+    const open = await listOpenPublicLeagues(deps, "u-me");
+    assert.deepEqual(formats(open), { "std-pub": "standard", "h2h-pub": "headToHead", "old-pub": "standard" }, `${label}: discovery`);
+    const browse = await listBrowseLeagues(deps, "u-me");
+    assert.deepEqual(formats(browse), { "std-run": "standard", "h2h-run": "headToHead", "old-run": "standard" }, `${label}: browse`);
+    for (const id of ["std-pub", "h2h-pub", "old-pub", "h2h-run"]) {
+      assert.equal((await getPublicLeaguePreview(deps, "u-me", id)).format, expected[id], `${label}: preview ${id}`);
+    }
+
+    // The same through the real route table (what the HTTP adapters
+    // serialize), so the field can't be dropped by a route-level mapping.
+    const viaRoutes = [
+      ...(await callRoute(deps, "GET", "/leagues/public", "u-me")) as { id: string; format: string }[],
+      ...(await callRoute(deps, "GET", "/leagues/browse", "u-me")) as { id: string; format: string }[],
+    ];
+    assert.deepEqual(formats(viaRoutes), expected, `${label}: routes`);
+    for (const id of ["std-pub", "h2h-pub", "old-pub"]) {
+      const preview = (await callRoute(deps, "GET", `/leagues/${id}/public`, "u-me")) as { format: string };
+      assert.equal(preview.format, expected[id], `${label}: route preview ${id}`);
+    }
+  }
+});
+
+test("a locked head-to-head league's preview says headToHead with hasStarted while round 1 still submits (the page words it as a season lock, not closed submissions)", async () => {
+  const deps = await h2hDeps({ visibility: "public", maxMembers: 10 });
+  const before = await getPublicLeaguePreview(deps, "u-me", "h2h");
+  assert.equal(before.format, "headToHead");
+  assert.equal(before.hasStarted, false);
+
+  await openRound1(deps);
+  assert.equal((await deps.repo.getRound("h2h~0001"))?.status, "submitting");
+  const locked = await getPublicLeaguePreview(deps, "u-me", "h2h");
+  assert.equal(locked.format, "headToHead");
+  assert.equal(locked.hasStarted, true); // round 1 opened (not closed): season locked
+  // Spectators see it in browse, tagged.
+  const row = (await listBrowseLeagues(deps, "u-me")).find((b) => b.id === "h2h");
+  assert.equal(row?.format, "headToHead");
+  assert.equal(row?.currentRound?.status, "submitting");
+});
+
 // ---- head-to-head progress, departures and the finished flow (HTH-08) ----
 // Driven through the real handlers (create → join → open round 1 = freeze →
 // submit → vote → reveal) over MemoryRepository, seeded freeze RNG, manual

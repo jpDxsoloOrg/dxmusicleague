@@ -121,6 +121,10 @@
 .trending-info strong { font-size: 15px; }
 .trending-info span { font-size: 12px; color: var(--text-muted); }
 .trending-slots { margin-top: 2px; color: var(--text); }
+/* the H2H tag sits in the name: win back what `.trending-info span` overrides,
+   so it looks like the one on the league card, and centre it on the smaller
+   name */
+.trending-info .format-tag { font-size: 10px; color: var(--magenta); vertical-align: 2px; }
 
 @media (max-width: 640px) {
   .action-row { grid-template-columns: 1fr; }

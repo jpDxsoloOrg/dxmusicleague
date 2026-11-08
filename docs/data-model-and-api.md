@@ -63,7 +63,11 @@ The **tie-break is not a setting** — it is fixed algorithm in the reveal handl
 (`POST /leagues` body `format`, omitted → `"standard"`, unknown → 400) and is
 **immutable** — no route writes it afterwards (the settings PATCH ignores it).
 Leagues stored before formats existed have no attribute and read as
-`"standard"` via `leagueFormat()` on every read — no migration. Head-to-head
+`"standard"` via `leagueFormat()` on every read — no migration. The
+non-member payloads carry it too — public discovery (`GET /leagues/public`),
+the public preview (`GET /leagues/{id}/public`) and browse
+(`GET /leagues/browse`) — so a player can tell a head-to-head league apart
+before claiming a spot or spectating. Head-to-head
 leagues are locked to `submissionsPerPlayer: 1` and `downvotePoolSize: 0`:
 creation and rematch clamp to those values, and a settings PATCH that changes
 either is rejected with a 400.
