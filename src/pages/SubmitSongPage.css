@@ -75,6 +75,17 @@
 .comment-input::placeholder { color: var(--text-dim); }
 .submit-btn { margin-top: 4px; padding: 13px; font-size: 15px; }
 .submit-note { margin: 0; text-align: center; font-size: 12px; color: var(--text-dim); }
+/* Inline error under the Submit button (a failed submit) and under the picks
+   list (a failed ✕ remove). Not the global .page-error: that one is for
+   full-page states and carries 48px of vertical padding, which pushed the
+   message under the phone's bottom nav. No margin or padding of its own: the
+   container's flex gap spaces it (.submission-card 14px, .my-picks 8px). The
+   page scrolls a new one into view; scroll-margin-bottom leaves it a little
+   room above the viewport's bottom edge (the phone nav, below). */
+.submit-error {
+  margin: 0; text-align: center; font-size: 13px; color: #ff8a8a;
+  scroll-margin-bottom: 16px;
+}
 
 .submission-empty {
   display: flex; flex-direction: column; align-items: center; gap: 14px;
@@ -128,6 +139,12 @@
 @media (max-width: 900px) {
   .submit-grid { grid-template-columns: 1fr; }
   .submission-col { position: static; }
+}
+
+/* Phones and small tablets, where AppLayout shows the fixed bottom nav: an
+   error line scrolled into view stops clear of the nav, not behind it. */
+@media (max-width: 820px) {
+  .submit-error { scroll-margin-bottom: calc(var(--mobilenav-h) + 12px); }
 }
 
 @media (max-width: 640px) {

@@ -235,6 +235,10 @@
   gap: 16px;
   color: var(--text-muted);
 }
+/* The owner's failed reveal, a compact line under the button. Not the global
+   .page-error (a full-page state with 48px of vertical padding); the card's
+   centred flex column and gap place it. */
+.reveal-error { margin: 0; font-size: 14px; color: #ff8a8a; }
 
 /* ---- head-to-head reveal: one card per matchup + the bye's exhibition ---- */
 .mr-list { display: flex; flex-direction: column; gap: 14px; }

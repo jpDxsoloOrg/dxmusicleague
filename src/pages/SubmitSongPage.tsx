@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { data } from "../data";
 import type { LeagueDetail } from "../data";
@@ -66,7 +66,40 @@ function SubmitForm({ detail }: { detail: LeagueDetail }) {
   const [comment, setComment] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Two errors, each shown as a compact line beside the action that failed
+  // (BUG-21): a failed submit under the Submit button, a failed ✕ remove
+  // under the picks list. Separate so a remove failure is visible whatever the
+  // card below shows (slots full, nothing selected) and never surfaces under
+  // the Submit button as if the submit had failed.
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+  const submitErrorRef = useRef<HTMLParagraphElement>(null);
+  const removeErrorRef = useRef<HTMLParagraphElement>(null);
+  // The selected track's id, readable from an in-flight submit (its handler
+  // only sees the track it started with). The Select buttons stay live while
+  // a submit is pending, so a late failure is dropped if another track has
+  // been selected meanwhile, rather than shown under a song it isn't about.
+  const selectedId = useRef<string | null>(null);
+
+  // Picking a different track drops a submit error about the previous one
+  // (e.g. "already submitted"), so it isn't left under a song it isn't about.
+  function selectTrack(track: Track) {
+    if (track.id !== selected?.id) setSubmitError(null);
+    selectedId.current = track.id;
+    setSelected(track);
+  }
+
+  // Bring a new error line into view. On a phone the Submit button is often
+  // tapped just above the fixed bottom nav, so the line under it would land
+  // behind the nav. `nearest` scrolls only as far as needed (not at all when
+  // the line is already visible), and the line's scroll-margin-bottom in the
+  // CSS stops it clear of the nav.
+  useEffect(() => {
+    if (submitError) submitErrorRef.current?.scrollIntoView({ block: "nearest" });
+  }, [submitError]);
+  useEffect(() => {
+    if (removeError) removeErrorRef.current?.scrollIntoView({ block: "nearest" });
+  }, [removeError]);
 
   // Debounced search through the provider abstraction.
   useEffect(() => {
@@ -119,10 +152,12 @@ function SubmitForm({ detail }: { detail: LeagueDetail }) {
                   // Back to a fresh form for the next slot: nothing selected,
                   // no comment, an idle Submit button and no leftover error.
                   setSelected(null);
+                  selectedId.current = null;
                   setComment("");
                   setSubmitted(false);
                   setBusy(false);
                   setSubmitError(null);
+                  setRemoveError(null);
                 }}
               >
                 Add another song
@@ -173,7 +208,7 @@ function SubmitForm({ detail }: { detail: LeagueDetail }) {
                   <span className="result-dur">{formatDuration(track.durationMs)}</span>
                   <button
                     className={isSel ? "btn select-btn is-selected" : "btn select-btn"}
-                    onClick={() => setSelected(track)}
+                    onClick={() => selectTrack(track)}
                   >
                     {isSel ? "Selected" : "Select"}
                   </button>
@@ -202,11 +237,12 @@ function SubmitForm({ detail }: { detail: LeagueDetail }) {
                     aria-label={`Remove ${pick.track.title}`}
                     onClick={async () => {
                       if (!currentRound) return;
+                      setRemoveError(null);
                       try {
                         await data.removeSubmission(currentRound.id, pick.id);
                         reloadMySubs();
                       } catch (err) {
-                        setSubmitError(err instanceof Error ? err.message : "Couldn't remove that pick.");
+                        setRemoveError(err instanceof Error ? err.message : "Couldn't remove that pick.");
                       }
                     }}
                   >
@@ -214,6 +250,9 @@ function SubmitForm({ detail }: { detail: LeagueDetail }) {
                   </button>
                 </div>
               ))}
+              {removeError && (
+                <p ref={removeErrorRef} className="submit-error" role="alert">{removeError}</p>
+              )}
             </div>
           )}
 
@@ -255,7 +294,9 @@ function SubmitForm({ detail }: { detail: LeagueDetail }) {
                     reloadMySubs();
                     setSubmitted(true);
                   } catch (err) {
-                    setSubmitError(err instanceof Error ? err.message : "Couldn't submit your song.");
+                    if (selectedId.current === selected.id) {
+                      setSubmitError(err instanceof Error ? err.message : "Couldn't submit your song.");
+                    }
                   } finally {
                     // Success too: in a multi-song league "Add another song"
                     // brings this form back, and it must not still be busy.
@@ -265,7 +306,9 @@ function SubmitForm({ detail }: { detail: LeagueDetail }) {
               >
                 {busy ? "Submitting…" : "Submit song →"}
               </button>
-              {submitError && <p className="page-error">{submitError}</p>}
+              {submitError && (
+                <p ref={submitErrorRef} className="submit-error" role="alert">{submitError}</p>
+              )}
               <p className="submit-note">
                 {multi
                   ? `You can submit up to ${allowance} songs and swap them until the round closes.`

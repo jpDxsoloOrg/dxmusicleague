@@ -98,7 +98,7 @@ export function RevealPage() {
           ) : (
             <p>Results will appear once the league owner reveals this round.</p>
           )}
-          {error && <p className="page-error">{error}</p>}
+          {error && <p className="reveal-error" role="alert">{error}</p>}
         </div>
       </div>
     );
