@@ -53,6 +53,16 @@ The per-league knobs live in the `settings` map on the League META item, mirrori
 { "votePoolSize": 10, "maxPointsPerSong": 5, "allowSelfVote": false, "submissionsPerPlayer": 1 }
 ```
 
+**Self-voting is not a setting** — no league allows it. `allowSelfVote` is deprecated and always
+`false`: create, rematch and the settings PATCH (`PATCH /leagues/{id}/settings`) store `false`
+whatever they are sent (the PATCH accepts and ignores the field, so an older frontend that still
+sends it keeps saving), every League the API returns reads `false`, and the ballot referee never
+reads it. A row stored before the option was removed may still hold `true`; it needs no
+migration — the attribute just stops mattering, and the league's next settings save writes `false`.
+Ballots are refereed when cast, not again at the reveal: a self-vote ballot already stored before
+the option was removed, in a league that then allowed it, still counts as cast (the app never
+offered one — only a hand-written API ballot could hold it).
+
 The **tie-break is not a setting** — it is fixed algorithm in the reveal handler
 (points desc → distinct-voter count desc → title A→Z).
 
@@ -198,13 +208,13 @@ in the same order.
 
 1. Round status is `voting`; vote deadline not passed; caller is a member.
 2. Every `submissionId` belongs to this round.
-3. `allowSelfVote` is false → no points and no anti-votes on any of the caller's own submissions
-   in the round.
+3. No points and no anti-votes on any of the caller's own submissions in the round, in every
+   league (self-voting is not a setting; a legacy row's `allowSelfVote: true` is ignored).
 4. Each allocation is an integer `0 ≤ p ≤ maxPointsPerSong`.
 5. `sum(points) === effectivePool` exactly — no partial ballots. The effective pool is
    `min(votePoolSize, songsOnOffer × maxPointsPerSong)` (`effectivePool`, `domain/rules.ts`), where
    the songs on offer are the vote page's list: every song in the round except all of the caller's
-   own, whatever `allowSelfVote` says. It is the whole pool unless those songs can't take it (a
+   own. It is the whole pool unless those songs can't take it (a
    two-player league, players who didn't submit, a low cap); with no songs on offer it is 0, and the
    empty ballot still counts as the caller's vote.
 6. One ballot per voter: overwrite of `BALLOT#<me>` allowed until the deadline.
@@ -216,7 +226,7 @@ over the same derived matchups as `GET /matchups` — reject the whole ballot if
 2. Every pick's `matchupId` is a matchup of this round (the bye is not a matchup). In a
    contest, its value is the id of one of that matchup's two songs (walkover / no-contest
    picks aren't refereed — see 4).
-3. No pick in the caller's own matchup (the self-vote rule; `allowSelfVote` doesn't apply).
+3. No pick in the caller's own matchup (the self-vote rule, as for points ballots).
 4. A pick in **every** votable matchup — every contest (both songs present) except the
    caller's own (`votableMatchups`, the set the tally shares). A pick in a walkover / no-contest
    matchup is never rejected and never counts: a mid-voting departure can turn a picked contest

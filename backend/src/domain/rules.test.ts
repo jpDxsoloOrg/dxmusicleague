@@ -1,6 +1,7 @@
 // Rules-engine unit tests — pure, no infra. Run: `npm test` (node --test).
 // Proves "the server is the referee" logic in isolation: points ballots (the
-// effective pool, BUG-02; the self-vote rule over every own song, BUG-11) and
+// effective pool, BUG-02; the self-vote rule over every own song, BUG-11, in
+// every league whatever a legacy row's `allowSelfVote` says, BUG-17) and
 // their tally, head-to-head ballots (HTH-06), and the head-to-head tally,
 // outcomes and the W/L/D each reveal banks (HTH-07).
 
@@ -105,17 +106,18 @@ test("no songs on offer (only the voter submitted) → the effective pool is 0: 
   assert.deepEqual(validateBallot({ allocations: {} }, none), { allocations: {}, downvotes: {} });
   assert.deepEqual(validateBallot({ allocations: { s1: 0 } }, none), { allocations: {}, downvotes: {} });
   assert.throws(() => validateBallot({ allocations: { s1: 1 } }, none), /your own/);
-  // Self-voting on: the own song still isn't counted (the vote page never
-  // offers it), so the safe smaller pool still holds.
-  const selfVote = { ...none, settings: { ...DEFAULT_LEAGUE_SETTINGS, allowSelfVote: true } };
-  assert.throws(() => validateBallot({ allocations: { s1: 1 } }, selfVote), /exactly 0 points \(you spent 1\)/);
+  // A legacy row that still says `allowSelfVote: true` changes nothing: the
+  // own song is neither on offer nor votable (BUG-17).
+  const legacy = { ...none, settings: { ...DEFAULT_LEAGUE_SETTINGS, allowSelfVote: true } };
+  assert.deepEqual(validateBallot({ allocations: {} }, legacy), { allocations: {}, downvotes: {} });
+  assert.throws(() => validateBallot({ allocations: { s1: 1 } }, legacy), { message: "You can't vote for your own submission." });
 });
 
 test("rejects exceeding the per-song cap", () => {
   assert.throws(() => validateBallot({ allocations: { s2: 6, s3: 4 } }, ctx), /more than 5/);
 });
 
-test("rejects self-votes when disallowed", () => {
+test("rejects self-votes", () => {
   assert.throws(() => validateBallot({ allocations: { s1: 5, s2: 5 } }, ctx), /your own/);
 });
 
@@ -132,7 +134,7 @@ const twoOwn = {
   votableSongCount: 2, // s3 + s4
 };
 
-test("self-voting off, two own songs: points on EITHER one are refused with the existing message", () => {
+test("two own songs: points on EITHER one are refused with the existing message", () => {
   for (const own of ["s1", "s2"]) {
     assert.throws(() => validateBallot({ allocations: { [own]: 5, s3: 5 } }, twoOwn), {
       message: "You can't vote for your own submission.",
@@ -142,7 +144,7 @@ test("self-voting off, two own songs: points on EITHER one are refused with the 
   assert.deepEqual(validateBallot({ allocations: { s1: 0, s2: 0, s3: 5, s4: 5 } }, twoOwn).allocations, { s3: 5, s4: 5 });
 });
 
-test("self-voting off, two own songs: anti-votes on EITHER one are refused with the existing message", () => {
+test("two own songs: anti-votes on EITHER one are refused with the existing message", () => {
   for (const own of ["s1", "s2"]) {
     assert.throws(() => validateBallot({ allocations: { s3: 5, s4: 5 }, downvotes: { [own]: 1 } }, twoOwn), {
       message: "You can't anti-vote your own submission.",
@@ -151,16 +153,37 @@ test("self-voting off, two own songs: anti-votes on EITHER one are refused with 
   assert.deepEqual(validateBallot({ allocations: { s3: 5, s4: 5 }, downvotes: { s1: 0, s3: 1 } }, twoOwn).downvotes, { s3: 1 });
 });
 
-test("self-voting on, two own songs: either one takes points and anti-votes, as before", () => {
-  const selfVote = { ...twoOwn, settings: { ...twoOwn.settings, allowSelfVote: true } };
-  assert.deepEqual(validateBallot({ allocations: { s1: 5, s3: 5 }, downvotes: { s2: 1 } }, selfVote), {
-    allocations: { s1: 5, s3: 5 },
-    downvotes: { s2: 1 },
-  });
-  assert.deepEqual(validateBallot({ allocations: { s2: 5, s4: 5 }, downvotes: { s1: 1 } }, selfVote), {
-    allocations: { s2: 5, s4: 5 },
-    downvotes: { s1: 1 },
-  });
+// ---- Self-voting is never allowed, in any league (BUG-17) -----------------
+//
+// The 'Allow self-voting' option is gone. A league stored before then may
+// still say `allowSelfVote: true`; the referee no longer reads the flag.
+
+test("a legacy row with allowSelfVote: true, two own songs: points on EITHER one are still refused with the existing message", () => {
+  const legacy = { ...twoOwn, settings: { ...twoOwn.settings, allowSelfVote: true } };
+  for (const own of ["s1", "s2"]) {
+    assert.throws(() => validateBallot({ allocations: { [own]: 5, s3: 5 } }, legacy), {
+      message: "You can't vote for your own submission.",
+    });
+  }
+});
+
+test("a legacy row with allowSelfVote: true, two own songs: anti-votes on EITHER one are still refused with the existing message", () => {
+  const legacy = { ...twoOwn, settings: { ...twoOwn.settings, allowSelfVote: true } };
+  for (const own of ["s1", "s2"]) {
+    assert.throws(() => validateBallot({ allocations: { s3: 5, s4: 5 }, downvotes: { [own]: 1 } }, legacy), {
+      message: "You can't anti-vote your own submission.",
+    });
+  }
+});
+
+test("a legacy row with allowSelfVote: true: a ballot that leaves the voter's own songs alone is validated exactly as before", () => {
+  const legacy = { ...twoOwn, settings: { ...twoOwn.settings, allowSelfVote: true } };
+  const ballot = { allocations: { s1: 0, s3: 5, s4: 5 }, downvotes: { s2: 0, s3: 1 } };
+  assert.deepEqual(validateBallot(ballot, legacy), validateBallot(ballot, twoOwn));
+  assert.deepEqual(validateBallot(ballot, legacy), { allocations: { s3: 5, s4: 5 }, downvotes: { s3: 1 } });
+  // The other rules still apply as they always did.
+  assert.throws(() => validateBallot({ allocations: { s3: 5, s4: 4 } }, legacy), /exactly 10 points \(you spent 9\)/);
+  assert.throws(() => validateBallot({ allocations: { s3: 6, s4: 4 } }, legacy), /more than 5/);
 });
 
 test("a voter with no song in the round (empty own set) may vote for anything", () => {

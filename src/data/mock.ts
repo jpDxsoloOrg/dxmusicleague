@@ -10,7 +10,7 @@
 // section at the bottom of this file.
 
 import type { League, LeagueFormat, LeagueSettings, LeagueVisibility, RoundProgression, Round, RoundStatus, Submission, User } from "../domain/types";
-import { DEFAULT_LEAGUE_SETTINGS, H2H_FORCED_SETTINGS, leagueFormat } from "../domain/types";
+import { DEFAULT_LEAGUE_SETTINGS, H2H_FORCED_SETTINGS, applyFormatSettings, leagueFormat } from "../domain/types";
 import type { MusicProviderId, Track } from "../music";
 import { trackKey } from "../music";
 // The backend's isomorphic domain + the shared H2H seed fixture (one source
@@ -429,8 +429,9 @@ export function createLeague(input: CreateLeagueInput): League {
     ownerId: currentUser.id,
     musicProvider: input.musicProvider,
     format,
-    // Head-to-head is clamped to its forced settings, like the server does.
-    settings: format === "headToHead" ? { ...DEFAULT_LEAGUE_SETTINGS, ...H2H_FORCED_SETTINGS } : DEFAULT_LEAGUE_SETTINGS,
+    // Clamped like the server does: head-to-head to its forced settings, and
+    // self-voting off in every format (BUG-17).
+    settings: applyFormatSettings(format, DEFAULT_LEAGUE_SETTINGS),
     memberIds: [currentUser.id],
     // Mint a shareable invite code so the new league is joinable too.
     inviteCode: `NEW-${100 + createdLeagueSeq}`,
@@ -529,13 +530,12 @@ export function regenerateInvite(leagueId: string): League {
 }
 
 /** Owner edits a league's voting settings (mock: mutate in place). The format
- *  is never part of the payload — it can't change after creation. */
+ *  is never part of the payload — it can't change after creation — and nor is
+ *  self-voting: it is never allowed, so the save always stores
+ *  `allowSelfVote: false`, as the server's does (BUG-17). */
 export function updateLeagueSettings(
   leagueId: string,
-  settings: Pick<
-    LeagueSettings,
-    "votePoolSize" | "maxPointsPerSong" | "allowSelfVote" | "submissionsPerPlayer" | "downvotePoolSize"
-  >,
+  settings: Pick<LeagueSettings, "votePoolSize" | "maxPointsPerSong" | "submissionsPerPlayer" | "downvotePoolSize">,
 ): League {
   const league = leagues.find((lg) => lg.id === leagueId);
   if (!league) throw new Error("That league doesn't exist.");
@@ -551,7 +551,7 @@ export function updateLeagueSettings(
       throw new Error("Head-to-head leagues don't use anti-votes.");
     }
   }
-  league.settings = { ...league.settings, ...settings };
+  league.settings = { ...league.settings, ...settings, allowSelfVote: false };
   return league;
 }
 
@@ -887,6 +887,28 @@ export function getVotableSubmissions(_roundId: string): VotableSubmission[] {
     .map((s) => ({ id: s.id, track: mockTrack(s.pid, s.title, s.artists, s.album, s.dur) }));
 }
 
+/** The self-vote rule on a standard mock ballot — the API referee's
+ *  (`validateBallot`), same messages: no points and no anti-votes on ANY of
+ *  the current user's songs, in every league (BUG-17: no setting allows it).
+ *  `ownIds` are the songs they submitted this session; the canned round's
+ *  song of theirs counts too. The vote page never offers any of them, so
+ *  only a hand-made ballot can trip this; the rest of a standard mock ballot
+ *  isn't refereed. */
+export function rejectSelfVotes(
+  allocations: Record<string, number>,
+  downvotes: Record<string, number> | undefined,
+  ownIds: Iterable<string>,
+): void {
+  const own = new Set(ownIds);
+  for (const s of CANON_SUBMISSIONS) if (s.submitterId === currentUser.id) own.add(s.id);
+  for (const [id, points] of Object.entries(allocations ?? {})) {
+    if (own.has(id) && points > 0) throw new Error("You can't vote for your own submission.");
+  }
+  for (const [id, antiVotes] of Object.entries(downvotes ?? {})) {
+    if (own.has(id) && antiVotes > 0) throw new Error("You can't anti-vote your own submission.");
+  }
+}
+
 // Results: ranked by points, submitters revealed, with all voter comments
 // (seeded ones plus whatever the current user left while voting).
 // Tie-break: equal points → more distinct voters wins, then title A→Z.
@@ -1031,12 +1053,9 @@ export function rematchLeague(leagueId: string): League {
     id: `lg-rematch-${createdLeagueSeq}`,
     name: (numbered ? `${numbered[1]}${Number(numbered[2]) + 1}` : `${league.name} 2`).slice(0, 50),
     // A rematch keeps the format (head-to-head stays head-to-head) and, like
-    // the backend's applyFormatSettings, re-applies the H2H forced settings.
+    // the backend, re-applies the forced settings (H2H's, and self-voting off).
     format: leagueFormat(league),
-    settings:
-      leagueFormat(league) === "headToHead"
-        ? { ...league.settings, ...H2H_FORCED_SETTINGS }
-        : { ...league.settings },
+    settings: applyFormatSettings(leagueFormat(league), league.settings),
     memberIds: [...league.memberIds],
     inviteCode: `NEW-${100 + createdLeagueSeq}`,
     startAt: league.progression === "timed" ? new Date().toISOString() : undefined,

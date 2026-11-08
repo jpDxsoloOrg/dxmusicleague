@@ -17,6 +17,10 @@ import "./LeagueSettingsPage.css";
 // rejects any other value anyway, HTH-01). The points-pool rules don't apply
 // to a winner-pick ballot, so they aren't offered either, which leaves
 // nothing to save: the Save button is hidden. Standard leagues are unchanged.
+//
+// There is no self-voting option (BUG-17): no league allows it, and the
+// server stores false whatever it is sent, so nothing here reads or sends
+// `allowSelfVote`.
 export function LeagueSettingsPage() {
   const { leagueId = "" } = useParams();
   const { user } = useAuth();
@@ -25,7 +29,6 @@ export function LeagueSettingsPage() {
 
   const [votePoolSize, setVotePoolSize] = useState(10);
   const [maxPointsPerSong, setMaxPointsPerSong] = useState(5);
-  const [allowSelfVote, setAllowSelfVote] = useState(false);
   const [submissionsPerPlayer, setSubmissionsPerPlayer] = useState(1);
   const [downvotePoolSize, setDownvotePoolSize] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -38,7 +41,6 @@ export function LeagueSettingsPage() {
     if (detail) {
       setVotePoolSize(detail.league.settings.votePoolSize);
       setMaxPointsPerSong(detail.league.settings.maxPointsPerSong);
-      setAllowSelfVote(detail.league.settings.allowSelfVote);
       setSubmissionsPerPlayer(detail.league.settings.submissionsPerPlayer || 1);
       setDownvotePoolSize(detail.league.settings.downvotePoolSize ?? 0);
     }
@@ -85,7 +87,6 @@ export function LeagueSettingsPage() {
       await data.updateLeagueSettings(league.id, {
         votePoolSize,
         maxPointsPerSong,
-        allowSelfVote,
         submissionsPerPlayer,
         downvotePoolSize,
       });
@@ -216,22 +217,6 @@ export function LeagueSettingsPage() {
               max={2}
               onChange={setDownvotePoolSize}
             />
-
-            <div className="setting-row">
-              <div className="setting-text">
-                <span className="setting-label">Allow self-voting</span>
-                <span className="field-hint">Let players put points on their own submission.</span>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={allowSelfVote}
-                className={`toggle${allowSelfVote ? " on" : ""}`}
-                onClick={() => setAllowSelfVote((v) => !v)}
-              >
-                <span className="toggle-knob" />
-              </button>
-            </div>
           </section>
 
           {error && <span className="field-error">{error}</span>}

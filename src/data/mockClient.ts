@@ -38,6 +38,7 @@ import {
   leaveLeague,
   regenerateInvite,
   rejectPointsBallotOnHeadToHead,
+  rejectSelfVotes,
   rematchLeague,
   removeHeadToHeadSubmission,
   revealHeadToHeadRound,
@@ -197,6 +198,8 @@ export class MockClient implements DataClient {
       rejectPointsBallotOnHeadToHead(roundId, allocations, downvotes); // throws for any points
       return castHeadToHeadBallot(roundId, {}, comments); // an empty pick set — refereed like the API
     }
+    // Never on any of the caller's own songs, in any league — as the API (BUG-17).
+    rejectSelfVotes(allocations, downvotes, (this.mySubs.get(roundId) ?? []).map((s) => s.id));
     this.myBallots.set(roundId, { allocations, downvotes: downvotes ?? {}, comments: comments ?? {} });
     saveVoteComments(roundId, comments ?? {});
   }

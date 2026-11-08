@@ -36,10 +36,11 @@ export interface CreateRoundInput {
   description?: string;
 }
 
-/** The league settings an owner can edit. */
+/** The league settings an owner can edit. Self-voting isn't one: it is never
+ *  allowed (BUG-17), so `allowSelfVote` is never sent. */
 export type EditableLeagueSettings = Pick<
   LeagueSettings,
-  "votePoolSize" | "maxPointsPerSong" | "allowSelfVote" | "submissionsPerPlayer" | "downvotePoolSize"
+  "votePoolSize" | "maxPointsPerSong" | "submissionsPerPlayer" | "downvotePoolSize"
 >;
 
 export interface DataClient {

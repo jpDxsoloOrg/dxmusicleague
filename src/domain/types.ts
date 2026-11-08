@@ -21,7 +21,11 @@ export interface LeagueSettings {
   /** Most points a voter may place on any single submission, forcing them to
    *  spread the pool across multiple songs. Must be ≤ votePoolSize. */
   maxPointsPerSong: number;
-  /** May a player put points on their own submission? */
+  /** Deprecated — always false. Self-voting is never allowed, in any league
+   *  (BUG-17): there is no such option any more, the client never sends it,
+   *  and the server stores and returns false whatever it is sent. Kept only
+   *  because leagues stored before it was removed may still hold `true`.
+   *  Mirrors backend/src/domain/types.ts. */
   allowSelfVote: boolean;
   /** Submissions allowed per player per round. Locked to 1 today; kept as a
    *  field so multiple-per-player can be enabled later without a migration. */
@@ -139,6 +143,15 @@ export const H2H_FORCED_SETTINGS: Pick<LeagueSettings, "submissionsPerPlayer" | 
   submissionsPerPlayer: 1,
   downvotePoolSize: 0,
 };
+
+/** Overlay the settings a new league is forced to: self-voting off in every
+ *  format (BUG-17), plus the format's forced settings (none for standard).
+ *  Always a copy. The mock's create and rematch use it, as the server's do.
+ *  Mirrors backend/src/domain/types.ts. */
+export function applyFormatSettings(format: LeagueFormat, settings: LeagueSettings): LeagueSettings {
+  const clamped: LeagueSettings = { ...settings, allowSelfVote: false };
+  return format === "headToHead" ? { ...clamped, ...H2H_FORCED_SETTINGS } : clamped;
+}
 
 /** Has a head-to-head season been scheduled? The server freezes the season
  *  (player order, round count = everyone plays everyone once) when round 1

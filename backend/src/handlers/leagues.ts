@@ -111,9 +111,15 @@ interface LeagueDetail {
  *  deanonymize every future matchup and `h2hSalt` is the key that hides it,
  *  so neither leaves the server for anyone, owner included — pairings are
  *  only ever served derived and anonymized (HTH-05). Every handler that
- *  returns a League returns it through here. */
+ *  returns a League returns it through here.
+ *
+ *  Self-voting reads off for every league (BUG-17): a row stored before the
+ *  option was removed may still say `allowSelfVote: true`, but the referee
+ *  ignores it, so the view must not tell a client (or an older frontend's
+ *  settings toggle) otherwise. The stored row is left as it is — no
+ *  migration; its next settings save writes false. */
 export function toLeagueView(league: League): League {
-  const view: League = { ...league };
+  const view: League = { ...league, settings: { ...league.settings, allowSelfVote: false } };
   delete view.h2hParticipants;
   delete view.h2hSalt;
   return view;
@@ -761,10 +767,12 @@ async function ownedLeague(deps: Deps, caller: string, leagueId: string): Promis
 
 const asInt = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : NaN);
 
+/** The settings an owner can edit. There is no `allowSelfVote`: self-voting
+ *  is never allowed (BUG-17), so the route doesn't forward the field an older
+ *  frontend may still send, and the save always stores false. */
 export interface UpdateSettingsInput {
   votePoolSize: unknown;
   maxPointsPerSong: unknown;
-  allowSelfVote: unknown;
   submissionsPerPlayer?: unknown;
   downvotePoolSize?: unknown;
 }
@@ -818,7 +826,9 @@ export async function updateLeagueSettings(
   const settings: LeagueSettings = {
     votePoolSize,
     maxPointsPerSong,
-    allowSelfVote: Boolean(input?.allowSelfVote),
+    // Not an option (BUG-17): always stored off — which also clears a legacy
+    // row's `true` on its next save.
+    allowSelfVote: false,
     submissionsPerPlayer,
     downvotePoolSize,
   };

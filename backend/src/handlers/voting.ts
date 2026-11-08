@@ -77,7 +77,8 @@ export async function castBallot(
 /** A standard (points) league's ballot — the original path, apart from
  *  refusing head-to-head picks, spending the effective pool (BUG-02: the
  *  pool, or what the songs on offer can take when that's less) and guarding
- *  every one of the caller's songs from self-votes (BUG-11). */
+ *  every one of the caller's songs from self-votes (BUG-11), in every league
+ *  (BUG-17: self-voting is not a setting). */
 async function pointsBallot(
   deps: Deps,
   caller: string,
@@ -95,10 +96,8 @@ async function pointsBallot(
   // (BUG-11).
   const ownSubmissionIds = new Set(subs.filter((s) => s.userId === caller).map((s) => s.id));
   // The songs on offer: exactly the vote page's list (listVotableSubmissions —
-  // every song but ALL of the caller's own, whatever allowSelfVote says), so
+  // every song but ALL of the caller's own, which can never take a vote), so
   // the effective pool the referee demands is the one the page can place.
-  // Never add own songs back for a self-voting league: the page can't show
-  // them, and the smaller count stays safe for an API caller who self-votes.
   const votableSongCount = subs.filter((s) => s.userId !== caller).length;
 
   const allocations = input?.allocations && typeof input.allocations === "object" ? input.allocations : {};

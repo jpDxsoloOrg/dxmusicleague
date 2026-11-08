@@ -460,15 +460,15 @@ export function HelpPage() {
               <li>You get a <strong>pool of points</strong> to spend (10 by default).</li>
               <li>Use the <strong>−</strong> and <strong>+</strong> steppers to place points on the songs you liked.</li>
               <li>There's a <strong>cap per song</strong> (5 by default) so you have to spread your points around rather than dumping them all on one favourite.</li>
+              <li>Your own songs aren't on the list: you <strong>can't vote for your own songs</strong> (or anti-vote them), in any league.</li>
               <li>You must spend <strong>every point</strong> in your pool before you can submit — or, when the songs on offer can't take that many (say, just one other song in a two-player league), as many as they can take. The counter shows how many you have left.</li>
               <li>You can add an optional <strong>comment</strong> to any song; it's shown next to that song when the round is revealed.</li>
               <li>Some leagues also give you <strong>anti-votes</strong> (💔): each subtracts a point from a song. Spending them is optional, and totals can go negative.</li>
             </ul>
             <p>
               Submitters stay anonymous the whole time. Hit <strong>Submit votes</strong>{" "}
-              once your pool is empty. The exact pool size, per-song cap, and whether
-              you're allowed to vote for your own song are set by the owner in{" "}
-              <a href="#settings">league settings</a>.
+              once your pool is empty. The exact pool size and per-song cap are set by
+              the owner in <a href="#settings">league settings</a>.
             </p>
             <h3>In a head-to-head league</h3>
             <p>
@@ -602,8 +602,6 @@ export function HelpPage() {
               <dd>The size of each voter's point pool per round.</dd>
               <dt>Max points per song</dt>
               <dd>The most points a voter can place on any single song.</dd>
-              <dt>Allow self-voting</dt>
-              <dd>Whether players may put points on their own submission.</dd>
               <dt>Songs per player</dt>
               <dd>How many songs each player submits per round (1–5). Handy for small leagues.</dd>
               <dt>Anti-votes per player</dt>

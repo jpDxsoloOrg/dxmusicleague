@@ -28,6 +28,14 @@ export interface Track {
 export interface LeagueSettings {
   votePoolSize: number;
   maxPointsPerSong: number;
+  /** Deprecated — always false. Self-voting is never allowed, in any league
+   *  (BUG-17): there is no such option any more. Kept only because leagues
+   *  stored before it was removed may still hold `true`; nothing reads it.
+   *  Create, rematch and the settings PATCH store false whatever they are
+   *  sent (`applyFormatSettings`, `updateLeagueSettings`), every League the
+   *  API returns reads false (`toLeagueView`), and the referee
+   *  (`validateBallot`, domain/rules.ts) refuses points and anti-votes on any
+   *  of the voter's own songs regardless. */
   allowSelfVote: boolean;
   submissionsPerPlayer: number;
   /** Anti-votes each voter may place per round (0 disables; each subtracts
@@ -209,8 +217,12 @@ export const H2H_FORCED_SETTINGS: Pick<LeagueSettings, "submissionsPerPlayer" | 
   downvotePoolSize: 0,
 };
 
-/** Overlay the format's forced settings onto a settings object (a no-op for
- *  standard leagues). Used by the create and rematch paths to clamp. */
+/** Overlay the settings a new league is forced to onto a settings object:
+ *  self-voting off in every format (BUG-17 — it isn't an option, so a legacy
+ *  `allowSelfVote: true` copied by a rematch is cleared), plus the format's
+ *  forced settings (none for standard leagues). Used by the create and
+ *  rematch paths to clamp. Always a copy. */
 export function applyFormatSettings(format: LeagueFormat, settings: LeagueSettings): LeagueSettings {
-  return format === "headToHead" ? { ...settings, ...H2H_FORCED_SETTINGS } : { ...settings };
+  const clamped: LeagueSettings = { ...settings, allowSelfVote: false };
+  return format === "headToHead" ? { ...clamped, ...H2H_FORCED_SETTINGS } : clamped;
 }

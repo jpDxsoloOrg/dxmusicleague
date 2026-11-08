@@ -57,28 +57,6 @@
 .stepper-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .stepper-value { min-width: 28px; text-align: center; font-weight: 700; font-size: 16px; }
 
-/* toggle switch */
-.toggle {
-  width: 48px; height: 28px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--bg-2);
-  padding: 0;
-  position: relative;
-  flex: none;
-  transition: background 0.15s ease;
-}
-.toggle.on { background: var(--grad); border-color: transparent; }
-.toggle-knob {
-  position: absolute;
-  top: 2px; left: 2px;
-  width: 22px; height: 22px;
-  border-radius: 50%;
-  background: var(--text);
-  transition: transform 0.15s ease;
-}
-.toggle.on .toggle-knob { transform: translateX(20px); }
-
 .settings-save { margin-top: 20px; width: 100%; justify-content: center; padding: 13px; }
 .settings-save:disabled { opacity: 0.5; cursor: not-allowed; filter: none; }
 .settings-saved { display: block; margin-top: 12px; color: var(--status-revealed); font-size: 14px; font-weight: 600; }

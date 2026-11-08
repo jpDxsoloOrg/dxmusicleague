@@ -22,12 +22,13 @@ export interface BallotContext {
   /** EVERY one of the caller's submission ids in this round (empty when they
    *  didn't submit). With `submissionsPerPlayer` > 1 a voter has several
    *  songs, and the self-vote rule guards all of them — not just whichever
-   *  one the repository happens to return first (BUG-11). */
+   *  one the repository happens to return first (BUG-11) — in every league
+   *  (BUG-17). */
   ownSubmissionIds: ReadonlySet<string>;
   /** How many songs the voter has on offer: the vote page's list — every
-   *  submission in the round except ALL of the voter's own, whatever
-   *  `allowSelfVote` says (handlers/submissions.ts `listVotableSubmissions`).
-   *  Sizes the effective pool (`effectivePool`). */
+   *  submission in the round except ALL of the voter's own
+   *  (handlers/submissions.ts `listVotableSubmissions`). Sizes the effective
+   *  pool (`effectivePool`). */
   votableSongCount: number;
 }
 
@@ -56,8 +57,10 @@ export function effectivePool(
  * only) on pass. Mirrors the ballot rules in the design doc. The effective
  * pool (`effectivePool`: the vote pool, or what the songs on offer can take
  * when that's less) must be spent exactly; anti-votes are optional (0 up to
- * downvotePoolSize). Unless the league allows self-voting, no points and no
- * anti-votes on ANY of the voter's own songs (`ownSubmissionIds`).
+ * downvotePoolSize). Never any points or anti-votes on ANY of the voter's own
+ * songs (`ownSubmissionIds`), in any league: self-voting is not a setting
+ * (BUG-17), so `settings.allowSelfVote` — still `true` on some leagues stored
+ * before the option was removed — is deliberately not read.
  */
 export function validateBallot(
   input: BallotInput,
@@ -77,7 +80,7 @@ export function validateBallot(
     if (points > settings.maxPointsPerSong) {
       throw badRequest(`No song may get more than ${settings.maxPointsPerSong} points.`);
     }
-    if (!settings.allowSelfVote && ownSubmissionIds.has(submissionId) && points > 0) {
+    if (ownSubmissionIds.has(submissionId) && points > 0) {
       throw badRequest("You can't vote for your own submission.");
     }
     total += points;
@@ -102,7 +105,7 @@ export function validateBallot(
     if (!Number.isInteger(antiVotes) || antiVotes < 0) {
       throw badRequest("Each anti-vote must be a whole number, 0 or more.");
     }
-    if (!settings.allowSelfVote && ownSubmissionIds.has(submissionId) && antiVotes > 0) {
+    if (ownSubmissionIds.has(submissionId) && antiVotes > 0) {
       throw badRequest("You can't anti-vote your own submission.");
     }
     downTotal += antiVotes;
@@ -139,8 +142,8 @@ export function validateBallot(
  *
  *   - every pick names a matchup of THIS round (unknown / another round's id
  *     → reject; the bye is not a matchup, so nothing can be picked "in" it);
- *   - no pick in the voter's own matchup, ever — the self-vote rule
- *     (`allowSelfVote` doesn't apply: a matchup ballot can't be self-voted);
+ *   - no pick in the voter's own matchup, ever — the self-vote rule, as in
+ *     a points ballot;
  *   - in a contest, the pick is the id of one of that matchup's two songs
  *     (not another matchup's, not the bye's exhibition song, not made up, not
  *     a non-string);

@@ -539,7 +539,7 @@ test("invalid format 'foo' → 400 (handler and route); nothing is created", asy
   assert.equal((await deps.repo.getAllLeagues()).length, 0);
 });
 
-test("applyFormatSettings clamps head-to-head to 1 song / 0 anti-votes; standard untouched", () => {
+test("applyFormatSettings clamps head-to-head to 1 song / 0 anti-votes; standard untouched (apart from self-voting, always off)", () => {
   const loose = { ...DEFAULT_LEAGUE_SETTINGS, submissionsPerPlayer: 3, downvotePoolSize: 2, votePoolSize: 12 };
   assert.deepEqual(applyFormatSettings("headToHead", loose), {
     ...loose,
@@ -548,6 +548,10 @@ test("applyFormatSettings clamps head-to-head to 1 song / 0 anti-votes; standard
   });
   assert.deepEqual(applyFormatSettings("standard", loose), loose);
   assert.notEqual(applyFormatSettings("standard", loose), loose); // a copy, never the caller's object
+  // Self-voting is off in every format (BUG-17): a legacy `true` is cleared.
+  const selfVote = { ...loose, allowSelfVote: true };
+  assert.deepEqual(applyFormatSettings("standard", selfVote), loose);
+  assert.deepEqual(applyFormatSettings("headToHead", selfVote), { ...loose, submissionsPerPlayer: 1, downvotePoolSize: 0 });
 });
 
 test("create H2H with submissionsPerPlayer: 3 → forced to 1 song / 0 anti-votes", async () => {
@@ -585,7 +589,8 @@ test("create H2H still clamps if DEFAULT_LEAGUE_SETTINGS drifts from the forced 
     assert.equal(h2h.settings.submissionsPerPlayer, 1);
     assert.equal(h2h.settings.downvotePoolSize, 0);
     assert.equal((await deps.repo.getLeague(h2h.id))?.settings.downvotePoolSize, 0);
-    // Standard takes the (drifted) defaults as-is: the clamp is H2H-only.
+    // Standard takes the (drifted) song / anti-vote defaults as-is: that
+    // clamp is H2H-only.
     const plain = await createLeague(deps, "u-owner", { ...baseCreate });
     assert.equal(plain.settings.submissionsPerPlayer, 3);
     assert.equal(plain.settings.downvotePoolSize, 2);
@@ -619,7 +624,7 @@ test("PATCH settings to downvotePoolSize: 1 (or 2 songs) on an H2H league → 40
   // The forced values (explicit or omitted) still save, so the other knobs stay editable.
   const saved = (await callRoute(deps, "PATCH", path, "u-owner", { ...ok, votePoolSize: 12 })) as League;
   assert.equal(saved.settings.votePoolSize, 12);
-  const omitted = await updateLeagueSettings(deps, "u-owner", "h2h", { votePoolSize: 8, maxPointsPerSong: 4, allowSelfVote: true });
+  const omitted = await updateLeagueSettings(deps, "u-owner", "h2h", { votePoolSize: 8, maxPointsPerSong: 4 });
   assert.equal(omitted.settings.submissionsPerPlayer, 1);
   assert.equal(omitted.settings.downvotePoolSize, 0);
 });
@@ -627,7 +632,7 @@ test("PATCH settings to downvotePoolSize: 1 (or 2 songs) on an H2H league → 40
 test("standard leagues keep their settings freedom (anti-votes + multi-song still allowed)", async () => {
   const deps = await depsWith([league({ id: "std", name: "Std", visibility: "private" })]);
   const saved = await updateLeagueSettings(deps, "u-owner", "std", {
-    votePoolSize: 10, maxPointsPerSong: 5, allowSelfVote: false, submissionsPerPlayer: 3, downvotePoolSize: 2,
+    votePoolSize: 10, maxPointsPerSong: 5, submissionsPerPlayer: 3, downvotePoolSize: 2,
   });
   assert.equal(saved.settings.submissionsPerPlayer, 3);
   assert.equal(saved.settings.downvotePoolSize, 2);
@@ -695,10 +700,109 @@ test("a legacy league stored without `format` reads as standard everywhere (no u
   assert.equal(next.format, "standard");
   // Settings edits on a legacy league behave exactly as before (no H2H rules).
   const saved = await updateLeagueSettings(deps, "u-owner", "old", {
-    votePoolSize: 10, maxPointsPerSong: 5, allowSelfVote: false, downvotePoolSize: 2,
+    votePoolSize: 10, maxPointsPerSong: 5, downvotePoolSize: 2,
   });
   assert.equal(saved.settings.downvotePoolSize, 2);
   assert.equal(saved.format, "standard");
+});
+
+// ---- Self-voting is never allowed (BUG-17) --------------------------------
+//
+// The 'Allow self-voting' option is gone: every write stores
+// `allowSelfVote: false` whatever it is sent, and every League the API
+// returns reads false — including a row stored before the option went away.
+
+test("create ignores an incoming allowSelfVote (flat or nested) and stores false, in both formats", async () => {
+  const deps = await depsWith([]);
+  for (const format of ["standard", "headToHead"] as const) {
+    const created = (await callRoute(deps, "POST", "/leagues", "u-owner", {
+      ...baseCreate,
+      format,
+      allowSelfVote: true,
+      settings: { ...DEFAULT_LEAGUE_SETTINGS, allowSelfVote: true },
+    })) as League;
+    assert.equal(created.settings.allowSelfVote, false);
+    assert.equal((await deps.repo.getLeague(created.id))?.settings.allowSelfVote, false);
+  }
+});
+
+test("create stores allowSelfVote: false even if DEFAULT_LEAGUE_SETTINGS drifts to true", async () => {
+  // Like the H2H drift test above: prove the create path clamps rather than
+  // relying on today's default.
+  const original = { ...DEFAULT_LEAGUE_SETTINGS };
+  Object.assign(DEFAULT_LEAGUE_SETTINGS, { allowSelfVote: true });
+  try {
+    const deps = await depsWith([]);
+    for (const format of ["standard", "headToHead"] as const) {
+      const created = await createLeague(deps, "u-owner", { ...baseCreate, format });
+      assert.equal(created.settings.allowSelfVote, false);
+      assert.equal((await deps.repo.getLeague(created.id))?.settings.allowSelfVote, false);
+    }
+  } finally {
+    Object.assign(DEFAULT_LEAGUE_SETTINGS, original);
+  }
+  assert.equal(DEFAULT_LEAGUE_SETTINGS.allowSelfVote, false);
+});
+
+test("PATCH settings with allowSelfVote: true still saves (an older frontend keeps working) but stores false", async () => {
+  const deps = await depsWith([
+    league({ id: "std", name: "Std", visibility: "private" }),
+    league({ id: "h2h", name: "H2H", visibility: "private", format: "headToHead" }),
+  ]);
+  const body = { votePoolSize: 12, maxPointsPerSong: 4, allowSelfVote: true, submissionsPerPlayer: 1, downvotePoolSize: 0 };
+  for (const id of ["std", "h2h"]) {
+    const saved = (await callRoute(deps, "PATCH", `/leagues/${id}/settings`, "u-owner", body)) as League;
+    assert.deepEqual(saved.settings, { ...body, allowSelfVote: false });
+    assert.deepEqual((await deps.repo.getLeague(id))?.settings, { ...body, allowSelfVote: false });
+  }
+  // Without the field (today's frontend) it is false too.
+  const { allowSelfVote: _dropped, ...current } = body;
+  const saved = (await callRoute(deps, "PATCH", "/leagues/std/settings", "u-owner", { ...current, downvotePoolSize: 2 })) as League;
+  assert.equal(saved.settings.allowSelfVote, false);
+  assert.equal(saved.settings.downvotePoolSize, 2);
+});
+
+test("a legacy row stored with allowSelfVote: true reads false in every League-returning route, and the next save or rematch writes false", async () => {
+  const legacySettings = { ...DEFAULT_LEAGUE_SETTINGS, allowSelfVote: true, votePoolSize: 12 };
+  const deps = await depsWith(
+    [
+      league({ id: "old", name: "Old Szn 1", visibility: "public", roundCount: 1, memberIds: ["u-owner", "u-2"], settings: legacySettings }),
+      league({ id: "old2", name: "Old Szn 9", visibility: "private", roundCount: 1, memberIds: ["u-owner", "u-2"], settings: legacySettings }),
+    ],
+    [
+      { id: "old~1", leagueId: "old", index: 1, theme: "One", status: "revealed" },
+      { id: "old2~1", leagueId: "old2", index: 1, theme: "One", status: "revealed" },
+    ],
+  );
+  assert.equal((await deps.repo.getLeague("old"))?.settings.allowSelfVote, true, "the legacy row");
+  const leagueOf = (payload: unknown): League =>
+    "settings" in (payload as object) ? (payload as League) : (payload as { league: League }).league;
+
+  const reads: Array<[string, unknown]> = [
+    ["GET /leagues/:id (owner)", await callRoute(deps, "GET", "/leagues/old", "u-owner")],
+    ["GET /leagues/:id (spectator)", await callRoute(deps, "GET", "/leagues/old", "u-stranger")],
+    ["POST /leagues/:id/invite", await callRoute(deps, "POST", "/leagues/old/invite", "u-owner")],
+  ];
+  for (const [label, payload] of reads) {
+    const view = leagueOf(payload);
+    assert.equal(view.settings.allowSelfVote, false, `${label} reports self-voting on`);
+    assert.equal(view.settings.votePoolSize, 12, `${label} keeps the other settings`);
+  }
+  const mine = (await callRoute(deps, "GET", "/leagues", "u-owner")) as Array<{ league: League }>;
+  assert.ok(mine.length === 2 && mine.every((s) => s.league.settings.allowSelfVote === false));
+  assert.equal(toLeagueView((await deps.repo.getLeague("old"))!).settings.allowSelfVote, false);
+  // The view is a copy: the stored row isn't touched by a read.
+  assert.equal((await deps.repo.getLeague("old"))?.settings.allowSelfVote, true);
+
+  // A rematch is a new league: written with false.
+  const next = (await callRoute(deps, "POST", "/leagues/old/rematch", "u-owner")) as League;
+  assert.equal(next.settings.allowSelfVote, false);
+  assert.equal(next.settings.votePoolSize, 12, "the other knobs carry over");
+  assert.equal((await deps.repo.getLeague(next.id))?.settings.allowSelfVote, false);
+
+  // The next settings save rewrites the row with false.
+  await updateLeagueSettings(deps, "u-owner", "old2", { votePoolSize: 12, maxPointsPerSong: 5 });
+  assert.equal((await deps.repo.getLeague("old2"))?.settings.allowSelfVote, false);
 });
 
 // ---- W/L/D standings (HTH-04): storage, view model, format-aware order ----

@@ -15,8 +15,10 @@
 // reveal and the timed everyone-voted reveal.
 // BUG-04: in a timed standard league, the last two ballots cast at once
 // reveal — and bank — the round once.
-// BUG-11 (last): with more than one song per player and self-voting off,
-// points and anti-votes on ANY of the voter's songs are refused.
+// BUG-11: with more than one song per player, points and anti-votes on ANY
+// of the voter's songs are refused. BUG-17 (last): in every league — a
+// legacy row that still says `allowSelfVote: true` included, and a settings
+// PATCH that sends it stores false.
 // Every league is driven through the real flow (open round 1 → freeze,
 // submit, close, open voting) over MemoryRepository, with the freeze RNG
 // seeded through deps.
@@ -126,6 +128,10 @@ async function setStatus(repo: MemoryRepository, status: RoundStatus): Promise<v
 
 const isStatus = (code: number, message?: RegExp) => (e: unknown) =>
   e instanceof ApiError && e.statusCode === code && (message === undefined || message.test(e.message));
+
+/** The self-vote rule's two messages (domain/rules.ts `validateBallot`). */
+const OWN_POINTS = /^You can't vote for your own submission\.$/;
+const OWN_ANTI = /^You can't anti-vote your own submission\.$/;
 
 /** The anonymized song a submission should appear as. */
 const anon = (s: Submission | undefined) => (s ? { id: s.id, track: s.track } : null);
@@ -764,19 +770,85 @@ test("a two-player standard league (pool 10, cap 5): each voter has one song on 
   assert.deepEqual(standings, { [OWNER]: 5, "u-ben": 5 });
 });
 
-test("allowSelfVote on: the voter's own song isn't added back — the server counts exactly the songs the vote page offers", async () => {
-  const { deps, subs } = await smallPointsRound([OWNER, "u-ben"], { settings: { allowSelfVote: true } });
+test("a legacy row with allowSelfVote: true: the voter's own song isn't added back, and a ballot that self-votes is refused (BUG-17)", async () => {
+  // The league row is written straight to the repository, as one stored
+  // before the option was removed would be.
+  const { deps, repo, subs } = await smallPointsRound([OWNER, "u-ben"], { settings: { allowSelfVote: true } });
   assert.equal((await listVotableSubmissions(deps, OWNER, TINY_ROUND)).length, 1);
   const own = subs.get(OWNER)!.id;
   const other = subs.get("u-ben")!.id;
-  // The page can only place 5 (one song); the server wants exactly that.
+  // Points on the voter's own song: the self-vote rule, whatever the row says.
+  await assert.rejects(castBallot(deps, OWNER, TINY_ROUND, { allocations: { [own]: 5, [other]: 5 } }), isStatus(400, OWN_POINTS));
   await assert.rejects(
-    castBallot(deps, OWNER, TINY_ROUND, { allocations: { [own]: 5, [other]: 5 } }),
-    isStatus(400, /exactly 5 points \(you spent 10\)/),
+    castBallot(deps, "u-ben", TINY_ROUND, { allocations: { [subs.get("u-ben")!.id]: 2, [own]: 3 } }),
+    isStatus(400, OWN_POINTS),
   );
+  assert.equal(await repo.getBallot(TINY_ROUND, OWNER), undefined, "nothing stored");
+  assert.equal(await repo.getBallot(TINY_ROUND, "u-ben"), undefined, "nothing stored");
+  // The page can only place 5 (one song); the server wants exactly that.
   await castBallot(deps, OWNER, TINY_ROUND, { allocations: { [other]: 5 } });
-  // An API caller who does self-vote stays within the same smaller pool.
-  await castBallot(deps, "u-ben", TINY_ROUND, { allocations: { [subs.get("u-ben")!.id]: 2, [own]: 3 } });
+  await castBallot(deps, "u-ben", TINY_ROUND, { allocations: { [own]: 5 } });
+  assert.deepEqual(pointsBySubmitter(await revealRound(deps, OWNER, TINY_ROUND)), { [OWNER]: 5, "u-ben": 5 });
+});
+
+test("BUG-17 repro over the routes: a settings PATCH with allowSelfVote: true is accepted but stores false, and a ballot with points on the caller's own song is refused", async () => {
+  // u-me's standard league; u-sarah, u-james, u-mia and u-luna join.
+  const repo = new MemoryRepository(false);
+  const deps: Deps = { repo, users: new MemoryUserDirectory() };
+  const routes = buildRoutes(deps);
+  const call = (caller: string, method: string, path: string, body?: unknown) => {
+    const match = matchRoute(routes, method, path);
+    assert.ok(match, `no route for ${method} ${path}`);
+    return match.route.handler({ caller, params: match.params, query: {}, body });
+  };
+  const lg = (await call("u-me", "POST", "/leagues", { name: "Self Vote Repro", musicProvider: "mock", roundCount: 3 })) as League;
+  for (const p of ["u-sarah", "u-james", "u-mia", "u-luna"]) await call(p, "POST", "/leagues/join", { code: lg.inviteCode });
+
+  // Step 1: an older frontend still sends the field — the save goes through,
+  // but self-voting stays off, in the response and in the stored row.
+  const saved = (await call("u-me", "PATCH", `/leagues/${lg.id}/settings`, {
+    votePoolSize: 10, maxPointsPerSong: 5, allowSelfVote: true, submissionsPerPlayer: 1, downvotePoolSize: 1,
+  })) as League;
+  assert.equal(saved.settings.allowSelfVote, false);
+  assert.equal(saved.settings.downvotePoolSize, 1, "the rest of the PATCH is saved");
+  assert.equal((await repo.getLeague(lg.id))!.settings.allowSelfVote, false);
+
+  // Step 2: run a round to voting; the vote list never holds u-me's song.
+  const players = ["u-me", "u-sarah", "u-james", "u-mia", "u-luna"];
+  const round = (await call("u-me", "POST", `/leagues/${lg.id}/rounds`, { theme: "Openers" })) as Round;
+  await call("u-me", "PATCH", `/leagues/${lg.id}/rounds/${round.id}`, { status: "submitting" });
+  const song = new Map<string, string>();
+  for (const [i, p] of players.entries()) {
+    const { title, artists } = SONGS[i]!;
+    const sub = (await call(p, "POST", `/rounds/${round.id}/submission`, {
+      track: { id: `mock-${title}`, provider: "mock", providerTrackId: `mock-${title}`, title, artists },
+    })) as Submission;
+    song.set(p, sub.id);
+  }
+  for (const status of ["previewing", "voting"]) await call("u-me", "PATCH", `/leagues/${lg.id}/rounds/${round.id}`, { status });
+  const offered = ((await call("u-me", "GET", `/rounds/${round.id}/submissions`)) as Array<{ id: string }>).map((s) => s.id);
+  assert.equal(offered.includes(song.get("u-me")!), false);
+  assert.equal(offered.length, 4);
+
+  // Step 3: a hand-written ballot with points (or an anti-vote) on u-me's own song.
+  const others = players.slice(1).map((p) => song.get(p)!);
+  await assert.rejects(
+    call("u-me", "POST", `/rounds/${round.id}/ballot`, { allocations: { [song.get("u-me")!]: 5, [others[0]!]: 5 } }),
+    isStatus(400, OWN_POINTS),
+  );
+  await assert.rejects(
+    call("u-me", "POST", `/rounds/${round.id}/ballot`, {
+      allocations: { [others[0]!]: 5, [others[1]!]: 5 },
+      downvotes: { [song.get("u-me")!]: 1 },
+    }),
+    isStatus(400, OWN_ANTI),
+  );
+  assert.equal(await repo.getBallot(round.id, "u-me"), undefined, "no refused ballot was stored");
+  // A ballot that leaves the caller's own song alone is unchanged.
+  assert.deepEqual(
+    await call("u-me", "POST", `/rounds/${round.id}/ballot`, { allocations: { [others[0]!]: 5, [others[1]!]: 5 }, downvotes: { [others[2]!]: 1 } }),
+    { ok: true },
+  );
 });
 
 test("players who didn't submit: a non-submitter has every song on offer (the full pool), a submitter only the others' (pool 12, cap 4)", async () => {
@@ -859,9 +931,9 @@ test("timed standard league: the last two ballots cast at the same moment reveal
  *  Sarah submits two songs in `sarahOrder`, the others one each, and the
  *  round moves on to voting. */
 async function twoSongsEachRound({
-  allowSelfVote = false,
+  legacySelfVote = false,
   sarahOrder = ["Midnight City", "Nightcall"],
-}: { allowSelfVote?: boolean; sarahOrder?: string[] } = {}) {
+}: { legacySelfVote?: boolean; sarahOrder?: string[] } = {}) {
   const tracks: Record<string, string> = {
     "Midnight City": "M83",
     Nightcall: "Kavinsky",
@@ -871,9 +943,12 @@ async function twoSongsEachRound({
   const repo = new MemoryRepository(false);
   const deps: Deps = { repo, users: new MemoryUserDirectory() };
   const lg = await createLeague(deps, "u-sarah", { name: "Two Songs Each", musicProvider: "mock", roundCount: 3 });
-  await updateLeagueSettings(deps, "u-sarah", lg.id, {
-    votePoolSize: 10, maxPointsPerSong: 5, allowSelfVote, submissionsPerPlayer: 2, downvotePoolSize: 1,
+  const saved = await updateLeagueSettings(deps, "u-sarah", lg.id, {
+    votePoolSize: 10, maxPointsPerSong: 5, submissionsPerPlayer: 2, downvotePoolSize: 1,
   });
+  // A league stored before the self-vote option was removed (BUG-17): no
+  // route can write `allowSelfVote: true` any more, so write the row directly.
+  if (legacySelfVote) await repo.updateLeagueSettings(lg.id, { ...saved.settings, allowSelfVote: true });
   for (const p of ["u-james", "u-mia"]) await joinLeague(deps, p, lg.inviteCode);
   const round = await createRound(deps, "u-sarah", lg.id, { theme: "Night drives" });
   await updateRound(deps, "u-sarah", lg.id, round.id, { status: "submitting" });
@@ -889,11 +964,8 @@ async function twoSongsEachRound({
   return { deps, repo, roundId: round.id, song };
 }
 
-const OWN_POINTS = /^You can't vote for your own submission\.$/;
-const OWN_ANTI = /^You can't anti-vote your own submission\.$/;
-
 for (const sarahOrder of [["Midnight City", "Nightcall"], ["Nightcall", "Midnight City"]]) {
-  test(`allowSelfVote off, 2 songs per player (submitted ${sarahOrder.join(" then ")}): points and anti-votes on EITHER own song → 400, nothing stored; the reveal credits no self-vote`, async () => {
+  test(`2 songs per player (submitted ${sarahOrder.join(" then ")}): points and anti-votes on EITHER own song → 400, nothing stored; the reveal credits no self-vote`, async () => {
     const { deps, repo, roundId, song } = await twoSongsEachRound({ sarahOrder });
     const [midnight, nightcall, resonance, silence] = ["Midnight City", "Nightcall", "Resonance", "The Sound of Silence"].map((t) => song[t]!);
 
@@ -930,13 +1002,24 @@ for (const sarahOrder of [["Midnight City", "Nightcall"], ["Nightcall", "Midnigh
   });
 }
 
-test("allowSelfVote on, 2 songs per player: both own songs still take points and anti-votes, as before", async () => {
-  const { deps, repo, roundId, song } = await twoSongsEachRound({ allowSelfVote: true });
-  const [midnight, nightcall, resonance] = ["Midnight City", "Nightcall", "Resonance"].map((t) => song[t]!);
+test("a legacy row with allowSelfVote: true, 2 songs per player: points and anti-votes on EITHER own song are still refused, nothing stored (BUG-17)", async () => {
+  const { deps, repo, roundId, song } = await twoSongsEachRound({ legacySelfVote: true });
+  assert.equal((await repo.getLeague((await repo.getRound(roundId))!.leagueId))!.settings.allowSelfVote, true, "the legacy row");
+  const [midnight, nightcall, resonance, silence] = ["Midnight City", "Nightcall", "Resonance", "The Sound of Silence"].map((t) => song[t]!);
   for (const [up, down] of [[midnight, nightcall], [nightcall, midnight]]) {
-    await castBallot(deps, "u-sarah", roundId, { allocations: { [up!]: 5, [resonance!]: 5 }, downvotes: { [down!]: 1 } });
-    const stored = (await repo.getBallot(roundId, "u-sarah"))!;
-    assert.deepEqual(stored.allocations, { [up!]: 5, [resonance!]: 5 });
-    assert.deepEqual(stored.downvotes, { [down!]: 1 });
+    await assert.rejects(
+      castBallot(deps, "u-sarah", roundId, { allocations: { [up!]: 5, [resonance!]: 5 }, downvotes: { [down!]: 1 } }),
+      isStatus(400, OWN_POINTS),
+    );
+    await assert.rejects(
+      castBallot(deps, "u-sarah", roundId, { allocations: { [silence!]: 5, [resonance!]: 5 }, downvotes: { [down!]: 1 } }),
+      isStatus(400, OWN_ANTI),
+    );
   }
+  assert.equal(await repo.getBallot(roundId, "u-sarah"), undefined, "no refused ballot was stored");
+  // Leaving her own songs alone, Sarah votes exactly as before.
+  await castBallot(deps, "u-sarah", roundId, { allocations: { [silence!]: 5, [resonance!]: 5 }, downvotes: { [resonance!]: 1 } });
+  const stored = (await repo.getBallot(roundId, "u-sarah"))!;
+  assert.deepEqual(stored.allocations, { [silence!]: 5, [resonance!]: 5 });
+  assert.deepEqual(stored.downvotes, { [resonance!]: 1 });
 });

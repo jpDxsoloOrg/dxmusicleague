@@ -118,7 +118,9 @@ export function buildRoutes(deps: Deps): Route[] {
     },
     {
       // Explicit field list on purpose: `format` is creation-time only and
-      // must never be forwarded here (it's immutable once the league exists).
+      // must never be forwarded here (it's immutable once the league exists),
+      // and `allowSelfVote` — still sent by older frontends — is dropped:
+      // self-voting is never allowed, so the save stores false (BUG-17).
       method: "PATCH",
       pattern: "/leagues/:leagueId/settings",
       handler: (req) => {
@@ -126,7 +128,6 @@ export function buildRoutes(deps: Deps): Route[] {
         return leagues.updateLeagueSettings(deps, req.caller, req.params.leagueId!, {
           votePoolSize: body.votePoolSize,
           maxPointsPerSong: body.maxPointsPerSong,
-          allowSelfVote: body.allowSelfVote,
           submissionsPerPlayer: body.submissionsPerPlayer,
           downvotePoolSize: body.downvotePoolSize,
         });
