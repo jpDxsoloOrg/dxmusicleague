@@ -435,14 +435,17 @@ export function HelpPage() {
           <Section id="listen" title="Listen to the playlist">
             <p>
               Once submissions close, the round moves to the{" "}
-              <StatusPill pill="previewing">Listening</StatusPill> phase. All the
-              songs are gathered into a single playlist — with no names attached — so
-              you can listen before you vote.
+              <StatusPill pill="previewing">Listening</StatusPill> phase. Voting isn't
+              open yet; this phase is purely for giving everything a fair listen. The
+              songs are listed on the league page with no names attached (and, in
+              Spotify leagues, gathered into a playlist) so you can listen before you
+              vote.
             </p>
             <p>
-              On the league page you'll see an <strong>Open playlist</strong> button
-              that opens the playlist in the league's music service. Voting isn't open
-              yet; this phase is purely for giving everything a fair listen.
+              Each song in the list has a <strong>▶ Listen</strong> link when it links
+              to its music service, and an <strong>Open playlist</strong> button shows
+              when the round has a playlist. The list stays up through voting. In a
+              head-to-head league, the songs appear in their matchups once voting opens.
             </p>
           </Section>
 

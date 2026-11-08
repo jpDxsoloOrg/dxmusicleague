@@ -280,6 +280,53 @@
 .my-pick-info strong { font-size: 14px; }
 .my-pick-info span { font-size: 12px; color: var(--text-muted); }
 
+/* the round's anonymous songs, shown to members while they listen and vote:
+   the .my-pick-card look, two-up only where each card keeps room for a title
+   next to its Listen link (beside the standings at 1280 it's one column), and
+   never wider than the hero */
+.round-songs { margin: 14px 0 4px; }
+.round-songs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
+  gap: 8px;
+}
+.round-songs-list > .my-pick-card { max-width: none; margin: 0; min-width: 0; }
+/* on a very narrow card the Listen link drops to its own line, right-aligned */
+.round-song { flex-wrap: wrap; row-gap: 8px; }
+.round-song .my-pick-info { flex: 1 1 100px; }
+.round-song .my-pick-info strong,
+.round-song .my-pick-info span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.round-song-listen {
+  flex: none;
+  margin-left: auto;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.round-song-listen:hover { color: var(--text); border-color: var(--magenta); }
+/* "Show all N songs" / "Show fewer", under a long list */
+.round-songs-all {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+.round-songs-all:hover { color: var(--text); border-color: var(--magenta); }
+
 /* who's submitted vs. pending (submitting phase) */
 .sub-progress {
   margin: 14px 0 4px;

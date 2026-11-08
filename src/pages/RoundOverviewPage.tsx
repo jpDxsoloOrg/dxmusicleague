@@ -1,13 +1,14 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { data } from "../data";
-import type { RoundParticipation } from "../data";
+import type { RoundParticipation, VotableSubmission } from "../data";
 import type { League, Round, RoundStatus } from "../domain/types";
 import { h2hScheduleSet, leagueFormat } from "../domain/types";
 import { getProvider } from "../music";
 import { useAsync } from "../lib/useAsync";
 import { useAuth } from "../auth/AuthContext";
 import { formatCountdown } from "../lib/time";
+import { listenUrl } from "../lib/listenUrl";
 import { Avatar } from "../components/Avatar";
 import { TrackArt } from "../components/TrackArt";
 import { StandingsTable } from "../components/StandingsTable";
@@ -79,6 +80,28 @@ export function RoundOverviewPage() {
     () => (activeRoundId && isMember ? data.getMySubmissions(activeRoundId) : Promise.resolve([])),
     [activeRoundId, isMember],
   );
+  // The round's songs, anonymous, so members have something to listen to in
+  // Listening and Voting even with no playlist (only Spotify leagues get one,
+  // and only best-effort). It is the vote page's own list (GET
+  // /rounds/:id/submissions: everyone's songs but the caller's, in anonymous
+  // order), read only where the API serves it: members, while the round is
+  // previewing or voting. Standard leagues only — a head-to-head round's songs
+  // are its matchups, which stay closed until voting. The status is a dep
+  // because the owner's "Close submissions" only reload()s the same round;
+  // the result names its round so a list never outlives the round it is for.
+  const activeStatus = detail?.currentRound?.status;
+  const songsRoundId =
+    detail && isMember && !detail.finished && leagueFormat(detail.league) === "standard" &&
+    (activeStatus === "previewing" || activeStatus === "voting")
+      ? activeRoundId
+      : undefined;
+  const { data: roundSongs } = useAsync<{ roundId: string; songs: VotableSubmission[] } | null>(
+    () =>
+      songsRoundId
+        ? data.getVotableSubmissions(songsRoundId).then((songs) => ({ roundId: songsRoundId, songs }))
+        : Promise.resolve(null),
+    [songsRoundId, activeStatus],
+  );
 
   if (loading) {
     return <div className="round-overview"><p className="page-loading">Loading league…</p></div>;
@@ -148,6 +171,8 @@ export function RoundOverviewPage() {
     (currentRound?.status === "submitting" ||
       currentRound?.status === "previewing" ||
       currentRound?.status === "voting");
+  // The anonymous song list (fetched above) — only ever the round on screen's.
+  const songs = songsRoundId && roundSongs?.roundId === songsRoundId ? roundSongs.songs : [];
 
   // The wrap-up hero's headline: the top of the final board (a head-to-head
   // champion's record too — the board already ranks by it, wins first). A
@@ -308,6 +333,9 @@ export function RoundOverviewPage() {
               {currentRound.status === "voting" && votingProgress && (
                 <ParticipationPanel icon="🗳️" noun="ballots" doneLabel="Voted" progress={votingProgress} />
               )}
+
+              {/* Something to listen to: the round's songs, never who sent them. */}
+              {songs.length > 0 && <RoundSongList key={songsRoundId} songs={songs} />}
 
               <div className="hero-footer">
                 {countdown && (
@@ -548,6 +576,69 @@ function OwnerRoundControl({
         <span className="owner-hint">🔒 Opening round 1 draws the schedule and closes the league to new players.</span>
       )}
       {error && <span className="page-error">{error}</span>}
+    </div>
+  );
+}
+
+// How many songs the list shows until "Show all", at every width (four rows in
+// one column, two in the two-up grid), so a big ballot doesn't push the hero's
+// "Vote now" far down the page. A list just one song longer shows in full (the
+// button would only hide a single row).
+const SONGS_SHOWN = 4;
+
+/** The round's songs while players listen and vote (Listening, Voting):
+ *  art, title, artists and a "▶ Listen" link when the track has one that
+ *  passes `listenUrl` (https, a known music service). Anonymous — nothing says
+ *  who submitted what; the list arrives in the API's anonymous order. A long
+ *  list starts collapsed; its toggle stays put (and keeps focus) both ways. */
+function RoundSongList({ songs }: { songs: VotableSubmission[] }) {
+  const [showAll, setShowAll] = useState(false);
+  const listId = useId();
+  const collapsible = songs.length > SONGS_SHOWN + 1;
+  const shown = collapsible && !showAll ? songs.slice(0, SONGS_SHOWN) : songs;
+  return (
+    <div className="round-songs">
+      <span className="my-pick-label">
+        On the ballot · {songs.length} song{songs.length === 1 ? "" : "s"}
+      </span>
+      <ul id={listId} className="round-songs-list">
+        {shown.map((song) => {
+          const listen = listenUrl(song.track);
+          const artists = song.track.artists.join(", ");
+          return (
+            <li key={song.id} className="my-pick-card round-song">
+              <TrackArt track={song.track} size={40} />
+              {/* titles truncate on narrow cards; the tooltip has the full text */}
+              <div className="my-pick-info">
+                <strong title={song.track.title}>{song.track.title}</strong>
+                <span title={artists}>{artists}</span>
+              </div>
+              {listen && (
+                <a
+                  className="round-song-listen"
+                  href={listen}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label={`Listen to ${song.track.title}${artists ? ` by ${artists}` : ""}`}
+                >
+                  <span aria-hidden>▶</span> Listen
+                </a>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {collapsible && (
+        <button
+          type="button"
+          className="round-songs-all"
+          aria-expanded={showAll}
+          aria-controls={listId}
+          onClick={() => setShowAll((all) => !all)}
+        >
+          {showAll ? "Show fewer" : `Show all ${songs.length} songs`}
+        </button>
+      )}
     </div>
   );
 }

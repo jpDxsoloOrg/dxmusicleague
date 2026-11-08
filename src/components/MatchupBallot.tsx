@@ -34,6 +34,7 @@ import { data } from "../data";
 import type { LeagueDetail, MatchupView, VotableSubmission } from "../data";
 import { formatDuration } from "../music";
 import { useAsync } from "../lib/useAsync";
+import { listenUrl } from "../lib/listenUrl";
 import { TrackArt } from "./TrackArt";
 import { canPickInView, viewMatchupState, viewPick, viewPickProgress } from "../../backend/src/domain/matchups.ts";
 import "./MatchupBallot.css";
@@ -47,34 +48,6 @@ function gateHint(votable: number, remaining: number): string {
   return votable === 1
     ? "Pick a winner in the matchup to submit"
     : `Pick a winner in all ${votable} matchups to submit (${remaining} left)`;
-}
-
-/** Music-service hosts a "Listen" link may open. A track's URLs are stored as
- *  the submitting member's client sent them, and this link shows on every
- *  other voter's ballot before the reveal, so only an https link to a known
- *  provider gets one; anything else gets no link (as the points cards have
- *  none). Spotify: track page + preview clips. YouTube Music: watch links. */
-const LISTEN_HOSTS = new Set([
-  "open.spotify.com",
-  "p.scdn.co",
-  "music.youtube.com",
-  "www.youtube.com",
-  "youtube.com",
-  "youtu.be",
-]);
-
-/** The track's deep link, else its preview, if it passes LISTEN_HOSTS. */
-function listenUrl(track: VotableSubmission["track"]): string | undefined {
-  for (const raw of [track.externalUrl, track.previewUrl]) {
-    if (!raw) continue;
-    try {
-      const url = new URL(raw);
-      if (url.protocol === "https:" && LISTEN_HOSTS.has(url.hostname)) return url.href;
-    } catch {
-      // not a URL: no link
-    }
-  }
-  return undefined;
 }
 
 export function MatchupBallot({ detail }: { detail: LeagueDetail }) {
