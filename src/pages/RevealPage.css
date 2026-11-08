@@ -123,7 +123,6 @@
 @media (max-width: 900px) {
   .reveal-grid { grid-template-columns: 1fr; }
   .reveal-standings { position: static; }
-  .rank-by { display: none; }
 }
 
 @media (max-width: 640px) {
@@ -136,6 +135,44 @@
   .rank-pts { width: auto; }
   .result-item .comments { padding: 12px 14px; }
   .reveal-standings { padding: 16px; }
+}
+
+/* ---- narrow screens (<=900px): the submitter gets its own line ----
+   Naming who submitted each song is the point of the reveal, so it shows at
+   every width. Above 900px the name stays inline before the points (the rules
+   above). Here each ranked row becomes a small grid instead:
+   rank | art | title, artist and then avatar + name | points.
+   The name sits under the title in the info column, so it never competes with
+   the points or a long title for width, and a long name is cut with an
+   ellipsis. The points stay right-aligned, centred beside the song and its
+   submitter. Kept after the 640px block so its row-gap wins over that
+   block's `gap`. */
+@media (max-width: 900px) {
+  .result-list { container: ranked / inline-size; }
+  .result-rank-row {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "num art info pts"
+      "num art by   pts";
+    row-gap: 4px;
+  }
+  .rank-num { grid-area: num; }
+  .result-rank-row > .track-art { grid-area: art; }
+  .rank-info { grid-area: info; align-self: end; }
+  .rank-by { grid-area: by; align-self: start; min-width: 0; margin-left: 0; }
+  .rank-by-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rank-pts { grid-area: pts; }
+
+  /* a very narrow list (phones under ~312px): the name's line also runs on
+     under the points, so a name isn't cut down to a letter */
+  @container ranked (max-width: 279.98px) {
+    .result-rank-row {
+      grid-template-areas:
+        "num art info pts"
+        "num art by   by";
+    }
+  }
 }
 
 /* round-not-yet-revealed state (owner reveal / waiting) */

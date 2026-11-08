@@ -163,8 +163,14 @@ export function RevealPage() {
                         <strong>{r.track.title}</strong>
                         <span>{r.track.artists.join(", ")}</span>
                       </div>
+                      {/* who submitted it: inline before the points above
+                          900px, under the title and artist at 900px and below
+                          (where a long name is cut, hence the tooltip) */}
                       <span className="rank-by">
-                        <Avatar name={r.submitter.displayName} size={24} /> {r.submitter.displayName}
+                        <Avatar name={r.submitter.displayName} size={24} />{" "}
+                        <span className="rank-by-name" title={r.submitter.displayName}>
+                          {r.submitter.displayName}
+                        </span>
                       </span>
                       <span className="rank-pts">
                         {r.points} pts
