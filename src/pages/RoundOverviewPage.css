@@ -254,6 +254,16 @@
 }
 .owner-input:focus { outline: none; border-color: var(--magenta); }
 .owner-hint { font-size: 13px; color: var(--text-muted); }
+/* Inline error under the owner controls, and under the rematch button in the
+   finished-league hero. Not the global .page-error: that one is for full-page
+   states and carries 48px of vertical padding. flex-basis 100% gives the error
+   its own row in the .owner-control / .hero-footer flex wrap, flush left with
+   the hint text; the wrapper's row gap is its only top spacing. */
+.owner-error {
+  flex-basis: 100%;
+  font-size: 13px;
+  color: #ff8a8a;
+}
 
 /* the player's own pick, shown on the round hero while a round is live */
 .my-pick { margin: 14px 0 4px; }

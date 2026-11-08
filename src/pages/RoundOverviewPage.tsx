@@ -423,7 +423,7 @@ function RematchButton({ leagueId }: { leagueId: string }) {
       <button className="btn btn-primary hero-cta" disabled={busy} onClick={handleRematch}>
         {busy ? "Setting up…" : "Run it back — new league, same players →"}
       </button>
-      {error && <span className="page-error">{error}</span>}
+      {error && <span className="owner-error">{error}</span>}
     </>
   );
 }
@@ -575,7 +575,7 @@ function OwnerRoundControl({
       {locksSeason && (
         <span className="owner-hint">🔒 Opening round 1 draws the schedule and closes the league to new players.</span>
       )}
-      {error && <span className="page-error">{error}</span>}
+      {error && <span className="owner-error">{error}</span>}
     </div>
   );
 }
