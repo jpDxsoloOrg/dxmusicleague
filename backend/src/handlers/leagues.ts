@@ -8,7 +8,7 @@ import type { League, LeagueFormat, LeagueSettings, LeagueVisibility, RoundProgr
 import { DEFAULT_LEAGUE_SETTINGS, H2H_FORCED_SETTINGS, LEAGUE_FORMATS, applyFormatSettings, leagueFormat } from "../domain/types.ts";
 import { alreadyMember, badRequest, conflict, forbidden, notFound } from "../domain/errors.ts";
 import { sortStandings } from "../domain/standings.ts";
-import { SEASON_LOCKED_MESSAGE, lockedOutOfSeason, seasonLocked } from "../domain/freeze.ts";
+import { SEASON_LOCKED_MESSAGE, seasonJoinRefusal, seasonLocked } from "../domain/freeze.ts";
 import type { RandomInt } from "../domain/freeze.ts";
 import { ballotAuthorVisible, memberSongCount, membersWithAllSongs, membersWithBallot, membersWithSong, votingPanelNames } from "../domain/matchups.ts";
 import type { Repository, UserDirectory } from "../data/repository.ts";
@@ -664,10 +664,12 @@ export async function joinLeague(deps: Deps, caller: string, rawCode: string): P
   // names the league (code "already-member"), so the client can open it.
   if (league.memberIds.includes(caller)) throw alreadyMember(league);
   // The invite path deliberately bypasses the join window and the player cap
-  // (standard leagues: an owner can always bring a friend in). Head-to-head
-  // is the exception: once round 1 opens the season is frozen, and a newcomer
-  // can't be added to a round robin that's already scheduled.
-  if (lockedOutOfSeason(league, caller)) throw conflict(SEASON_LOCKED_MESSAGE);
+  // (standard leagues: an owner can always bring a friend in, or back).
+  // Head-to-head is the exception: once round 1 opens the season is frozen —
+  // a newcomer can't be added to a round robin that's already scheduled, and
+  // a participant who left or was kicked can't come back (HTH-14).
+  const locked = seasonJoinRefusal(league, caller);
+  if (locked) throw conflict(locked);
 
   const updated = await addJoiningMember(deps, league, caller);
   await deps.repo.addStandingPoints(league.id, caller, 0);
@@ -678,12 +680,22 @@ export async function joinLeague(deps: Deps, caller: string, rawCode: string): P
  *  write, exactly as before. Head-to-head: the lock check above ran on a read
  *  that may already be stale — a round-1 open can freeze the season between
  *  it and this write — so the write goes through the repo's season-gated
- *  conditional join, which re-checks atomically and refuses with the same
- *  "season locked" 409. */
+ *  conditional join, which re-checks atomically (refusing everyone once the
+ *  season is frozen) and answers 409. The read in hand predates the freeze,
+ *  so the answer comes from a fresh, strongly consistent one (only on this
+ *  rare refusal path): a caller who IS a member by now — their own second
+ *  join (a double tap, two tabs) landed first and the freeze took them in —
+ *  simply succeeds, since the join they asked for happened (as this race
+ *  always did); otherwise "season locked" for a newcomer, or the
+ *  can't-rejoin one for a player the freeze took in who has left since. */
 async function addJoiningMember(deps: Deps, league: League, caller: string): Promise<League> {
   if (leagueFormat(league) !== "headToHead") return deps.repo.addMember(league.id, caller);
   const updated = await deps.repo.addMemberUnlessSeasonLocked(league.id, caller);
-  if (!updated) throw conflict(SEASON_LOCKED_MESSAGE);
+  if (!updated) {
+    const now = await deps.repo.getLeague(league.id, { consistent: true });
+    if (now?.memberIds.includes(caller)) return now;
+    throw conflict((now && seasonJoinRefusal(now, caller)) ?? SEASON_LOCKED_MESSAGE);
+  }
   return updated;
 }
 
@@ -700,10 +712,11 @@ export async function claimPublicSpot(
   if (!league || league.visibility !== "public") throw notFound("That public league doesn't exist.");
   if (league.memberIds.includes(caller)) throw conflict(`You're already a member of ${league.name}.`);
 
-  // Head-to-head: the season lock (round 1 opened) shuts newcomers out even
-  // while round 1 is still submitting — checked first so the UI gets the
-  // distinct "season locked" reason.
-  if (lockedOutOfSeason(league, caller)) throw conflict(SEASON_LOCKED_MESSAGE);
+  // Head-to-head: the season lock (round 1 opened) shuts everyone out even
+  // while round 1 is still submitting — newcomers and, since HTH-14, former
+  // participants — checked first so the UI gets the distinct reason.
+  const locked = seasonJoinRefusal(league, caller);
+  if (locked) throw conflict(locked);
   const rounds = await deps.repo.getRoundsForLeague(leagueId);
   if (joinWindowClosed(rounds)) {
     throw conflict("It's too late to join — round 1 has closed submissions.");
@@ -720,7 +733,10 @@ export async function claimPublicSpot(
 }
 
 /** Leave a league — removes the caller's own membership (and standing). The
- *  owner can't leave (they delete the league instead). */
+ *  owner can't leave (they delete the league instead). In a head-to-head
+ *  league whose season is locked (round 1 opened) a leave or a kick is
+ *  permanent: the join gate (`seasonJoinRefusal`) never lets them back in,
+ *  and their remaining matchups play as walkovers for their opponents. */
 export async function leaveLeague(
   deps: Deps,
   caller: string,

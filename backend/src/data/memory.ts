@@ -97,7 +97,8 @@ export class MemoryRepository implements Repository {
   }
   async removeMember(leagueId: string, userId: string): Promise<void> {
     // Standing deliberately kept (mirrors DynamoRepository) — points survive a
-    // leave/kick and reappear when the player rejoins.
+    // leave/kick and reappear when the player rejoins (a standard league, or
+    // a head-to-head lobby: a locked H2H season can't be rejoined, HTH-14).
     const lg = this.leagues.get(leagueId);
     if (lg) lg.memberIds = lg.memberIds.filter((id) => id !== userId);
   }
@@ -110,10 +111,11 @@ export class MemoryRepository implements Repository {
   async addMemberUnlessSeasonLocked(leagueId: string, userId: string): Promise<League | undefined> {
     // Same contract as DynamoRepository's transactional join: the season check
     // and the membership write happen together (synchronously here), so no
-    // freeze can slip in between them.
+    // freeze can slip in between them. Frozen refuses everyone — newcomers
+    // and former participants alike (HTH-14).
     const lg = this.leagues.get(leagueId);
     if (!lg) throw new Error(`League not found: ${leagueId}`);
-    if (isFrozen(lg) && !lg.h2hParticipants!.includes(userId)) return undefined;
+    if (isFrozen(lg)) return undefined;
     if (!lg.memberIds.includes(userId)) lg.memberIds.push(userId);
     return this.readLeague(lg);
   }

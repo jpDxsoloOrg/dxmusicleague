@@ -135,12 +135,16 @@ export function RoundOverviewPage() {
   const rematchId = league.rematchLeagueId;
 
   async function handleLeave() {
-    // Head-to-head mid-season: say what leaving does to the schedule, as the
-    // owner's kick confirmation does (LeagueSettingsPage).
-    const walkovers = seasonLocked && !finished
-      ? " Until you do, your matchups this season go to your opponents as walkovers."
-      : "";
-    if (!window.confirm(`Leave ${league.name}? You can rejoin later with the invite code.${walkovers}`)) return;
+    // A locked head-to-head season can't be rejoined (HTH-14): say leaving is
+    // permanent and, mid-season, what it does to the schedule — as the
+    // owner's kick confirmation does (LeagueSettingsPage). Anywhere else
+    // (standard leagues, the pre-season lobby) the player can come back.
+    const prompt = seasonLocked
+      ? `Leave ${league.name}? This head-to-head season is locked, so you won't be able to rejoin it.${
+          finished ? "" : " Your remaining matchups become walkovers for your opponents."
+        }`
+      : `Leave ${league.name}? You can rejoin later with the invite code.`;
+    if (!window.confirm(prompt)) return;
     try {
       await data.leaveLeague(league.id);
       navigate("/");
@@ -232,17 +236,21 @@ export function RoundOverviewPage() {
 
           {/* Invite others. When a capped league is full it hides for members,
               but the owner keeps it — the cap only limits public claiming;
-              invite-code joins still work. */}
-          {league.inviteCode && !finished && (isOwner || !isFull) && (
+              invite-code joins still work. A locked head-to-head season takes
+              nobody at all (HTH-14), so its members get a note saying so
+              instead of a code that can't let anyone in. */}
+          {league.inviteCode && !finished && seasonLocked ? (
+            <p className="season-lock-note">
+              🔒 <strong>Season locked.</strong> The schedule was set when round 1 opened, so this
+              league can't take new players — and anyone who leaves can't rejoin.
+            </p>
+          ) : league.inviteCode && !finished && (isOwner || !isFull) && (
             <InvitePanel
               code={league.inviteCode}
-              rejoinOnly={seasonLocked}
               note={
-                seasonLocked
-                  ? "Season locked — only players already in it can rejoin."
-                  : isOwner && isFull
-                    ? "Your league is at its player cap, so it's hidden from public discovery — but this code still lets invited friends join."
-                    : undefined
+                isOwner && isFull
+                  ? "Your league is at its player cap, so it's hidden from public discovery — but this code still lets invited friends join."
+                  : undefined
               }
             />
           )}
@@ -445,10 +453,9 @@ function RematchButton({ leagueId }: { leagueId: string }) {
 }
 
 // Invite strip — shows the league's shareable code and a ready-to-send join
-// link, each with a copy button. Any member can invite a friend. Once a
-// head-to-head season is locked (`rejoinOnly`) the code only lets the season's
-// own players back in, so the strip calls it a rejoin code.
-function InvitePanel({ code, note, rejoinOnly }: { code: string; note?: string; rejoinOnly?: boolean }) {
+// link, each with a copy button. Any member can invite a friend. (Never shown
+// for a locked head-to-head season: its code lets nobody in — HTH-14.)
+function InvitePanel({ code, note }: { code: string; note?: string }) {
   const joinUrl = `${window.location.origin}/leagues/join?code=${encodeURIComponent(code)}`;
   const [copied, setCopied] = useState<"code" | "link" | null>(null);
 
@@ -465,7 +472,7 @@ function InvitePanel({ code, note, rejoinOnly }: { code: string; note?: string; 
   return (
     <div className="invite-panel">
       <div className="invite-info">
-        <span className="invite-label">{rejoinOnly ? "Rejoin code" : "Invite code"}</span>
+        <span className="invite-label">Invite code</span>
         <code className="invite-code">{code}</code>
       </div>
       <div className="invite-actions">
@@ -473,7 +480,7 @@ function InvitePanel({ code, note, rejoinOnly }: { code: string; note?: string; 
           {copied === "code" ? "Copied ✓" : "Copy code"}
         </button>
         <button className="btn invite-btn" onClick={() => copy("link", joinUrl)}>
-          {copied === "link" ? "Copied ✓" : rejoinOnly ? "Copy rejoin link" : "Copy invite link"}
+          {copied === "link" ? "Copied ✓" : "Copy invite link"}
         </button>
       </div>
       {note && <p className="invite-note">{note}</p>}

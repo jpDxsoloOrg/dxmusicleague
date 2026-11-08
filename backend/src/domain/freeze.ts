@@ -33,9 +33,15 @@ const SALT_BYTES = 16;
 // User-facing errors for the freeze + join gating, exported so the HTH-09
 // mock can throw byte-identical messages.
 
-/** A join refused because the H2H season froze (round 1 opened). */
+/** A join refused because the H2H season froze (round 1 opened): what a
+ *  newcomer (never in the schedule) is told. */
 export const SEASON_LOCKED_MESSAGE =
   "Season locked — this head-to-head league set its schedule when round 1 opened, so it can't take new players.";
+/** A join refused to a former participant of a frozen season — one who left
+ *  or was removed after round 1 opened (HTH-14: that's permanent). Worded for
+ *  both, since a leave and a kick look the same once they're gone. */
+export const SEASON_LEFT_MESSAGE =
+  "You can't rejoin this head-to-head season — once round 1 opens, a player who leaves or is removed is out for the rest of the season.";
 /** Opening round 1 of an H2H league with a lone member. */
 export const H2H_MIN_PLAYERS_MESSAGE =
   `A head-to-head league needs at least ${MIN_H2H_PLAYERS} players before round 1 can open — share the invite code first.`;
@@ -87,7 +93,8 @@ export function planSeasonFreeze(memberIds: readonly string[], randomInt: Random
 type FreezeFields = Pick<League, "format" | "h2hParticipants">;
 
 /** Has this league's head-to-head season frozen (round 1 opened)? From then
- *  on its membership is locked to the frozen order. Always false for
+ *  on its membership is locked: nobody joins, and a player who leaves or is
+ *  removed can't come back (`seasonJoinRefusal`, HTH-14). Always false for
  *  standard leagues, whatever else the record holds.
  *
  *  "Frozen" means a NON-EMPTY `h2hParticipants`: an absent or empty list is
@@ -110,11 +117,18 @@ export function membersOutsideOrder(league: Pick<League, "format" | "h2hParticip
   return league.memberIds.filter((id) => !order.has(id));
 }
 
-/** Is `userId` shut out by the season lock? Only newcomers are: a frozen
- *  participant who left or was kicked mid-season is already in the schedule
- *  (their pairs just play as walkovers while they're gone), so they may
- *  come back, exactly as a standard league's leaver can — and their W/L
- *  record is durable like points are (HTH-04). */
-export function lockedOutOfSeason(league: FreezeFields, userId: string): boolean {
-  return seasonLocked(league) && !(league.h2hParticipants ?? []).includes(userId);
+/** Why the season lock refuses `userId` a place in this league, or
+ *  `undefined` when it doesn't apply (an un-frozen lobby, or a standard
+ *  league). The one join gate both join paths (invite code and public claim)
+ *  and the frontend mock share. Once a head-to-head season is frozen NOBODY
+ *  joins (HTH-14): a newcomer can't be scheduled into a round robin that's
+ *  already drawn (`SEASON_LOCKED_MESSAGE`), and a former participant — in
+ *  the frozen order but no longer a member: they left or were kicked — is
+ *  out for good (`SEASON_LEFT_MESSAGE`), so nobody can dodge a loss by
+ *  leaving before a reveal and coming back after it. Their remaining
+ *  matchups play as walkovers for their opponents. Callers answer a current
+ *  member ("already a member") before asking. */
+export function seasonJoinRefusal(league: FreezeFields, userId: string): string | undefined {
+  if (!seasonLocked(league)) return undefined;
+  return (league.h2hParticipants ?? []).includes(userId) ? SEASON_LEFT_MESSAGE : SEASON_LOCKED_MESSAGE;
 }

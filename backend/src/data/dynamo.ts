@@ -192,7 +192,9 @@ export class DynamoRepository implements Repository {
     // Drop the membership row (and its GSI1 projection) ONLY. The standing row
     // is deliberately kept: a player who leaves (or is kicked) and later rejoins
     // gets their accumulated points back — the leaderboard just filters display
-    // to current members while they're gone. (Standings are removed for real
+    // to current members while they're gone. (Head-to-head: only from the
+    // lobby; a locked season can't be rejoined — HTH-14 — so a departed
+    // participant's row just stays put.) (Standings are removed for real
     // only by deleteLeague's cascade.)
     await this.doc.send(
       new DeleteCommand({ TableName: this.tableName, Key: { PK: `LEAGUE#${leagueId}`, SK: `MEMBER#${userId}` } }),
@@ -216,7 +218,8 @@ export class DynamoRepository implements Repository {
 
   async addMemberUnlessSeasonLocked(leagueId: string, userId: string): Promise<League | undefined> {
     // One transaction: a ConditionCheck on META (season not frozen — no or an
-    // empty frozen order — or the joiner already in it) plus the MEMBER# put.
+    // empty frozen order; once frozen nobody joins, not even a participant
+    // who left or was kicked — HTH-14) plus the MEMBER# put.
     // DynamoDB serializes it against the freeze's UpdateItem on the same META,
     // so a join either commits before the freeze (and the opener's post-write
     // check takes the joiner in) or fails here — never lands outside the
@@ -230,9 +233,8 @@ export class DynamoRepository implements Repository {
               ConditionCheck: {
                 TableName: this.tableName,
                 Key: { PK: `LEAGUE#${leagueId}`, SK: "META" },
-                ConditionExpression:
-                  "attribute_not_exists(h2hParticipants) OR size(h2hParticipants) = :zero OR contains(h2hParticipants, :u)",
-                ExpressionAttributeValues: { ":zero": 0, ":u": userId },
+                ConditionExpression: "attribute_not_exists(h2hParticipants) OR size(h2hParticipants) = :zero",
+                ExpressionAttributeValues: { ":zero": 0 },
               },
             },
             { Put: { TableName: this.tableName, Item: this.memberItem(leagueId, userId) } },

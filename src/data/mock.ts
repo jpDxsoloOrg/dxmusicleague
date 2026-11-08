@@ -43,9 +43,8 @@ import {
   H2H_MIN_PLAYERS_MESSAGE,
   H2H_ROUND_ONE_FIRST_MESSAGE,
   MIN_H2H_PLAYERS,
-  SEASON_LOCKED_MESSAGE,
-  lockedOutOfSeason,
   planSeasonFreeze,
+  seasonJoinRefusal,
   seasonLocked,
 } from "../../backend/src/domain/freeze.ts";
 import { recordIncrements, sortStandings } from "../../backend/src/domain/standings.ts";
@@ -470,8 +469,11 @@ export function joinLeague(rawCode: string): JoinResult {
   // already-member 409, which ApiClient maps to this same result.
   if (league.memberIds.includes(currentUser.id)) return { ok: true, league: { id: league.id }, alreadyMember: true };
   // Invite codes bypass the join window and the cap — except a head-to-head
-  // season that has frozen (round 1 opened): mirrors the backend's lock.
-  if (lockedOutOfSeason(seasonView(league), currentUser.id)) return { ok: false, error: SEASON_LOCKED_MESSAGE };
+  // season that has frozen (round 1 opened): nobody joins it, a player who
+  // left or was kicked included (HTH-14). Mirrors the backend's gate and
+  // messages (domain/freeze.ts `seasonJoinRefusal`).
+  const locked = seasonJoinRefusal(seasonView(league), currentUser.id);
+  if (locked) return { ok: false, error: locked };
   league.memberIds.push(currentUser.id);
   if (isHeadToHead(league)) seedStandingRow(league.id, currentUser.id);
   return { ok: true, league };
@@ -485,8 +487,10 @@ export function claimPublicSpot(leagueId: string): JoinResult {
   if (league.memberIds.includes(currentUser.id)) {
     return { ok: false, error: `You're already a member of ${league.name}.` };
   }
-  // Head-to-head: the season lock is checked first, for its distinct reason.
-  if (lockedOutOfSeason(seasonView(league), currentUser.id)) return { ok: false, error: SEASON_LOCKED_MESSAGE };
+  // Head-to-head: the season lock is checked first, for its distinct reason
+  // (newcomer, or a former participant who can't rejoin — HTH-14).
+  const locked = seasonJoinRefusal(seasonView(league), currentUser.id);
+  if (locked) return { ok: false, error: locked };
   if (joinWindowClosed(league.id)) {
     return { ok: false, error: "It's too late to join — round 1 has closed submissions." };
   }
@@ -1203,8 +1207,9 @@ function bankRecord(leagueId: string, userId: string, delta: StandingRecordDelta
   row.draws += inc.draws;
 }
 
-/** An H2H board: current members' rows (a departed player's record survives
- *  for a rejoin but leaves the board), in the backend's board order. */
+/** An H2H board: current members' rows (a departed player's record stays on
+ *  its row but leaves the board — for good once the season is locked,
+ *  HTH-14), in the backend's board order. */
 function headToHeadStandings(league: League): Standing[] {
   const members = new Set(league.memberIds);
   const named = [...h2hStandingRows.entries()]

@@ -597,7 +597,7 @@ test("the referee through the handler: missing, own-matchup, foreign-song and un
   }
 });
 
-test("a departure mid-voting: the pre-filled re-cast goes through and keeps the now-walkover pick and its comments, so a rejoin restores them", async () => {
+test("a departure mid-voting: the pre-filled re-cast goes through and keeps the now-walkover pick (inert) and its comments; the leaver can't rejoin (HTH-14), so the pair stays a walkover", async () => {
   const setup = await h2hRound(FIVE);
   const { deps, repo, subs, schedule } = setup;
   // The bye player (who votes in every matchup) picks the leaver's song and
@@ -637,10 +637,12 @@ test("a departure mid-voting: the pre-filled re-cast goes through and keeps the 
     isStatus(400, /your own matchup/),
   );
 
-  // The leaver rejoins: their pair is a contest again and the ballot still holds the pick + comments.
+  // The leaver can't rejoin (HTH-14: leaving a locked season is permanent),
+  // so their pair stays a walkover and the kept pick stays inert; the ballot
+  // still holds it + the comments, and re-casting it still goes through.
   await repo.putInvite("DUEL-1", LEAGUE); // h2hRound creates the league row only
-  await joinLeague(deps, leaver, "DUEL-1");
-  assert.equal((await listMatchups(deps, voter, ROUND)).matchups.filter((m) => m.a && m.b).length, 2);
+  await assert.rejects(joinLeague(deps, leaver, "DUEL-1"), isStatus(409, /^You can't rejoin this head-to-head season/));
+  assert.equal((await listMatchups(deps, voter, ROUND)).matchups.filter((m) => m.a && m.b).length, 1);
   assert.deepEqual(await getMyBallot(deps, voter, ROUND), { allocations: {}, downvotes: {}, comments, picks });
   await castBallot(deps, voter, ROUND, { picks, comments });
   assert.deepEqual((await repo.getBallot(ROUND, voter))!.picks, picks);

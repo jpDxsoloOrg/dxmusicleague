@@ -31,11 +31,12 @@ export interface Repository {
   /** Replace a league's settings. Returns the updated league. */
   updateLeagueSettings(leagueId: string, settings: LeagueSettings): Promise<League>;
   /** Head-to-head join (HTH-03): add a member ONLY while the season is open
-   *  to them — not frozen yet (no, or an empty, `h2hParticipants`), or they're
-   *  already in the frozen order (a participant coming back). The check and
+   *  — not frozen yet (no, or an empty, `h2hParticipants`). Once frozen it
+   *  refuses everyone, a participant who left or was kicked included
+   *  (HTH-14: leaving a locked season is permanent). The check and
    *  the membership write are one atomic conditional write, so a join can
-   *  never land after the freeze without being in the schedule, however
-   *  stale the caller's earlier read was. Resolves the updated league, or
+   *  never land after the freeze, however stale the caller's earlier read
+   *  was. Resolves the updated league, or
    *  `undefined` (writing nothing) when the season lock refuses. Standard
    *  leagues use `addMember`. */
   addMemberUnlessSeasonLocked(leagueId: string, userId: string): Promise<League | undefined>;

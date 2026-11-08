@@ -153,9 +153,11 @@ export function validateBallot(
  *     my-ballot pre-fills on a re-cast (possibly naming the departed player's
  *     now-withdrawn song). That pick — one of the pair's two songs as
  *     scheduled — is KEPT, so if the player rejoins (the pair is a contest
- *     again) the ballot still holds it; anything else there is dropped. The
- *     tally (HTH-07) counts only picks in matchups that are contests at the
- *     reveal, so a kept pick on a walkover is inert;
+ *     again) the ballot still holds it; anything else there is dropped.
+ *     (Since HTH-14 a locked season can't be rejoined, so a kept pick just
+ *     stays put — see domain/matchups.ts.) The tally (HTH-07) counts only
+ *     picks in matchups that are contests at the reveal, so a kept pick on
+ *     a walkover is inert;
  *   - completeness, the exact-spend analog: a pick in EVERY votable matchup —
  *     `votableMatchups` (domain/matchups.ts), THE votable-set definition the
  *     tally and the who-can-vote checks share: every contest except the

@@ -154,9 +154,21 @@ call for the lead, not made here.
 Allowed at any point, as for standard leagues. The departed player's song is
 withdrawn from the current round, so their pair resolves as a walkover for the
 player who stayed at that round's reveal (the departed player takes no L; their
-standing row survives for a rejoin — HTH-04/HTH-07). Every voter whose set
+standing row stays stored, off the board — HTH-04/HTH-07). Every voter whose set
 included that pair simply has one fewer matchup to pick in, so progress and the
 everyone-voted check follow the shrunken sets immediately.
+
+**Permanent once the season is locked (HTH-14, owner decision 2026-11-08).**
+HTH-03 let a frozen participant who left or was kicked rejoin by invite code.
+That let a player dodge a loss — leave before a reveal (no L), rejoin after —
+so after round 1 opens nobody joins or rejoins: `seasonJoinRefusal`
+(`domain/freeze.ts`) gives a former participant their own 409 ("You can't
+rejoin this head-to-head season — …"), and both repositories' season-gated
+join refuses everyone once frozen. The lobby (before round 1) can still be
+left and joined again. The departed set of a round in play therefore only
+grows, so the rejoin handling in this file's notes above and below (a ballot
+"incomplete since a rejoin", the restored-contest residual) is no longer a live
+path; the code keeps it as harmless defence.
 
 ### Finished league and rematch
 

@@ -122,7 +122,7 @@ Every screen runs in both modes — on mock data, and against the backend.
   round 1 opens (one bye a round for an odd field); the matchup vote page (pick a winner in every
   matchup but your own); the matchup reveal (wins, draws, walkovers, no contests, the bye's
   exhibition song); W–L standings on the overview, leaderboard and profile; and the season lock
-  (no new players once round 1 opens; the season's own players may leave and rejoin). One
+  (once round 1 opens nobody joins, and a player who leaves or is removed can't rejoin). One
   seeded league, Friday Faceoff (`lg-faceoff`), plays it in both modes. Design notes:
   [docs/plans/head-to-head-format.md](docs/plans/head-to-head-format.md).
 - ✅ Backend — REST API on AWS (Cognito, API Gateway + Lambda, DynamoDB, Spotify proxy), runnable

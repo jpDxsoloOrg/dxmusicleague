@@ -445,7 +445,7 @@ test("freezeH2HSeason with replacesSalt re-plans only over that exact stored sal
   assert.equal(table.has("LEAGUE#gone|META"), false);
 });
 
-test("addMemberUnlessSeasonLocked: one transaction (META season check + MEMBER# put) — open lobby joins, a newcomer after the freeze writes nothing, a frozen participant comes back", async () => {
+test("addMemberUnlessSeasonLocked: one transaction (META season check + MEMBER# put) — open lobby joins; after the freeze nobody does, a participant who left included (HTH-14)", async () => {
   const { repo, table, sent } = fakeRepo();
   await repo.createLeague(league({ id: "h2h", format: "headToHead", memberIds: ["u-owner", "u-2"] }));
 
@@ -456,16 +456,22 @@ test("addMemberUnlessSeasonLocked: one transaction (META season check + MEMBER# 
   assert.ok(tx instanceof TransactWriteCommand);
   const [check, put] = tx.input.TransactItems ?? [];
   assert.deepEqual(check?.ConditionCheck?.Key, { PK: "LEAGUE#h2h", SK: "META" });
-  assert.match(check?.ConditionCheck?.ConditionExpression ?? "", /attribute_not_exists\(h2hParticipants\)/);
-  assert.match(check?.ConditionCheck?.ConditionExpression ?? "", /contains\(h2hParticipants, :u\)/);
+  assert.equal(
+    check?.ConditionCheck?.ConditionExpression,
+    "attribute_not_exists(h2hParticipants) OR size(h2hParticipants) = :zero",
+    "not frozen — the whole condition: no per-joiner exception",
+  );
+  assert.deepEqual(check?.ConditionCheck?.ExpressionAttributeValues, { ":zero": 0 });
   assert.equal(put?.Put?.Item?.SK, "MEMBER#u-3");
 
-  // Frozen (u-3 is in the order; u-late isn't).
+  // Frozen (u-3 is in the order; u-late isn't): neither gets in.
   assert.equal(await repo.freezeH2HSeason("h2h", FREEZE), true);
+  assert.ok(FREEZE.participants.includes("u-3"));
   assert.equal(await repo.addMemberUnlessSeasonLocked("h2h", "u-late"), undefined);
   assert.equal(table.has("LEAGUE#h2h|MEMBER#u-late"), false);
   table.delete("LEAGUE#h2h|MEMBER#u-3"); // u-3 leaves (what removeMember deletes)
-  assert.ok((await repo.addMemberUnlessSeasonLocked("h2h", "u-3"))?.memberIds.includes("u-3"));
+  assert.equal(await repo.addMemberUnlessSeasonLocked("h2h", "u-3"), undefined, "leaving a locked season is permanent");
+  assert.equal(table.has("LEAGUE#h2h|MEMBER#u-3"), false);
 });
 
 test("addMemberUnlessSeasonLocked: a cancellation that isn't the season check (e.g. a transaction conflict) propagates", async () => {

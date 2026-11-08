@@ -79,6 +79,19 @@
 .invite-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .invite-btn { font-size: 13px; padding: 8px 14px; }
 .invite-note { flex-basis: 100%; margin: 0; font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+/* Where the invite strip sits, a locked head-to-head season shows this note
+   instead (HTH-14: nobody can join or rejoin it). */
+.season-lock-note {
+  margin: 0;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.season-lock-note strong { color: var(--text); }
 
 /* stepper */
 .stepper {

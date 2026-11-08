@@ -71,8 +71,9 @@ export function LeagueSettingsPage() {
 
   const headToHead = leagueFormat(league) === "headToHead";
   // A head-to-head season locks when round 1 opens (the server freezes the
-  // field then — HTH-03): from that point only players already in its
-  // schedule can join, and a removed player's matchups go to walkovers.
+  // field then — HTH-03): from that point nobody can join, and a removed
+  // player can't come back (HTH-14) — their remaining matchups go to their
+  // opponents as walkovers.
   const seasonLocked = headToHead && detail.rounds.some((r) => r.index === 1 && r.status !== "draft");
   const poolInvalid = votePoolSize < 1;
   const capInvalid = maxPointsPerSong < 1 || maxPointsPerSong > votePoolSize;
@@ -99,10 +100,14 @@ export function LeagueSettingsPage() {
   }
 
   async function handleKick(userId: string, displayName: string) {
-    const walkovers = seasonLocked && !detail?.finished
-      ? " Until they do, their matchups this season go to their opponents as walkovers."
-      : "";
-    if (!window.confirm(`Remove ${displayName} from ${league.name}? They can rejoin with the invite code.${walkovers}`)) return;
+    // In a locked head-to-head season a kick is permanent (HTH-14) — there's
+    // no undoing an accidental one, so the confirmation says so plainly.
+    const prompt = seasonLocked
+      ? `Remove ${displayName} from ${league.name}? This head-to-head season is locked, so they won't be able to rejoin it${
+          detail?.finished ? "" : ", and their remaining matchups go to their opponents as walkovers"
+        }. This can't be undone.`
+      : `Remove ${displayName} from ${league.name}? They can rejoin with the invite code.`;
+    if (!window.confirm(prompt)) return;
     setError(null);
     try {
       await data.kickMember(league.id, userId);
@@ -230,23 +235,31 @@ export function LeagueSettingsPage() {
 
       <section className="settings-card">
         <h3 className="settings-card-title">Invite code</h3>
+        {/* A locked head-to-head season admits nobody (HTH-14), so its code
+            is shown for reference only: no "Generate new code" — retiring a
+            code that lets nobody in does nothing, and its note would read as
+            if the current one still did. */}
         <div className="setting-row">
           <div className="setting-text">
             <span className="invite-code-value">{league.inviteCode}</span>
             <span className="field-hint">
               {seasonLocked
-                ? "Season locked — only players already in it can rejoin."
+                ? "Season locked — this code no longer lets anyone in: the league can't take new players, and nobody who leaves can rejoin."
                 : "Share this code (or the invite link) to bring players in."}
             </span>
           </div>
-          <button type="button" className="btn" onClick={handleRegenerateInvite}>
-            Generate new code
-          </button>
+          {!seasonLocked && (
+            <button type="button" className="btn" onClick={handleRegenerateInvite}>
+              Generate new code
+            </button>
+          )}
         </div>
-        <p className="field-hint">
-          Generating a new code retires the old one — anyone holding the old code or link can no
-          longer join with it.
-        </p>
+        {!seasonLocked && (
+          <p className="field-hint">
+            Generating a new code retires the old one — anyone holding the old code or link can no
+            longer join with it.
+          </p>
+        )}
       </section>
 
       <section className="settings-card">
@@ -269,8 +282,10 @@ export function LeagueSettingsPage() {
           </div>
         ))}
         <p className="field-hint">
-          Removed players keep their name on past results but drop off the leaderboard. They can
-          rejoin with the invite code.
+          Removed players keep their name on past results but drop off the leaderboard.{" "}
+          {seasonLocked
+            ? "This head-to-head season is locked, so they can't rejoin it."
+            : "They can rejoin with the invite code."}
         </p>
       </section>
 

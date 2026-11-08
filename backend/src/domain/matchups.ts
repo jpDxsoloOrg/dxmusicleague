@@ -25,6 +25,14 @@
 // special casing beyond null songs": a departed player's submission is still
 // stored, so without the withdrawal their pair would stay a contest.)
 //
+// HTH-14: that rejoin can no longer happen. A round is only in play (past
+// draft) once the season is frozen, and from then on a player who leaves or
+// is kicked can't come back (domain/freeze.ts `seasonJoinRefusal`), so the
+// departed set of a round in play only ever grows. The rejoin handling here
+// and in the ballot rules (a kept pre-departure pick, a ballot "incomplete
+// since a rejoin") is kept as harmless defence for data that predates the
+// rule — it's simply never reached by the live flows.
+//
 // A revealed round (`revealed` / `complete`) is settled history and is never
 // re-judged against today's member list: that list can't tell a departure
 // before the reveal from one after it, so a later leave/kick would rewrite a
@@ -279,7 +287,8 @@ export function votableMatchups(set: RoundMatchupSet, voterId: string): RoundMat
 // across time. Names shown while every member could vote remain in a
 // viewer's memory if a departure mid-voting then leaves a single contest,
 // and the count after it can be read against them. And the reverse, after
-// a rejoin: each feed entry carries its ballot's cast time (in its id and
+// a rejoin (no longer reachable since HTH-14, see the top of this file):
+// each feed entry carries its ballot's cast time (in its id and
 // time-ago), which the panel doesn't. A done voter whose ballot was cast
 // while the departed player was away must be that player's opponent, since
 // anyone else would now have to pick in the restored matchup too. So whoever

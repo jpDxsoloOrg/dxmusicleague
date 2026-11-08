@@ -10,10 +10,12 @@ import assert from "node:assert/strict";
 import { randomInt as cryptoRandomInt } from "node:crypto";
 import {
   MIN_H2H_PLAYERS,
-  lockedOutOfSeason,
+  SEASON_LEFT_MESSAGE,
+  SEASON_LOCKED_MESSAGE,
   membersOutsideOrder,
   newScheduleSalt,
   planSeasonFreeze,
+  seasonJoinRefusal,
   seasonLocked,
   shuffled,
 } from "./freeze.ts";
@@ -145,19 +147,25 @@ test("planSeasonFreeze works with node:crypto's randomInt (the production RNG)",
   assert.notEqual(planSeasonFreeze(players(7), cryptoRandomInt).salt, plan.salt);
 });
 
-test("seasonLocked / lockedOutOfSeason fire only for a frozen head-to-head league", () => {
+test("seasonLocked / seasonJoinRefusal fire only for a frozen head-to-head league — and then refuse everyone (HTH-14)", () => {
   const frozen: Pick<League, "format" | "h2hParticipants"> = { format: "headToHead", h2hParticipants: ["u-a", "u-b"] };
   assert.equal(seasonLocked(frozen), true);
-  assert.equal(lockedOutOfSeason(frozen, "u-new"), true); // a newcomer can't be scheduled
-  assert.equal(lockedOutOfSeason(frozen, "u-a"), false); // a frozen participant may come back
+  assert.equal(seasonJoinRefusal(frozen, "u-new"), SEASON_LOCKED_MESSAGE); // a newcomer can't be scheduled
+  assert.equal(seasonJoinRefusal(frozen, "u-a"), SEASON_LEFT_MESSAGE); // a participant who left can't come back
+  assert.notEqual(SEASON_LEFT_MESSAGE, SEASON_LOCKED_MESSAGE);
+  assert.match(SEASON_LEFT_MESSAGE, /can't rejoin/);
 
-  assert.equal(seasonLocked({ format: "headToHead" }), false); // not frozen yet
+  // The lobby (not frozen yet) takes anyone, a player who left it included.
+  assert.equal(seasonLocked({ format: "headToHead" }), false);
   assert.equal(seasonLocked({ format: "headToHead", h2hParticipants: [] }), false);
-  assert.equal(lockedOutOfSeason({ format: "headToHead" }, "u-new"), false);
+  assert.equal(seasonJoinRefusal({ format: "headToHead" }, "u-new"), undefined);
+  assert.equal(seasonJoinRefusal({ format: "headToHead", h2hParticipants: [] }, "u-a"), undefined);
   // Standard (or legacy, format-less) leagues never lock, whatever they hold.
   assert.equal(seasonLocked({ format: "standard", h2hParticipants: ["u-a"] }), false);
-  assert.equal(lockedOutOfSeason({ format: "standard", h2hParticipants: ["u-a"] }, "u-new"), false);
+  assert.equal(seasonJoinRefusal({ format: "standard", h2hParticipants: ["u-a"] }, "u-new"), undefined);
+  assert.equal(seasonJoinRefusal({ format: "standard", h2hParticipants: ["u-a"] }, "u-a"), undefined);
   assert.equal(seasonLocked({ h2hParticipants: ["u-a"] } as never), false);
+  assert.equal(seasonJoinRefusal({ h2hParticipants: ["u-a"] } as never, "u-a"), undefined);
 });
 
 test("membersOutsideOrder lists members missing from a frozen order — never for un-frozen or standard leagues", () => {

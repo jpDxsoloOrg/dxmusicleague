@@ -184,7 +184,8 @@ export interface Ballot {
    *  the submissionId the voter picked to win that matchup. One entry per
    *  matchup the voter could vote in when they cast (`validateH2HBallot`,
    *  domain/rules.ts), plus any pick made before a departure turned its pair
-   *  into a walkover (kept, inert, in case the player rejoins) — so count only
+   *  into a walkover (kept, inert — a rejoin would restore it, though since
+   *  HTH-14 a locked season can't be rejoined) — so count only
    *  picks in `votableMatchups` at the reveal. Absent on standard ballots. */
   picks?: Record<string, string>;
   /** submissionId -> the voter's comment on that song (either format). */

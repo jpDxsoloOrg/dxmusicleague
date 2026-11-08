@@ -102,26 +102,38 @@ an empty, `h2hParticipants` — so concurrent opens can't both shuffle):
   existing "no round beyond roundCount" cap then ends the season on schedule.
 
 Rules around it: round 1 needs at least 2 members to open (400); no round 2
-can be created before round 1 has opened (400); once frozen the league takes
-no new players — the invite-code join and the public claim both answer 409
-"Season locked — …", discovery hides it and its preview reports
-`hasStarted` — though a frozen participant who left or was kicked may rejoin
-by invite (they're already in the schedule).
+can be created before round 1 has opened (400); once frozen **nobody joins
+the league, ever** (`seasonJoinRefusal`, `domain/freeze.ts`): the invite-code
+join and the public claim both answer 409 — "Season locked — …" to a
+newcomer, and "You can't rejoin this head-to-head season — …" to a frozen
+participant who left or was kicked (HTH-14: leaving a locked season is
+permanent, so nobody can dodge a loss by leaving before a reveal and coming
+back after it). Discovery hides the league and its preview reports
+`hasStarted` (no claim, for a former participant too). Leaving and kicking
+themselves are unchanged — they just can't be undone: the departed player's
+remaining matchups play as walkovers for their opponents, and their standing
+row stays stored, off the board. Before the freeze (the lobby) players can
+leave and join again freely.
 
 Joins can't slip past the freeze. A head-to-head join writes its `MEMBER#`
 row in a `TransactWriteItems` together with a `ConditionCheck` on META
-(not frozen, or the joiner already in `h2hParticipants`), so DynamoDB
-serializes it against the freeze's `UpdateItem`: a join either commits
-before the freeze or is refused. The one join the freeze can't see coming —
-committed after the opener read the member list but before its freeze write
-— is caught by the opener itself: right after the write it re-reads the
+(not frozen — no, or an empty, `h2hParticipants`; no exception for a former
+participant), so DynamoDB serializes it against the freeze's `UpdateItem`: a
+join either commits before the freeze or is refused. The handler then
+answers from a fresh, strongly consistent read: a caller who is a member by
+now (their own duplicate join landed first and the freeze took them in)
+simply succeeds, since the join they asked for happened; anyone else gets the
+409 with its reason. The one join the freeze can't see coming — committed
+after the opener read the member list but before its freeze write — is
+caught by the opener itself: right after the write it re-reads the
 league strongly consistently (`ConsistentRead`), and if a member is missing
 from the order it re-plans the whole order (fresh shuffle, salt and
 `roundCount`) over participants + latecomers, conditional on the salt it
 just read (`h2hSalt = :old`). That happens before round 1 is written, so no
 pairing has been derived yet; once round 1 has opened, the order never
 changes. Hence every member of a frozen league is in `h2hParticipants`
-(participants who left are the only difference the other way round). Both attributes are
+(participants who left or were kicked are the only difference the other way
+round, and they stay out). Both attributes are
 **server-only**: every response strips them (owner included), the frontend
 types don't carry them, and a rematch never copies them (the clone freezes
 afresh at its own round 1). Standard leagues never get either attribute.
@@ -164,8 +176,10 @@ The tables name the routes that matter to the game rules, not all of them;
 - **Join**: point-get `INVITE#<code.toUpperCase()>`; 404 → "That code doesn't match any
   league."; already a member → 409 "You're already a member of {name}." with
   `code: "already-member"` and the `leagueId` (the client opens that league); a frozen head-to-head
-  season → 409 "Season locked — …" (see [Head-to-head season freeze](#head-to-head-season-freeze));
-  else write Membership + Standing(0) and return the league.
+  season → 409 "Season locked — …" for a newcomer, or "You can't rejoin this head-to-head season — …"
+  for a participant who left or was kicked (see [Head-to-head season freeze](#head-to-head-season-freeze));
+  else write Membership + Standing(0) and return the league. (The public claim,
+  `POST /leagues/{id}/members`, answers a frozen season with the same two 409s.)
 - **Summary** fields (`currentRound`, `totalRounds`, `completionPct`, `members`, `finished`) are
   computed in the Lambda from the league's rounds + memberships. `completionPct` is real (the
   frontend mock keeps a hardcoded map for its points leagues) and counts current members only:
@@ -249,8 +263,9 @@ over the same derived matchups as `GET /matchups` — reject the whole ballot if
    caller's own (`votableMatchups`, the set the tally shares). A pick in a walkover / no-contest
    matchup is never rejected and never counts: a mid-voting departure can turn a picked contest
    into a walkover, and the re-cast pre-filled from my-ballot must still go through. Such a
-   pick is kept if it names one of the pair's songs as scheduled (made before the departure, so
-   a rejoin — the pair is a contest again — restores it) and dropped otherwise. The tally counts
+   pick is kept, inert, if it names one of the pair's songs as scheduled (made before the
+   departure) and dropped otherwise. (Built so a rejoin would restore it; since HTH-14 a locked
+   season can't be rejoined, so it just stays put.) The tally counts
    only picks in matchups that are contests at the reveal. A caller with nothing votable (e.g. a
    two-player league) casts an empty `picks` and may still comment.
 5. No points and no anti-votes (`allocations` / `downvotes` must be absent or empty); a standard
@@ -358,7 +373,7 @@ round; a spectator who never played never does) is the payload's only
 identity signal — no user ids, no submitter notes, never the frozen order.
 
 A revealed (or complete) round is never re-judged against the current member
-list, so a later leave/kick (or a rejoin) doesn't rewrite it: it withdraws
+list, so a later leave/kick doesn't rewrite it: it withdraws
 exactly the songs of the players the reveal pinned as departed
 (`h2hDeparted`), so it agrees with `GET /results` about its walkovers.
 
@@ -381,8 +396,9 @@ display name, collated in English whatever the host locale (draws don't break ti
 leagues keep points desc, equal points in stored order. The record lives on the same
 `STANDING#` item, bumped with one atomic
 `SET #w = if_not_exists(#w, :zero) + :w, #l = if_not_exists(#l, :zero) + :l, #d = …` per
-player (`addStandingRecord`; `#w`/`#l`/`#d` name `wins`/`losses`/`draws`), so leave/rejoin
-durability, rematch reseeding and the league cascade delete cover it unchanged; rows written
+player (`addStandingRecord`; `#w`/`#l`/`#d` name `wins`/`losses`/`draws`), so leave/kick
+durability (the row is kept, off the board — a locked season can't be rejoined), rematch
+reseeding and the league cascade delete cover it unchanged; rows written
 before head-to-head existed have no such attributes and read back as 0–0–0 (no migration).
 
 ### Music provider proxy

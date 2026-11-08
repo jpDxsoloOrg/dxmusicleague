@@ -649,7 +649,7 @@ test("H2H full round-trip: reveal all 3 rounds of a 4-player league → W and L 
   assert.deepEqual(detail.standings.map((s) => [s.wins, s.losses]), sorted.map((s) => [s.wins, s.losses]), "board sorted by record");
 });
 
-test("H2H departures: a player kicked mid-round loses nothing — their pair is a walkover the stayer wins; the revealed round reads the same after they rejoin, and a leave after the reveal rewrites nothing", async () => {
+test("H2H departures: a player kicked mid-round loses nothing — their pair is a walkover the stayer wins; they can't rejoin (HTH-14), the revealed round still reads as banked (their own matchup too), and a leave after the reveal rewrites nothing", async () => {
   const { revealRound, getResults } = await import("./voting.ts");
   const four = PLAYERS.slice(0, 4);
   const f = await h2hLeague(four);
@@ -678,9 +678,11 @@ test("H2H departures: a player kicked mid-round loses nothing — their pair is 
   assert.equal(board.get(stayer), "1-0-0");
   assert.equal(board.get(leaver) ?? "0-0-0", "0-0-0", "the departed player's row takes no L");
 
-  // The leaver rejoins (allowed: they're in the frozen order). The revealed
-  // round still reads as it was banked — here and in the matchups read.
-  await joinLeague(f.deps, leaver, f.inviteCode);
+  // The kicked player can't rejoin: leaving a locked season is permanent
+  // (HTH-14). The revealed round still reads as it was banked — here and in
+  // the matchups read, where their own matchup is still theirs.
+  await assert.rejects(joinLeague(f.deps, leaver, f.inviteCode), isStatus(409, /^You can't rejoin this head-to-head season/));
+  assert.equal((await f.repo.getLeague(f.leagueId))!.memberIds.includes(leaver), false);
   assert.deepEqual(await getResults(f.deps, SPECTATOR, round.id), payload);
   const view = await listMatchups(f.deps, leaver, round.id);
   const mine = view.matchups.find((v) => v.matchupId === theirs.matchupId)!;

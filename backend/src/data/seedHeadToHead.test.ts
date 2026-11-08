@@ -11,12 +11,12 @@ import assert from "node:assert/strict";
 import { MemoryRepository, MemoryUserDirectory } from "./memory.ts";
 import { H2H_SEED_LEAGUE_ID, headToHeadSeed } from "./seedHeadToHead.ts";
 import { ApiError } from "../domain/errors.ts";
-import { SEASON_LOCKED_MESSAGE } from "../domain/freeze.ts";
+import { SEASON_LEFT_MESSAGE, SEASON_LOCKED_MESSAGE } from "../domain/freeze.ts";
 import { deriveRoundMatchups, votableMatchups } from "../domain/matchups.ts";
 import { matchupRecords, settleMatchups } from "../domain/rules.ts";
 import { matchupsForRound, scheduleLength } from "../domain/schedule.ts";
 import type { Deps } from "../handlers/leagues.ts";
-import { getLeagueDetail, joinLeague, listMyLeagues } from "../handlers/leagues.ts";
+import { getLeagueDetail, joinLeague, leaveLeague, listMyLeagues } from "../handlers/leagues.ts";
 import { listMatchups } from "../handlers/matchups.ts";
 import { castBallot, getMyBallot, getResults, revealRound } from "../handlers/voting.ts";
 import type { HeadToHeadResults } from "../handlers/results.ts";
@@ -143,9 +143,12 @@ test("seed: round 2 is open for voting — Max's own matchup locked, one pick to
   assert.deepEqual(votableMatchups(set, "u-me").map((m) => m.matchupId), [`${R2}~M1`]);
 });
 
-test("seed: the season is locked — an invite-code join is refused with the season-locked message", async () => {
+test("seed: the season is locked — a newcomer's invite-code join is refused with the season-locked message, and a player who leaves can't rejoin (HTH-14)", async () => {
   const deps = seeded();
   await assert.rejects(joinLeague(deps, "u-luna", "FACE-5"), isStatus(409, SEASON_LOCKED_MESSAGE));
+  await leaveLeague(deps, "u-sarah", LG, "u-sarah");
+  await assert.rejects(joinLeague(deps, "u-sarah", "FACE-5"), isStatus(409, SEASON_LEFT_MESSAGE));
+  assert.equal((await deps.repo.getLeague(LG))!.memberIds.includes("u-sarah"), false);
 });
 
 test("seed: round 2 plays on through the real handlers — vote, reveal, and the board banks it", async () => {

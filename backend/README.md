@@ -49,7 +49,8 @@ curl -X POST http://127.0.0.1:8787/leagues/join \
 
 The seed includes one **head-to-head** league, Friday Faceoff (`lg-faceoff`, invite code
 `FACE-5`): five players, round 1 revealed (a draw and a walkover), round 2 (`r-ff-2`) in voting.
-Its season is locked, so a newcomer's join is refused with a 409.
+Its season is locked, so a newcomer's join is refused with a 409 — and so is a player's who
+left it (leaving a locked head-to-head season is permanent).
 
 ```bash
 curl http://127.0.0.1:8787/rounds/r-ff-2/matchups -H 'x-dev-user: u-me'     # anonymous matchups, yours flagged isMine

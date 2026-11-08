@@ -8,12 +8,12 @@ import type { Deps } from "./leagues.ts";
 import { claimPublicSpot, createLeague, deleteLeague, getLeagueDetail, getPublicLeaguePreview, joinLeague, leaveLeague, listBrowseLeagues, listMyLeagues, listOpenPublicLeagues, rematchLeague, toLeagueView, updateLeagueSettings } from "./leagues.ts";
 import { createRound, updateRound } from "./rounds.ts";
 import { ApiError, errorBody } from "../domain/errors.ts";
-import { SEASON_LOCKED_MESSAGE } from "../domain/freeze.ts";
+import { SEASON_LEFT_MESSAGE, SEASON_LOCKED_MESSAGE } from "../domain/freeze.ts";
 import type { RandomInt } from "../domain/freeze.ts";
 import { DEFAULT_LEAGUE_SETTINGS, H2H_FORCED_SETTINGS, applyFormatSettings, leagueFormat } from "../domain/types.ts";
 import type { League, Round } from "../domain/types.ts";
 import { buildRoutes, matchRoute } from "../http/routes.ts";
-import { votableMatchups } from "../domain/matchups.ts";
+import { matchupState, votableMatchups } from "../domain/matchups.ts";
 import type { RoundMatchup, RoundMatchupSet } from "../domain/matchups.ts";
 import { submitSong } from "./submissions.ts";
 import { castBallot, getResults, revealRound } from "./voting.ts";
@@ -875,10 +875,13 @@ test("H2H standings sort: 3W-1L above 3W-2L above 2W-0L; record ties by name; ra
   assert.equal(standings.find((s) => s.user.id === "u-mia")?.points, 99); // points still carried, just not ranked on
 });
 
-test("the W/L/D record survives a leave or a kick and reappears on rejoin", async () => {
+test("the W/L/D record survives a leave or a kick on its row, off the board — and a locked season can't be rejoined (HTH-14)", async () => {
   const { joinLeague } = await import("./leagues.ts");
   const deps = await depsWith([
-    league({ id: "lg", name: "L", visibility: "private", format: "headToHead", memberIds: ["u-owner", "u-me", "u-2"] }),
+    league({
+      id: "lg", name: "L", visibility: "private", format: "headToHead", memberIds: ["u-owner", "u-me", "u-2"],
+      h2hParticipants: ["u-2", "u-owner", "u-me"], h2hSalt: "a".repeat(32), roundCount: 3, // frozen
+    }),
   ]);
   await deps.repo.putInvite("C-lg", "lg");
   await deps.repo.addStandingPoints("lg", "u-owner", 0); // the owner's creation seed
@@ -890,18 +893,21 @@ test("the W/L/D record survives a leave or a kick and reappears on rejoin", asyn
   // Hidden from the board while gone…
   const gone = await getLeagueDetail(deps, "u-owner", "lg");
   assert.deepEqual(gone.standings.map((s) => s.user.id), ["u-owner"]);
-
-  // …and intact on return (the rejoin seed is create-if-absent, adding 0).
-  await joinLeague(deps, "u-me", "C-lg");
-  await joinLeague(deps, "u-2", "C-lg");
-  const back = await getLeagueDetail(deps, "u-owner", "lg");
-  const record = (id: string) => {
-    const s = back.standings.find((row) => row.user.id === id);
+  // …but the record is still on its row (removeMember keeps standings)…
+  const record = (rows: Awaited<ReturnType<typeof deps.repo.getStandings>>, id: string) => {
+    const s = rows.find((row) => row.userId === id);
     return s && [s.wins, s.losses, s.draws];
   };
-  assert.deepEqual(record("u-me"), [2, 1, 1]);
-  assert.deepEqual(record("u-2"), [1, 3, 0]);
-  assert.deepEqual(back.standings.map((s) => s.user.id), ["u-me", "u-2", "u-owner"]); // re-ranked on record
+  const rows = await deps.repo.getStandings("lg");
+  assert.deepEqual(record(rows, "u-me"), [2, 1, 1]);
+  assert.deepEqual(record(rows, "u-2"), [1, 3, 0]);
+
+  // …and neither can come back to it: leaving a locked season is permanent.
+  for (const id of ["u-me", "u-2"]) {
+    await assert.rejects(joinLeague(deps, id, "C-lg"), (e: unknown) => e instanceof ApiError && e.statusCode === 409 && e.message === SEASON_LEFT_MESSAGE, id);
+  }
+  assert.deepEqual((await getLeagueDetail(deps, "u-owner", "lg")).standings.map((s) => s.user.id), ["u-owner"]);
+  assert.deepEqual(await deps.repo.getStandings("lg"), rows, "the refused joins wrote nothing");
 });
 
 test("standard league standings: same rows, order and ranks as before — plus three zeroed fields", async () => {
@@ -1043,6 +1049,8 @@ async function h2hDeps(over: Partial<League> = {}, seed = 7): Promise<Deps> {
 const openRound1 = (deps: Deps, leagueId = "h2h") =>
   updateRound(deps, "u-owner", leagueId, `${leagueId}~0001`, { status: "submitting" });
 const seasonLockedError = (e: unknown) => isStatus(409)(e) && (e as Error).message === SEASON_LOCKED_MESSAGE;
+/** A former participant's join refused after the freeze (HTH-14). */
+const rejoinRefusedError = (e: unknown) => isStatus(409)(e) && (e as Error).message === SEASON_LEFT_MESSAGE;
 
 test("H2H invite-code join: allowed before the freeze, refused with 'season locked' after", async () => {
   const deps = await h2hDeps();
@@ -1105,20 +1113,110 @@ test("H2H: a join whose lock check read the lobby but whose write lands after th
   }
 });
 
-test("H2H: a frozen participant who left (or was kicked) may rejoin by invite; newcomers can't", async () => {
-  const deps = await h2hDeps();
+test("H2H (HTH-14): a racing join refused by the repo gate gets the reason from a fresh read — a player the freeze took in who has left since is told they can't rejoin", async () => {
+  for (const via of ["invite", "claim"] as const) {
+    const deps = await h2hDeps({ visibility: "public", maxMembers: 10 });
+    // u-3 leaves the lobby and joins again; their handler reads the lobby
+    // (not a member, not frozen). Meanwhile a round-1 open that read the
+    // member list while u-3 was still in freezes them into the order.
+    await leaveLeague(deps, "u-3", "h2h", "u-3");
+    const write = deps.repo.addMemberUnlessSeasonLocked.bind(deps.repo);
+    deps.repo.addMemberUnlessSeasonLocked = async (leagueId, userId) => {
+      await deps.repo.freezeH2HSeason("h2h", { participants: [...H2H_MEMBERS], salt: "b".repeat(32), roundCount: 5 });
+      return write(leagueId, userId);
+    };
+    const attempt = via === "invite" ? joinLeague(deps, "u-3", "DUEL-1") : claimPublicSpot(deps, "u-3", "h2h");
+    await assert.rejects(attempt, rejoinRefusedError, via);
+    assert.equal((await deps.repo.getLeague("h2h"))!.memberIds.includes("u-3"), false, via);
+  }
+});
+
+test("H2H (HTH-14): a duplicate join that races round 1's open is still an idempotent success — the player's other join landed and the freeze took them in, so they aren't told they can't rejoin", async () => {
+  for (const via of ["invite", "claim"] as const) {
+    const deps = await h2hDeps({ visibility: "public", maxMembers: 10 });
+    // u-x sends two joins (a double tap, two tabs). Request B has read the
+    // lobby (not a member, not frozen) when request A's write lands and
+    // round 1 opens, freezing u-x in — then B's gated write arrives.
+    const write = deps.repo.addMemberUnlessSeasonLocked.bind(deps.repo);
+    deps.repo.addMemberUnlessSeasonLocked = async (leagueId, userId) => {
+      assert.ok(await write(leagueId, userId), `${via}: request A joins the lobby`);
+      await openRound1(deps);
+      return write(leagueId, userId); // refused: the season is frozen now
+    };
+    const { league: answered } = via === "invite"
+      ? await joinLeague(deps, "u-x", "DUEL-1")
+      : await claimPublicSpot(deps, "u-x", "h2h");
+    assert.ok(answered.memberIds.includes("u-x"), via);
+    assert.equal("h2hParticipants" in answered, false, `${via}: the secret order stays server-side`);
+    const stored = (await deps.repo.getLeague("h2h"))!;
+    assert.equal(stored.memberIds.filter((id) => id === "u-x").length, 1, via);
+    assert.ok(stored.h2hParticipants?.includes("u-x"), via);
+    assert.equal((await deps.repo.getStandings("h2h")).filter((s) => s.userId === "u-x").length, 1, via);
+  }
+});
+
+test("H2H (HTH-14): once the season locks nobody joins — a participant who left or was kicked can't rejoin, by invite or by claim", async () => {
+  const deps = await h2hDeps({ visibility: "public", maxMembers: 10 });
   await openRound1(deps);
   const order = (await deps.repo.getLeague("h2h"))!.h2hParticipants;
 
   await leaveLeague(deps, "u-3", "h2h", "u-3"); // leaves mid-season
   await leaveLeague(deps, "u-owner", "h2h", "u-4"); // kicked
-  await joinLeague(deps, "u-3", "DUEL-1"); // back: already in the schedule
-  await joinLeague(deps, "u-4", "DUEL-1");
-  const back = (await deps.repo.getLeague("h2h"))!;
-  assert.ok(back.memberIds.includes("u-3") && back.memberIds.includes("u-4"));
-  assert.deepEqual(back.h2hParticipants, order); // the schedule never moved
-  assert.equal(back.roundCount, 5);
+  for (const id of ["u-3", "u-4"]) {
+    await assert.rejects(joinLeague(deps, id, "DUEL-1"), rejoinRefusedError, `${id}: invite`);
+    await assert.rejects(callRoute(deps, "POST", "/leagues/join", id, { code: "duel-1" }), rejoinRefusedError, `${id}: invite route`);
+    await assert.rejects(claimPublicSpot(deps, id, "h2h"), rejoinRefusedError, `${id}: claim`);
+    await assert.rejects(callRoute(deps, "POST", "/leagues/h2h/members", id), rejoinRefusedError, `${id}: claim route`);
+    // The repo's atomic gate refuses them too, so no stale read can let one back in.
+    assert.equal(await deps.repo.addMemberUnlessSeasonLocked("h2h", id), undefined, `${id}: repo gate`);
+  }
+  // A newcomer still gets the season-locked reason.
   await assert.rejects(joinLeague(deps, "u-new", "DUEL-1"), seasonLockedError);
+  await assert.rejects(claimPublicSpot(deps, "u-new", "h2h"), seasonLockedError);
+
+  const after = (await deps.repo.getLeague("h2h"))!;
+  assert.deepEqual(after.memberIds, ["u-owner", "u-2", "u-5"], "nobody got back in");
+  assert.deepEqual(after.h2hParticipants, order); // the schedule never moved
+  assert.equal(after.roundCount, 5);
+  // Their preview shows the locked state (no claim), like anyone else's.
+  const preview = await getPublicLeaguePreview(deps, "u-3", "h2h");
+  assert.deepEqual([preview.hasStarted, preview.alreadyMember], [true, false]);
+});
+
+test("H2H (HTH-14): before round 1 opens the lobby can be left and joined again — by invite or by claim — and the freeze takes them in", async () => {
+  const deps = await h2hDeps({ visibility: "public", maxMembers: 10 });
+  await leaveLeague(deps, "u-3", "h2h", "u-3");
+  await leaveLeague(deps, "u-owner", "h2h", "u-4"); // kicked from the lobby
+  await joinLeague(deps, "u-3", "DUEL-1");
+  await claimPublicSpot(deps, "u-4", "h2h");
+  assert.deepEqual([...(await deps.repo.getLeague("h2h"))!.memberIds].sort(), [...H2H_MEMBERS].sort());
+
+  await openRound1(deps);
+  const frozen = (await deps.repo.getLeague("h2h"))!;
+  assert.deepEqual([...frozen.h2hParticipants!].sort(), [...H2H_MEMBERS].sort());
+  assert.equal(frozen.roundCount, 5);
+});
+
+test("standard league (HTH-14 leaves it alone): a player who leaves or is kicked mid-league rejoins by invite with their points intact", async () => {
+  const deps = await depsWith(
+    [league({ id: "lg", name: "L", visibility: "private", memberIds: ["u-owner", "u-me", "u-2"] })],
+    [
+      { id: "lg~1", leagueId: "lg", index: 1, theme: "One", status: "revealed" },
+      { id: "lg~2", leagueId: "lg", index: 2, theme: "Two", status: "voting" },
+    ],
+  );
+  await deps.repo.putInvite("C-lg", "lg");
+  await deps.repo.addStandingPoints("lg", "u-me", 9);
+  await deps.repo.addStandingPoints("lg", "u-2", 4);
+
+  await leaveLeague(deps, "u-me", "lg", "u-me"); // leave
+  await leaveLeague(deps, "u-owner", "lg", "u-2"); // kick
+  await joinLeague(deps, "u-me", "C-lg");
+  await joinLeague(deps, "u-2", "C-lg");
+  const back = await getLeagueDetail(deps, "u-owner", "lg");
+  assert.deepEqual([...back.league.memberIds].sort(), ["u-2", "u-me", "u-owner"]);
+  assert.equal(back.standings.find((s) => s.user.id === "u-me")?.points, 9);
+  assert.equal(back.standings.find((s) => s.user.id === "u-2")?.points, 4);
 });
 
 test("H2H rematch: the clone has no frozen order or salt, takes players again, and re-freezes on its own", async () => {
@@ -1160,15 +1258,21 @@ test("h2hParticipants / h2hSalt never leave the server: every League-returning r
   const frozen = (await deps.repo.getLeague("h2h"))!;
   assert.ok(frozen.h2hParticipants && frozen.h2hSalt);
   await deps.repo.updateRound({ ...(await deps.repo.getRound("h2h~0001"))!, status: "revealed" }); // finished
-  await leaveLeague(deps, "u-2", "h2h", "u-2"); // so the rejoin below returns a League
+  const memberView = await callRoute(deps, "GET", "/leagues/h2h", "u-2"); // before they leave
+  // u-2 leaves: a locked season can't be rejoined (HTH-14), so the join route
+  // answers them — and a current member — with a 409 body, checked too.
+  await leaveLeague(deps, "u-2", "h2h", "u-2");
+  const refusedBody = async (caller: string) => errorBody(await rejectionOf(callRoute(deps, "POST", "/leagues/join", caller, { code: "DUEL-1" })));
 
   const settings = { votePoolSize: 10, maxPointsPerSong: 5, allowSelfVote: false, submissionsPerPlayer: 1, downvotePoolSize: 0 };
   const payloads: Array<[string, unknown]> = [
     ["GET /leagues (owner)", await callRoute(deps, "GET", "/leagues", "u-owner")],
     ["GET /leagues/:id (owner)", await callRoute(deps, "GET", "/leagues/h2h", "u-owner")],
     ["GET /leagues/:id (spectator)", await callRoute(deps, "GET", "/leagues/h2h", "u-stranger")],
-    ["POST /leagues/join (participant rejoin)", await callRoute(deps, "POST", "/leagues/join", "u-2", { code: "DUEL-1" })],
-    ["GET /leagues/:id (member)", await callRoute(deps, "GET", "/leagues/h2h", "u-2")],
+    ["GET /leagues/:id (member)", memberView],
+    ["GET /leagues/:id (former participant)", await callRoute(deps, "GET", "/leagues/h2h", "u-2")],
+    ["POST /leagues/join (former participant: 409)", await refusedBody("u-2")],
+    ["POST /leagues/join (already a member: 409)", await refusedBody("u-owner")],
     ["GET /leagues/:id/public", await callRoute(deps, "GET", "/leagues/h2h/public", "u-stranger")],
     ["POST /leagues/:id/invite", await callRoute(deps, "POST", "/leagues/h2h/invite", "u-owner")],
     ["PATCH /leagues/:id/settings", await callRoute(deps, "PATCH", "/leagues/h2h/settings", "u-owner", settings)],
@@ -1570,7 +1674,7 @@ test("H2H kick mid-voting: the kicked player's pair resolves as a walkover at th
   assert.equal(board.get(owners.a.userId), "0-1-0");
 });
 
-test("H2H leave → comments-only row → vote → rejoin (BUG-06): once everyone can vote again, the feed names only members in the panel's done list — the contest player's comments-only row stays hidden, so it can't say who the viewer's anonymous opponent is", async () => {
+test("H2H leave → comments-only row → vote (BUG-06, HTH-14): the leaver can't rejoin, so the round stays at one contest — the panel and the feed name nobody's ballot but the viewer's, and the contest player's comments-only row never says who the viewer's anonymous opponent is", async () => {
   const f = await duel();
   const round = await openDuelRound(f);
   for (const p of DUELISTS) await duelSubmit(f, round.id, p);
@@ -1594,43 +1698,29 @@ test("H2H leave → comments-only row → vote → rejoin (BUG-06): once everyon
   // The walkover partner, the only one who can vote, picks in that contest.
   await castBallot(f.deps, partner, round.id, { picks: duelPicks(shrunk, partner) });
 
-  // The leaver rejoins (a frozen participant may): two contests again, so
-  // every member can vote and the panel names everyone.
-  await joinLeague(f.deps, leaver, f.inviteCode);
+  // The leaver can't come back (HTH-14), so the round never regains its
+  // second contest — before HTH-14 that rejoin was the one way a waiting
+  // member's comments-only row could sit beside a panel naming everyone.
+  await assert.rejects(joinLeague(f.deps, leaver, f.inviteCode), rejoinRefusedError);
   const members = (await f.repo.getLeague(f.leagueId))!.memberIds;
-  const waiting = members.filter((id) => id !== partner);
-  for (const viewer of [...DUELISTS, "u-luna"]) {
-    assert.deepEqual(await votingPanelAs(f, viewer), { done: [partner], waiting, counts: [1, 4] }, viewer);
-  }
-  // The opponent is shown waiting; a feed entry for them would say they wrote
-  // a row while they had nothing to vote on — i.e. that they're the owner's
-  // opponent. Only the partner (done) and one's own row show.
-  assert.deepEqual(await ballotFeedAs(f, DUEL_OWNER), [partner]);
-  assert.deepEqual(await ballotFeedAs(f, "u-luna"), [partner]);
-  assert.deepEqual(await ballotFeedAs(f, leaver), [partner]);
-  assert.deepEqual(await ballotFeedAs(f, partner), [partner]);
-  assert.deepEqual(await ballotFeedAs(f, opponent), [opponent, partner].sort(), "their own row still shows");
-  // The other members' feed entries never say more than the panel's done list.
-  for (const viewer of [...DUELISTS, "u-luna"]) {
-    const others = (await ballotFeedAs(f, viewer)).filter((id) => id !== viewer);
-    const { done } = await votingPanelAs(f, viewer);
-    assert.deepEqual(others, [...done!].filter((id) => id !== viewer).sort(), viewer);
-  }
+  assert.equal(members.includes(leaver), false);
+  const still = await duelSet(f, round.id);
+  assert.deepEqual(still.matchups.map(matchupState), still.matchups.map((m) => (m.matchupId === theirs.matchupId ? "walkover" : "contest")));
+  assert.deepEqual(votableMatchups(still, opponent), [], "still nothing to vote on");
 
-  // Completing their picks puts the opponent in the done list — and the feed.
-  const restored = await duelSet(f, round.id);
-  await castBallot(f.deps, opponent, round.id, { picks: duelPicks(restored, opponent) });
-  const done = [opponent, partner];
-  for (const viewer of [DUEL_OWNER, "u-luna"]) {
-    const panel = { done: members.filter((id) => done.includes(id)), waiting: members.filter((id) => !done.includes(id)), counts: [2, 4] };
-    assert.deepEqual(await votingPanelAs(f, viewer), panel, viewer);
-    assert.deepEqual(await ballotFeedAs(f, viewer), [...done].sort(), viewer);
+  // One contest: the panel names nobody but the viewer (and only if they can
+  // vote), and the feed nobody's ballot but the viewer's — the opponent's
+  // comments-only row and the partner's vote alike.
+  for (const viewer of [...members, leaver, "u-luna"]) {
+    const panel = await votingPanelAs(f, viewer);
+    assert.deepEqual(panel, { done: viewer === partner ? [partner] : [], waiting: [], counts: [1, 1] }, viewer);
+    const own = viewer === partner || viewer === opponent ? [viewer] : [];
+    assert.deepEqual(await ballotFeedAs(f, viewer), own, viewer);
   }
 
   // Revealed: every ballot shows.
-  for (const voter of [DUEL_OWNER, leaver]) await castBallot(f.deps, voter, round.id, { picks: duelPicks(restored, voter) });
   await revealRound(f.deps, DUEL_OWNER, round.id);
-  assert.deepEqual(await ballotFeedAs(f, "u-luna"), [...DUELISTS].sort());
+  assert.deepEqual(await ballotFeedAs(f, "u-luna"), [opponent, partner].sort());
 });
 
 test("three-player H2H league: the who-voted panel and the activity feed name nobody's ballot but the viewer's, so the bye song and each contest player's opponent stay anonymous until the reveal", async () => {
@@ -2245,7 +2335,7 @@ test("join by code: a frozen H2H league's member still gets the already-member m
   assert.deepEqual(err.details, { code: "already-member", leagueId: "h2h" });
 });
 
-test("join and claim refusals other than already-member carry no marker: bad code, empty code, season locked, full, too late", async () => {
+test("join and claim refusals other than already-member carry no marker: bad code, empty code, season locked, can't rejoin, full, too late", async () => {
   // Bad + empty code (invite path).
   const deps = await depsWith([league({ id: "lg", name: "L", visibility: "private" })]);
   const bad = await rejectionOf(joinLeague(deps, "u-me", "NOPE-0"));
@@ -2261,6 +2351,13 @@ test("join and claim refusals other than already-member carry no marker: bad cod
     const locked = await rejectionOf(attempt);
     assert.deepEqual([locked.statusCode, locked.message, locked.details], [409, SEASON_LOCKED_MESSAGE, undefined]);
     assert.deepEqual(errorBody(locked), { error: SEASON_LOCKED_MESSAGE });
+  }
+  // A participant who left the locked season (invite path and claim path).
+  await leaveLeague(h2h, "u-2", "h2h", "u-2");
+  for (const attempt of [joinLeague(h2h, "u-2", "DUEL-1"), claimPublicSpot(h2h, "u-2", "h2h")]) {
+    const left = await rejectionOf(attempt);
+    assert.deepEqual([left.statusCode, left.message, left.details], [409, SEASON_LEFT_MESSAGE, undefined]);
+    assert.deepEqual(errorBody(left), { error: SEASON_LEFT_MESSAGE });
   }
 
   // Full and too late (the claim path; the invite path bypasses both).

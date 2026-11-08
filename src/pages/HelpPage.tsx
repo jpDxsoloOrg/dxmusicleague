@@ -302,17 +302,21 @@ export function HelpPage() {
 
             <h3>Joining, leaving and the season lock</h3>
             <ul className="help-list">
-              <li>Players can join until round 1 opens — with the invite code, or by claiming a spot if the league is public.</li>
+              <li>
+                Players can join until round 1 opens — with the invite code, or by
+                claiming a spot if the league is public. Until then they can also leave
+                and join again freely: no schedule exists yet.
+              </li>
               <li>
                 <strong>Opening round 1 locks the season.</strong> The schedule is drawn
                 from the players already in, so nobody new can join after that — not
                 even with the invite code.
               </li>
               <li>
-                Players in the season can leave and come back with the invite code.
-                While someone's out, their matchups go to their opponents as
-                walkovers — but they don't take the losses, and their record is
-                still there when they return.
+                <strong>Leaving is permanent from then on.</strong> A player who leaves
+                — or is removed by the owner — after round 1 opens can't rejoin that
+                season, not even with the invite code. Their remaining matchups go to
+                their opponents as walkovers, but they don't take the losses.
               </li>
             </ul>
             <Callout kind="note" title="When a round skips voting">
@@ -392,7 +396,7 @@ export function HelpPage() {
               You can't claim a spot once a public league hits its player cap or once
               round 1 has closed submissions. Ask the owner whether they can make room.
               Head-to-head leagues close sooner: once round 1 opens, the season is
-              locked and nobody new can join, even with an invite code (see{" "}
+              locked and nobody can join — or rejoin — even with an invite code (see{" "}
               <a href="#head-to-head">Head-to-head, in detail</a>).
             </Callout>
           </Section>
@@ -409,7 +413,8 @@ export function HelpPage() {
             </ul>
             <p className="help-note">
               For public leagues, the invite panel disappears once every slot is
-              filled.
+              filled. In a head-to-head league it gives way to a “season locked” note
+              once round 1 opens, since nobody can join after that.
             </p>
           </Section>
 
@@ -623,14 +628,17 @@ export function HelpPage() {
             <p>
               Not feeling it? On the league page, members see a{" "}
               <strong>Leave league</strong> button (owners see Settings instead).
-              Confirm and you'll be removed from the league. You can always rejoin
-              later with the invite code, or by claiming a spot again if it's public.
+              Confirm and you'll be removed from the league. You can rejoin later
+              with the invite code, or by claiming a spot again if it's public — your
+              points are still there when you're back.
             </p>
             <p>
-              In a head-to-head league that's underway, your matchups go to your
-              opponents as walkovers while you're gone — you don't take the losses —
-              and you can rejoin with the invite code even though the season is locked
-              to newcomers. Your record picks up where you left off.
+              A head-to-head league that's underway is the exception:{" "}
+              <strong>once round 1 opens, leaving is permanent</strong>. You can't rejoin
+              that season, not even with the invite code, and your remaining matchups
+              go to your opponents as walkovers (you don't take the losses). The same
+              goes for a player the owner removes from the settings page. Before round 1
+              opens you can leave and join again freely.
             </p>
           </Section>
 
@@ -669,7 +677,7 @@ export function HelpPage() {
               <dt>Bye</dt>
               <dd>Head-to-head, odd number of players: the player who sits out a round. Their song plays as an unscored exhibition.</dd>
               <dt>Season lock</dt>
-              <dd>Head-to-head: once round 1 opens, the league takes no new players. Players already in it can still rejoin.</dd>
+              <dd>Head-to-head: once round 1 opens, the league takes no new players, and anyone who leaves (or is removed) can't rejoin.</dd>
             </dl>
           </Section>
 
@@ -705,7 +713,7 @@ export function HelpPage() {
               </details>
               <details>
                 <summary>Why can't I join this head-to-head league?</summary>
-                <p>Its season is locked: the schedule was drawn from the players who were in when round 1 opened, so it can't take anyone new. Players who were already in it can still rejoin.</p>
+                <p>Its season is locked: the schedule was drawn from the players who were in when round 1 opened, so it can't take anyone new. And if you were in it but left (or were removed) after round 1 opened, you can't rejoin: leaving a head-to-head season is permanent.</p>
               </details>
               <details>
                 <summary>Who can start rounds?</summary>
