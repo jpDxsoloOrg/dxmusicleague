@@ -189,6 +189,23 @@
 .phase-item .pill { margin-bottom: 6px; }
 .phase-item p { margin: 0; font-size: 14px; }
 
+/* ---- league formats: Points vs Head-to-Head, side by side ---- */
+.format-compare {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 4px 0 16px;
+}
+.format-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px 4px;
+}
+.help-section .format-card h3 { margin-top: 0; }
+.format-card .help-list { margin-bottom: 10px; }
+.format-card .help-list li { font-size: 14.5px; line-height: 1.6; }
+
 /* ---- faq ---- */
 .help-faq { display: flex; flex-direction: column; gap: 8px; }
 .help-faq details {
@@ -250,6 +267,7 @@
   .help-hero h1 { font-size: 25px; }
   .help-section { margin-bottom: 34px; }
   .help-section h2 { font-size: 19px; }
+  .format-compare { grid-template-columns: 1fr; }
   /* the hover-revealed heading anchors are pointless on touch — keep them out of the way */
   .help-anchor { display: none; }
 }

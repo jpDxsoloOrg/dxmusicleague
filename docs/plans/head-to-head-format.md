@@ -151,3 +151,34 @@ drift from each other or from ballot validation and the tally (which share
 `votableMatchups`). The standard league's row counts are untouched — including
 its known quirk that a departed member's song or ballot still counts toward
 "everyone".
+
+## Help, tour and copy (HTH-12)
+
+- **The first-login tour stays format-neutral.** It opens on a first sign-in
+  (`AppLayout`) or from Help, never inside a league, so it can't know which
+  format the player will meet. The scoring, voting and standings steps
+  describe both formats and point to Help (`src/components/Tutorial.tsx`).
+- **Help keeps the full head-to-head rules in one place.** "League formats"
+  compares Points and Head-to-Head, and "Head-to-head, in detail" covers
+  pairings, byes, picking winners, draws, walkovers and no contests,
+  standings, the season lock, and rounds that skip voting. The other sections
+  still describe the points game and add a short head-to-head note that links
+  there (`src/pages/HelpPage.tsx`).
+- **Help isn't gated on `H2H_ENABLED`.** That flag only hides the format
+  picker on Create league. Existing head-to-head leagues and the rest of the
+  head-to-head UI stay live when it's off, and Help already documents timed
+  rounds without checking `TIMED_ROUNDS_ENABLED`, so Help follows the same rule.
+- **Nothing user-facing promises playoffs** (HTH-13).
+- **Copy audit of HTH-01 to HTH-11.** The server messages read clearly and
+  are unchanged: season locked, forced settings, ballot referee, matchup
+  read guards. The UI copy for the lock note, ballot gate and outcome badges
+  is also unchanged. Changes: the Create-league one-liners (the Points blurb
+  said everyone votes on every song, but players spread a capped pool
+  instead), "W/L" changed to "W–L" to match the standings table, and the
+  head-to-head leave confirmation now mentions walkovers, as the owner's kick
+  confirmation already did.
+- **Known gap, not fixed here:** the public league card and the public
+  preview page don't show the format, because `PublicLeagueSummary` and
+  `PublicLeaguePreview` don't carry it. A player can claim a spot without
+  knowing the league is head-to-head. Fixing this means changing the API
+  payload, which is outside a copy ticket.

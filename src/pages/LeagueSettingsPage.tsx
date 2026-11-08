@@ -147,8 +147,8 @@ export function LeagueSettingsPage() {
               <div className="setting-text">
                 <span className="setting-label">Scoring format</span>
                 <span className="field-hint">
-                  1v1 matchups each round — most votes wins, W/L standings. Chosen when the league was
-                  created; it can't be changed.
+                  1v1 matchups each round — most votes wins, ranked by W–L record. Chosen when the
+                  league was created; it can't be changed.
                 </span>
               </div>
               <span className="format-badge">Head-to-Head</span>

@@ -25,9 +25,11 @@ const H2H_ENABLED = true;
  *  dashboard summary — HTH-11). */
 const H2H_PROVISIONAL_ROUNDS = 3;
 
+// The one-liners match Help's "League formats" section (HelpPage.tsx) — keep
+// the two in step when either changes.
 const FORMAT_OPTIONS: Array<{ id: LeagueFormat; title: string; blurb: string }> = [
-  { id: "standard", title: "Points", blurb: "Everyone votes points on every song. Most points overall wins." },
-  { id: "headToHead", title: "Head-to-Head", blurb: "1v1 matchups each round — most votes wins. W/L standings." },
+  { id: "standard", title: "Points", blurb: "Spend a pool of points on the songs you like. Most points overall wins." },
+  { id: "headToHead", title: "Head-to-Head", blurb: "1v1 matchups each round — most votes wins. Ranked by W–L record." },
 ];
 
 /** Arrow key -> how far it moves the format selection (wrapping). */
@@ -173,7 +175,7 @@ export function CreateLeaguePage() {
           <div className="field">
             <span className="field-label">Number of rounds</span>
             <p className="format-rounds-note">
-              Rounds = everyone plays everyone once — set when round 1 opens.
+              Everyone plays everyone once, so the number of rounds is set when round 1 opens.
             </p>
           </div>
         ) : (

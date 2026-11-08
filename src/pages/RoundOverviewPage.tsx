@@ -107,7 +107,12 @@ export function RoundOverviewPage() {
   const seasonLocked = headToHead && scheduleSet;
 
   async function handleLeave() {
-    if (!window.confirm(`Leave ${league.name}? You can rejoin later with the invite code.`)) return;
+    // Head-to-head mid-season: say what leaving does to the schedule, as the
+    // owner's kick confirmation does (LeagueSettingsPage).
+    const walkovers = seasonLocked && !finished
+      ? " Until you do, your matchups this season go to your opponents as walkovers."
+      : "";
+    if (!window.confirm(`Leave ${league.name}? You can rejoin later with the invite code.${walkovers}`)) return;
     try {
       await data.leaveLeague(league.id);
       navigate("/");
