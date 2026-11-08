@@ -95,9 +95,13 @@ export function SubmitSongPage() {
               <button
                 className="btn"
                 onClick={() => {
+                  // Back to a fresh form for the next slot: nothing selected,
+                  // no comment, an idle Submit button and no leftover error.
                   setSelected(null);
                   setComment("");
                   setSubmitted(false);
+                  setBusy(false);
+                  setSubmitError(null);
                 }}
               >
                 Add another song
@@ -231,6 +235,9 @@ export function SubmitSongPage() {
                     setSubmitted(true);
                   } catch (err) {
                     setSubmitError(err instanceof Error ? err.message : "Couldn't submit your song.");
+                  } finally {
+                    // Success too: in a multi-song league "Add another song"
+                    // brings this form back, and it must not still be busy.
                     setBusy(false);
                   }
                 }}
