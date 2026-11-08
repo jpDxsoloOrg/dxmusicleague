@@ -860,21 +860,24 @@ const CANON_SUBMISSIONS: CanonSubmission[] = [
 ];
 
 // In-memory store of the current user's per-song vote comments (no backend yet).
-// leagueId -> submissionId -> comment. Persists across navigation within the session.
+// roundId -> submissionId -> comment. Persists across navigation within the session.
+// MockClient.castBallot saves here on every standard ballot (an empty map when
+// the ballot has no comments), so a round's entry also means "the current user
+// has voted in this round" — getLeagueDetail's voting panel reads it that way.
 const myVoteComments: Record<string, Record<string, string>> = {};
 
-export function saveVoteComments(leagueId: string, comments: Record<string, string>): void {
+export function saveVoteComments(roundId: string, comments: Record<string, string>): void {
   const cleaned: Record<string, string> = {};
   for (const [id, text] of Object.entries(comments)) {
     if (text.trim()) cleaned[id] = text.trim();
   }
-  myVoteComments[leagueId] = cleaned;
+  myVoteComments[roundId] = cleaned;
 }
 
 // Submissions to vote on: anonymized, excluding the current user's own pick,
 // in submission-id order like the API (`inAnonymousOrder` — the order songs
 // were stored in would say who submitted them; BUG-01).
-export function getVotableSubmissions(_leagueId: string): VotableSubmission[] {
+export function getVotableSubmissions(_roundId: string): VotableSubmission[] {
   return inAnonymousOrder(CANON_SUBMISSIONS.filter((s) => s.submitterId !== currentUser.id))
     .map((s) => ({ id: s.id, track: mockTrack(s.pid, s.title, s.artists, s.album, s.dur) }));
 }
@@ -882,8 +885,8 @@ export function getVotableSubmissions(_leagueId: string): VotableSubmission[] {
 // Results: ranked by points, submitters revealed, with all voter comments
 // (seeded ones plus whatever the current user left while voting).
 // Tie-break: equal points → more distinct voters wins, then title A→Z.
-export function getRoundResults(leagueId: string): RoundResult[] {
-  const mine = myVoteComments[leagueId] ?? {};
+export function getRoundResults(roundId: string): RoundResult[] {
+  const mine = myVoteComments[roundId] ?? {};
   return [...CANON_SUBMISSIONS]
     .sort((a, b) =>
       b.points - a.points ||
@@ -960,9 +963,17 @@ export function getLeagueDetail(leagueId: string): LeagueDetail | undefined {
       total: members.length * allowance,
     });
   } else if (currentRound?.status === "voting") {
+    // Voted: the seeded voters, plus the current user once MockClient.castBallot
+    // has filed their ballot under this round's id. The seeded voters are
+    // canned for every league, so some aren't members here (James and Mia in
+    // Vaporwave Vibes): like the API's "X of N ballots in", count only members
+    // who voted, out of the members.
     const voterIds = new Set(CANON_SUBMISSIONS.flatMap((s) => s.seedComments.map((c) => c.voterId)));
-    if (myVoteComments[leagueId]) voterIds.add(currentUser.id);
-    votingProgress = splitByDone(voterIds, { done: voterIds.size, total: members.length });
+    if (myVoteComments[currentRound.id]) voterIds.add(currentUser.id);
+    votingProgress = splitByDone(voterIds, {
+      done: members.filter((m) => voterIds.has(m.id)).length,
+      total: members.length,
+    });
   }
 
   return {
