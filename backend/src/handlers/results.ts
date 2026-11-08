@@ -21,6 +21,14 @@
 // the timed auto-advance run by league reads, ballots and submissions) bank
 // once between them.
 //
+// What a reveal tallies, in both formats, it reads strongly consistently
+// (BUG-05): `getBallotsForRound(…, { consistent: true })`. In a timed league
+// the last voter's ballot write is what triggers the reveal (the
+// everyone-voted check saw it), and a default — eventually consistent — read
+// right after can be served without it; the reveal would then pin (H2H) or
+// bank (standard) a tally missing an acknowledged vote, for good. GET
+// results, turnout and progress reads keep the default read.
+//
 // Wire compatibility for the live beta: a standard round's results stay the
 // bare `RoundResult[]` array, byte for byte, on both GET results and the
 // reveal response, so an older frontend never breaks against this backend.
@@ -61,10 +69,16 @@ export interface RoundResult {
 /** Tally ballots, rank with the tie-break, attach submitter names and voter
  *  comments. Used by reveal and GET results — a standard (points) round's
  *  results; the format dispatch is in `finalizeReveal` / `roundResults`, so
- *  this stays exactly the original ranked-list computation. */
-export async function computeResults(deps: Deps, roundId: string): Promise<RoundResult[]> {
+ *  this stays exactly the original ranked-list computation. `read.consistent`
+ *  reads the ballots strongly consistently — only the reveal's tally, which
+ *  banks (BUG-05); every other caller keeps the default read. */
+export async function computeResults(
+  deps: Deps,
+  roundId: string,
+  read?: { consistent?: boolean },
+): Promise<RoundResult[]> {
   const subs = await deps.repo.getSubmissionsForRound(roundId);
-  const ballots = await deps.repo.getBallotsForRound(roundId);
+  const ballots = await deps.repo.getBallotsForRound(roundId, read);
   const tally = tallyBallots(ballots.map((b) => ({ allocations: b.allocations, downvotes: b.downvotes })));
 
   const ranked = rankSubmissions(
@@ -136,6 +150,12 @@ export interface FinalizeRevealOptions {
  * transactions can overlap; the repository sends the one refused for that
  * conflict again, so it too resolves as a lost claim, not an error.) A
  * write that fails for any other reason banks nothing and throws.
+ *
+ * The tally reads the ballots strongly consistently (BUG-05): when the last
+ * vote of a timed round triggered this reveal, an eventually consistent read
+ * could miss that ballot and bank points without it, while GET results
+ * (re-tallied live) counted it. The lost-claim answer is GET results' list,
+ * read the default way like GET results.
  */
 export async function finalizeReveal(
   deps: Deps,
@@ -145,7 +165,7 @@ export async function finalizeReveal(
   const league = await deps.repo.getLeague(round.leagueId);
   if (league && leagueFormat(league) === "headToHead") return finalizeHeadToHeadReveal(deps, league, round, options);
 
-  const results = await computeResults(deps, round.id);
+  const results = await computeResults(deps, round.id, { consistent: true });
   const points = revealPointDeltas(results.map((r) => ({ userId: r.submitter.id, points: r.points })));
   const claimed: Round = { ...round, status: "revealed" };
   if (!(await deps.repo.revealPointsRoundOnce(claimed, points))) {
@@ -240,7 +260,11 @@ export type RoundResultsPayload = RoundResult[] | HeadToHeadResults;
  * every frozen participant who isn't a member any more has their song
  * withdrawn and their pair plays as a walkover (domain `departedParticipants`).
  * The ballots are tallied over those matchups, and the outcomes and each
- * player's W/L/D (`matchupRecords`) follow from that tally.
+ * player's W/L/D (`matchupRecords`) follow from that tally. They are read
+ * strongly consistently (BUG-05): the tally is pinned, so a ballot an
+ * eventually consistent read missed — the last vote of a timed round, which
+ * triggered this reveal — would be lost for good. The same read supplies the
+ * payload's voter comments.
  *
  * Exactly once: ONE atomic repository write (`revealRoundOnce`) both claims
  * the round — status `revealed`, plus the departed set (`h2hDeparted`) and
@@ -274,7 +298,7 @@ async function finalizeHeadToHeadReveal(
   const departed = [...departedParticipants(league, { status: "voting" })].sort();
   const [matchups, ballots] = await Promise.all([
     loadRoundMatchups(deps, league, round, { departed }),
-    deps.repo.getBallotsForRound(round.id),
+    deps.repo.getBallotsForRound(round.id, { consistent: true }),
   ]);
   const tally = tallyMatchups(matchups, ballots);
   const settled = resolveMatchups(matchups, tally);

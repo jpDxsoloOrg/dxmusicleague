@@ -245,7 +245,12 @@ Zero-point results bank nothing; negative totals (anti-votes) bank. Of two concu
 (the owner's, or the timed auto-advance run by league reads, ballots and submissions) only the
 one whose write lands banks; the loser re-reads the round strongly consistently and answers the
 same ranked list. A round where nobody scored is just the conditional round write. The payload
-is unchanged: the bare ranked array.
+is unchanged: the bare ranked array. **Consistent tally** (BUG-05): both reveals (this one and
+the head-to-head reveal below) tally from a strongly consistent `Query` of the round's `BALLOT#`
+items (`ConsistentRead`). In a timed league the vote that completes the turnout triggers the
+reveal, and a default (eventually consistent) read right after that write could miss it, banking
+— or, head-to-head, pinning — a tally without an acknowledged vote. GET results and the turnout /
+progress counts keep the default read.
 
 **Head-to-head reveal** (same endpoints; `finalizeReveal` / `domain/rules.ts`
 `settleMatchups`): each matchup is tallied from the ballots' `picks` — a pick counts only in a

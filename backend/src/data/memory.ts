@@ -239,7 +239,8 @@ export class MemoryRepository implements Repository {
     const b = this.ballots.get(`${roundId}/${voterId}`);
     return b ? structuredClone(b) : undefined;
   }
-  async getBallotsForRound(roundId: string): Promise<Ballot[]> {
+  async getBallotsForRound(roundId: string, _opts?: { consistent?: boolean }): Promise<Ballot[]> {
+    // Every read here is strongly consistent; `consistent` changes nothing.
     return [...this.ballots.values()]
       .filter((b) => b.roundId === roundId)
       .map((b) => structuredClone(b));

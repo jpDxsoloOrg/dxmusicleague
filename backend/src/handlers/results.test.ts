@@ -8,9 +8,13 @@
 // the bare array. Head-to-head leagues are driven through the real handlers
 // (create → join → open round 1 = freeze → submit → vote → reveal) over
 // MemoryRepository, with the freeze RNG seeded through deps.
-// BUG-04 (at the bottom): a standard round's points are banked exactly once
-// too — racing reveals, stale reveals, failed writes, a submitter's several
-// results summed into one increment — with the payload unchanged.
+// BUG-04: a standard round's points are banked exactly once too — racing
+// reveals, stale reveals, failed writes, a submitter's several results summed
+// into one increment — with the payload unchanged.
+// BUG-05 (at the bottom): both reveals tally from a strongly consistent ballot
+// read (GET results keeps the default read), so the ballot that completed a
+// timed round's turnout is counted even when a lagging replica would have
+// served the reveal's read without it.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -801,11 +805,14 @@ interface PointsRound {
 /** A standard league of POINTS_PLAYERS (u-me owns it), created and joined
  *  through the handlers, round 1 opened, `songsEach` songs from every player
  *  (the league's submissionsPerPlayer), `antiVotes` anti-votes per voter, and
- *  voting open. */
-async function pointsRoundInVoting({ songsEach = 1, antiVotes = 0 } = {}): Promise<PointsRound> {
+ *  voting open. Timed leagues run 1-day phases. */
+async function pointsRoundInVoting({ songsEach = 1, antiVotes = 0, timed = false } = {}): Promise<PointsRound> {
   const repo = new MemoryRepository(false);
   const deps: Deps = { repo, users: new MemoryUserDirectory() };
-  const lg = await createLeague(deps, OWNER, { name: "Points League", musicProvider: "mock", roundCount: 3 });
+  const lg = await createLeague(deps, OWNER, {
+    name: "Points League", musicProvider: "mock", roundCount: 3,
+    ...(timed ? { progression: "timed" as const, phaseDays: 1 } : {}),
+  });
   for (const p of POINTS_PLAYERS.slice(1)) await joinLeague(deps, p, lg.inviteCode);
   await repo.updateLeagueSettings(lg.id, { ...lg.settings, submissionsPerPlayer: songsEach, downvotePoolSize: antiVotes });
   const round = await createRound(deps, OWNER, lg.id, { theme: "Openers" });
@@ -999,4 +1006,179 @@ test("MemoryRepository.revealPointsRoundOnce: claims an unsettled round and bank
   assert.equal(await repo.revealPointsRoundOnce({ ...open, status: "revealed" }), true);
   assert.equal((await repo.getRound(open.id))!.status, "revealed");
   assert.deepEqual(await rows(), ["u-a -1", "u-c 5", "u-b 6"]);
+});
+
+// ---- Both reveals tally from a strongly consistent ballot read (BUG-05) -------
+// DynamoDB's default Query is eventually consistent: a replica that hasn't
+// applied a ballot write yet can serve it. In a timed league the last voter's
+// castBallot writes their ballot, the everyone-voted check reads the ballots
+// (and may see it), and the reveal reads them again — and, read the default
+// way, may not. Both reveals pin or bank what they tally (the H2H `h2hTally`
+// and its W/L/D; a standard round's points), so they read the ballots strongly
+// consistently. GET results, turnout and progress reads keep the default.
+
+/** `f.deps` with the ballot Query modelled as DynamoDB's eventual consistency
+ *  (MemoryRepository is always consistent): once `voterId`'s ballot is
+ *  written, the first default read of the round's ballots is served fresh
+ *  (the timed advance's turnout check sees the vote), every later default
+ *  read by a replica that hasn't applied that write yet; a strongly
+ *  consistent read always sees it. */
+function laggingReplica(f: { deps: Deps; repo: MemoryRepository }, voterId: string): Deps {
+  let readsSinceWrite = -1; // -1: not written yet
+  return withRepo(f, {
+    putBallot: async (ballot) => {
+      await f.repo.putBallot(ballot);
+      if (ballot.voterId === voterId) readsSinceWrite = 0;
+    },
+    getBallotsForRound: async (roundId, opts) => {
+      const all = await f.repo.getBallotsForRound(roundId, opts);
+      if (readsSinceWrite < 0 || opts?.consistent) return all;
+      readsSinceWrite += 1;
+      return readsSinceWrite === 1 ? all : all.filter((b) => b.voterId !== voterId);
+    },
+  });
+}
+
+/** `f.deps` recording the options of every ballot Query into `reads`. */
+function spyBallotReads(f: { deps: Deps; repo: MemoryRepository }, reads: unknown[]): Deps {
+  return withRepo(f, {
+    getBallotsForRound: async (roundId, opts) => {
+      reads.push(opts);
+      return f.repo.getBallotsForRound(roundId, opts);
+    },
+  });
+}
+
+test("H2H, timed: the ballot that completes the turnout is counted though a lagging replica would serve the reveal's ballot read without it — the pinned tally, GET results and the banked W/L/D all include it", async () => {
+  const { castBallot, getResults } = await import("./voting.ts");
+  const four = PLAYERS.slice(0, 4);
+  const f = await h2hLeague(four, { timed: true });
+  const round = await roundInVoting(f, four);
+  const set = await serverSet(f, round.id);
+  const [m0, m1] = set.matchups as [RoundMatchup, RoundMatchup];
+  // In a 4-player league each pair votes in the other's matchup only: M1's
+  // pair splits M0 (1–1, a draw), M0's pair both pick M1's side a (2–0).
+  const last = m1.b.userId;
+  const deps = laggingReplica(f, last);
+  for (const voter of [m0.a.userId, m0.b.userId]) {
+    await castBallot(deps, voter, round.id, { picks: { [m1.matchupId]: m1.a.submission!.id } });
+  }
+  await castBallot(deps, m1.a.userId, round.id, { picks: { [m0.matchupId]: m0.a.submission!.id } });
+  assert.equal((await f.repo.getRound(round.id))!.status, "voting", "one vote still outstanding");
+
+  assert.deepEqual(await castBallot(deps, last, round.id, { picks: { [m0.matchupId]: m0.b.submission!.id } }), { ok: true });
+  const stored = (await f.repo.getRound(round.id))!;
+  assert.equal(stored.status, "revealed", "the last ballot completed the turnout: the timed round revealed");
+  assert.deepEqual(stored.h2hTally, [
+    { matchupId: m0.matchupId, votesA: 1, votesB: 1 },
+    { matchupId: m1.matchupId, votesA: 2, votesB: 0 },
+  ], "the pinned tally counts the last voter's pick");
+  const payload = h2h(await getResults(f.deps, SPECTATOR, round.id));
+  assert.deepEqual(
+    payload.matchups.map((m) => [m.matchupId, m.a.votes, m.b.votes, m.outcome]),
+    [[m0.matchupId, 1, 1, "draw"], [m1.matchupId, 2, 0, "win"]],
+  );
+  const banked = await records(f);
+  assert.deepEqual(
+    [m0.a, m0.b, m1.a, m1.b].map((p) => banked.get(p.userId)),
+    ["0-0-1", "0-0-1", "1-0-0", "0-1-0"],
+  );
+});
+
+test("standard, timed: the ballot that completes the turnout is counted though a lagging replica would serve the reveal's ballot read without it — the banked points match GET results", async () => {
+  const { castBallot, getResults } = await import("./voting.ts");
+  const f = await pointsRoundInVoting({ timed: true });
+  const song = (p: string) => f.songs.get(p)![0]!;
+  const deps = laggingReplica(f, "u-james");
+  await castBallot(deps, "u-me", f.roundId, { allocations: { [song("u-sarah")]: 5, [song("u-james")]: 5 } });
+  await castBallot(deps, "u-sarah", f.roundId, { allocations: { [song("u-me")]: 5, [song("u-james")]: 5 } });
+  assert.equal((await f.repo.getRound(f.roundId))!.status, "voting", "one vote still outstanding");
+
+  assert.deepEqual(await castBallot(deps, "u-james", f.roundId, { allocations: { [song("u-me")]: 5, [song("u-sarah")]: 5 } }), { ok: true });
+  assert.equal((await f.repo.getRound(f.roundId))!.status, "revealed", "the last ballot completed the turnout: the timed round revealed");
+  assert.deepEqual(await pointsOf(f), { "u-me": 10, "u-sarah": 10, "u-james": 10 }, "the banked points count the last voter's ballot");
+  const live = await getResults(f.deps, SPECTATOR, f.roundId);
+  assert.ok(Array.isArray(live));
+  assert.deepEqual(
+    Object.fromEntries(live.map((r) => [r.submitter.id, r.points])),
+    await pointsOf(f),
+    "the standings and the results agree",
+  );
+});
+
+test("both reveals read the round's ballots strongly consistently — the owner's reveal, a timed auto-reveal and opening voting on a round nobody can vote in; GET results, the turnout check and a lost claim's answer keep the default read; payloads unchanged", async () => {
+  const { castBallot, revealRound, getResults } = await import("./voting.ts");
+  const strong = { consistent: true };
+
+  // Head-to-head, the owner's reveal: one ballot read, the tally's.
+  const four = PLAYERS.slice(0, 4);
+  const f = await h2hLeague(four);
+  const round = await roundInVoting(f, four);
+  const stale = structuredClone(round);
+  await voteByPattern(f, round.id, four, ["aa", "ab"]);
+  let reads: unknown[] = [];
+  const revealed = h2h(await revealRound(spyBallotReads(f, reads), OWNER, round.id));
+  assert.deepEqual(reads, [strong], "the H2H reveal tallies (and takes its comments) from one consistent read");
+  reads = [];
+  assert.deepEqual(await getResults(spyBallotReads(f, reads), SPECTATOR, round.id), revealed);
+  assert.deepEqual(reads, [undefined], "GET results keeps the default read");
+  reads = [];
+  assert.deepEqual(await finalizeReveal(spyBallotReads(f, reads), stale), revealed);
+  assert.deepEqual(reads, [strong, undefined], "a lost claim tallied consistently, then answers as GET results does");
+
+  // Head-to-head, timed: the turnout check reads the default way, the reveal consistently.
+  const timed = await h2hLeague(four, { timed: true });
+  const timedRound = await roundInVoting(timed, four);
+  const set = await serverSet(timed, timedRound.id);
+  const voters = [...four].sort();
+  for (const voter of voters.slice(0, 3)) {
+    await castBallot(timed.deps, voter, timedRound.id, { picks: picksFor(set, voter, () => "a") });
+  }
+  reads = [];
+  await castBallot(spyBallotReads(timed, reads), voters[3]!, timedRound.id, { picks: picksFor(set, voters[3]!, () => "a") });
+  assert.equal((await timed.repo.getRound(timedRound.id))!.status, "revealed");
+  assert.deepEqual(reads, [undefined, strong], "turnout: default; the reveal's tally: consistent");
+
+  // Head-to-head, opening voting on a round nobody can vote in (every pair a walkover).
+  const w = await h2hLeague(four);
+  const walkovers = await createRound(w.deps, OWNER, w.leagueId, { theme: "Openers" });
+  await updateRound(w.deps, OWNER, w.leagueId, walkovers.id, { status: "submitting" });
+  const plan = await serverSet(w, walkovers.id);
+  for (const m of plan.matchups) {
+    await submitSong(w.deps, m.a.userId, walkovers.id, {
+      track: { id: `t-${m.a.userId}`, provider: "mock", providerTrackId: `t-${m.a.userId}`, title: `${m.a.userId} anthem`, artists: [`Artist ${m.a.userId}`] },
+    });
+  }
+  await updateRound(w.deps, OWNER, w.leagueId, walkovers.id, { status: "previewing" });
+  reads = [];
+  const opened = await updateRound(spyBallotReads(w, reads), OWNER, w.leagueId, walkovers.id, { status: "voting" });
+  assert.equal(opened.status, "revealed");
+  assert.deepEqual(reads.at(-1), strong, "the reveal's tally is the last ballot read, and consistent");
+  assert.ok(reads.slice(0, -1).every((opts) => opts === undefined), "every read before it (turnout) keeps the default");
+
+  // Standard, the owner's reveal: the tally's read is consistent; the payload is unchanged.
+  const p = await pointsRoundInVoting();
+  const pStale = (await p.repo.getRound(p.roundId))!;
+  await twoBallots(p);
+  const expected = JSON.stringify(await computeResults(p.deps, p.roundId));
+  reads = [];
+  const answer = await revealRound(spyBallotReads(p, reads), OWNER, p.roundId);
+  assert.deepEqual(reads, [strong], "the standard reveal tallies from one consistent read");
+  assert.equal(JSON.stringify(answer), expected, "byte-identical ranked list");
+  reads = [];
+  assert.equal(JSON.stringify(await getResults(spyBallotReads(p, reads), SPECTATOR, p.roundId)), expected);
+  assert.deepEqual(reads, [undefined], "GET results keeps the default read");
+  reads = [];
+  assert.equal(JSON.stringify(await finalizeReveal(spyBallotReads(p, reads), pStale)), expected);
+  assert.deepEqual(reads, [strong, undefined], "a lost claim tallied consistently, then answers as GET results does");
+
+  // Standard, timed: the turnout check reads the default way, the reveal consistently.
+  const pt = await pointsRoundInVoting({ timed: true });
+  const song = (who: string) => pt.songs.get(who)![0]!;
+  await castBallot(pt.deps, "u-me", pt.roundId, { allocations: { [song("u-sarah")]: 5, [song("u-james")]: 5 } });
+  await castBallot(pt.deps, "u-sarah", pt.roundId, { allocations: { [song("u-me")]: 5, [song("u-james")]: 5 } });
+  reads = [];
+  await castBallot(spyBallotReads(pt, reads), "u-james", pt.roundId, { allocations: { [song("u-me")]: 5, [song("u-sarah")]: 5 } });
+  assert.equal((await pt.repo.getRound(pt.roundId))!.status, "revealed");
+  assert.deepEqual(reads, [undefined, strong], "turnout: default; the reveal's tally: consistent");
 });

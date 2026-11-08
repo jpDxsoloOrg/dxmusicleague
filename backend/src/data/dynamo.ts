@@ -621,12 +621,16 @@ export class DynamoRepository implements Repository {
       castAt: it.castAt as string,
     };
   }
-  async getBallotsForRound(roundId: string): Promise<Ballot[]> {
+  async getBallotsForRound(roundId: string, opts?: { consistent?: boolean }): Promise<Ballot[]> {
+    // Strongly consistent only when asked (both reveals' tally — BUG-05: a
+    // default read can miss the ballot that was just written and completed
+    // the turnout); every other read keeps the default, unchanged.
     const res = await this.doc.send(
       new QueryCommand({
         TableName: this.tableName,
         KeyConditionExpression: "PK = :pk AND begins_with(SK, :b)",
         ExpressionAttributeValues: { ":pk": `ROUND#${roundId}`, ":b": "BALLOT#" },
+        ...(opts?.consistent ? { ConsistentRead: true } : {}),
       }),
     );
     return (res.Items ?? []).map((it) => ({

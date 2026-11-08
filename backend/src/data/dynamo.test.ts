@@ -15,7 +15,8 @@
 // player (a submitter's results summed), and its fallback past the cap; and
 // how both reveals' settle-guarded writes survive DynamoDB's transaction
 // conflicts (two overlapping reveals: the later one is sent again and loses
-// the claim cleanly), modelled by an in-flight-transaction fake.
+// the claim cleanly), modelled by an in-flight-transaction fake; and the
+// strongly consistent ballot Query both reveals tally from (BUG-05).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -513,6 +514,36 @@ test("an H2H ballot's picks round-trip on the same BALLOT#<voterId> item; a poin
   await repo.putBallot({ ...h2h, picks: { "lg-1~0001~M0": "sub-b" }, castAt: "2026-11-07T13:00:00.000Z" });
   assert.deepEqual((await repo.getBallot("lg-1~0001", "u-me"))?.picks, { "lg-1~0001~M0": "sub-b" });
   assert.equal((await repo.getBallotsForRound("lg-1~0001")).length, 2);
+});
+
+test("getBallotsForRound({ consistent: true }) is a strongly consistent Query of the round's BALLOT# items (BUG-05: what both reveals tally); the default read is unchanged", async () => {
+  const { repo, sent } = fakeRepo();
+  const ballot = (voterId: string): Ballot => ({
+    roundId: "lg-1~0001", voterId, allocations: { "sub-a": 10 }, comments: {}, castAt: "2026-11-07T12:00:00.000Z",
+  });
+  await repo.putBallot(ballot("u-me"));
+  await repo.putBallot(ballot("u-you"));
+  await repo.putBallot({ ...ballot("u-me"), roundId: "lg-1~0002" }); // another round's ballot
+  sent.length = 0;
+  const plain = await repo.getBallotsForRound("lg-1~0001");
+  const strong = await repo.getBallotsForRound("lg-1~0001", { consistent: true });
+  const unasked = await repo.getBallotsForRound("lg-1~0001", { consistent: false });
+  const [plainCmd, strongCmd, unaskedCmd] = sent as [QueryCommand, QueryCommand, QueryCommand];
+  assert.equal(sent.length, 3);
+  for (const cmd of [plainCmd, strongCmd, unaskedCmd]) {
+    assert.ok(cmd instanceof QueryCommand);
+    assert.equal(cmd.input.KeyConditionExpression, "PK = :pk AND begins_with(SK, :b)");
+    assert.deepEqual(cmd.input.ExpressionAttributeValues, { ":pk": "ROUND#lg-1~0001", ":b": "BALLOT#" });
+  }
+  assert.equal("ConsistentRead" in plainCmd.input, false);
+  assert.equal(strongCmd.input.ConsistentRead, true);
+  assert.equal("ConsistentRead" in unaskedCmd.input, false, "only `consistent: true` asks for it");
+  // Same mapping either way.
+  const json = (v: unknown) => JSON.parse(JSON.stringify(v)) as unknown;
+  const voters = (bs: Ballot[]) => bs.map((b) => b.voterId).sort();
+  assert.deepEqual(voters(plain), ["u-me", "u-you"]);
+  assert.deepEqual(json(strong), json(plain));
+  assert.deepEqual(json(unasked), json(plain));
 });
 
 // ---- Rounds: the once-only head-to-head reveal (HTH-07) ----

@@ -132,7 +132,11 @@ export interface Repository {
   // ---- Ballots ----
   putBallot(ballot: Ballot): Promise<void>;
   getBallot(roundId: string, voterId: string): Promise<Ballot | undefined>;
-  getBallotsForRound(roundId: string): Promise<Ballot[]>;
+  /** `consistent`: a strongly consistent read — what both reveals tally
+   *  (BUG-05), so the ballot whose write let a timed round reveal (it
+   *  completed the turnout) is counted. Turnout, progress and results reads
+   *  keep the default. */
+  getBallotsForRound(roundId: string, opts?: { consistent?: boolean }): Promise<Ballot[]>;
 
   // ---- Standings (running season totals) ----
   /** Every standing row in the league (ex-members included — the board
