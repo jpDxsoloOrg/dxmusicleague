@@ -19,7 +19,10 @@ export function JoinLeaguePage() {
     setError(null);
     const result = await data.joinLeague(raw);
     if (result.ok) {
-      navigate(`/leagues/${result.league.id}`);
+      // Joined, or already in it (`result.alreadyMember`: a re-opened invite
+      // link, your own code) — open the league either way. Replace the join
+      // URL so Back doesn't land on it and re-run the join.
+      navigate(`/leagues/${result.league.id}`, { replace: true });
     } else {
       setError(result.error);
       setBusy(false);

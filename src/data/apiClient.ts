@@ -5,6 +5,7 @@
 import type { League, Round, RoundStatus, Submission } from "../domain/types";
 import type { Track } from "../music";
 import { auth } from "../auth/config";
+import { alreadyMemberLeagueId } from "../../backend/src/domain/errors.ts";
 import type { CreateRoundInput, DataClient, EditableLeagueSettings } from "./client";
 import type {
   BrowseLeagueSummary,
@@ -25,9 +26,13 @@ import type {
 
 class ApiRequestError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** The parsed error body — `{ error }`, plus machine-readable fields such
+   *  as `code` on some errors — or null when it wasn't JSON. */
+  body: unknown;
+  constructor(status: number, message: string, body: unknown = null) {
     super(message);
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -57,7 +62,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   const body = await res.json().catch(() => null);
-  if (!res.ok) throw new ApiRequestError(res.status, body?.error ?? `Request failed (${res.status})`);
+  if (!res.ok) throw new ApiRequestError(res.status, body?.error ?? `Request failed (${res.status})`, body);
   return body as T;
 }
 
@@ -126,6 +131,11 @@ export class ApiClient implements DataClient {
       });
       return { ok: true, league };
     } catch (err) {
+      // Already in that league (a re-opened invite link, your own code): the
+      // 409 names it, so the page opens it instead of showing a dead end. A
+      // server without the marker falls through to its message, as before.
+      const memberOf = err instanceof ApiRequestError && err.status === 409 ? alreadyMemberLeagueId(err.body) : undefined;
+      if (memberOf) return { ok: true, league: { id: memberOf }, alreadyMember: true };
       const message = err instanceof ApiRequestError ? err.message : "Couldn't join that league.";
       return { ok: false, error: message };
     }

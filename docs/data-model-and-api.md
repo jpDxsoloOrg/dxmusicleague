@@ -130,7 +130,8 @@ afresh at its own round 1). Standard leagues never get either attribute.
 
 All routes require a valid Cognito JWT. `:me` denotes the caller's `sub`. Errors return
 `{ "error": "<message>" }` with a 4xx status; the join flow's messages match
-[`joinLeague`](../src/data/mock.ts) today.
+[`joinLeague`](../src/data/mock.ts) today. A few errors add machine-readable fields beside
+`error` (a `code`, plus whatever it names); clients branch on `code`, never on the message.
 
 ### Leagues
 
@@ -145,7 +146,8 @@ All routes require a valid Cognito JWT. `:me` denotes the caller's `sub`. Errors
   the owner, and a fresh invite code minted (write League META + Membership + Invite items in
   one `TransactWriteItems`).
 - **Join**: point-get `INVITE#<code.toUpperCase()>`; 404 → "That code doesn't match any
-  league."; already a member → "You're already a member of {name}."; a frozen head-to-head
+  league."; already a member → 409 "You're already a member of {name}." with
+  `code: "already-member"` and the `leagueId` (the client opens that league); a frozen head-to-head
   season → 409 "Season locked — …" (see [Head-to-head season freeze](#head-to-head-season-freeze));
   else write Membership + Standing(0) and return the league.
 - **Summary** fields (`currentRound`, `totalRounds`, `completionPct`, `members`) are computed

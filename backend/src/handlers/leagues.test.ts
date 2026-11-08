@@ -7,7 +7,7 @@ import { MemoryRepository, MemoryUserDirectory } from "../data/memory.ts";
 import type { Deps } from "./leagues.ts";
 import { claimPublicSpot, createLeague, deleteLeague, getLeagueDetail, getPublicLeaguePreview, joinLeague, leaveLeague, listBrowseLeagues, listMyLeagues, listOpenPublicLeagues, rematchLeague, toLeagueView, updateLeagueSettings } from "./leagues.ts";
 import { createRound, updateRound } from "./rounds.ts";
-import { ApiError } from "../domain/errors.ts";
+import { ApiError, errorBody } from "../domain/errors.ts";
 import { SEASON_LOCKED_MESSAGE } from "../domain/freeze.ts";
 import type { RandomInt } from "../domain/freeze.ts";
 import { DEFAULT_LEAGUE_SETTINGS, H2H_FORCED_SETTINGS, applyFormatSettings, leagueFormat } from "../domain/types.ts";
@@ -2095,4 +2095,82 @@ test("BUG-13: the detail's rematch link checks the rematch strongly consistent �
   await deleteLeague(deps, "u-owner", first.id);
   repo.replica.set(first.id, copy); // …but hasn't seen the delete yet
   assert.equal("rematchLeagueId" in (await getLeagueDetail(deps, "u-owner", "s1")).league, false, "no link to a deleted league");
+});
+
+// ---- join by code when already a member (IMP-03) ----
+// The invite path's "already a member" 409 carries a machine-readable marker
+// plus the league id, so a client re-opening an invite link for a league the
+// caller is already in can go straight to that league instead of showing a
+// dead-end error. Its message stays word-for-word (older clients show it);
+// every other join refusal stays a plain `{ error }`.
+
+/** The rejection of `attempt`, for asserting on its fields. */
+async function rejectionOf(attempt: Promise<unknown>): Promise<ApiError> {
+  const err = await attempt.then(
+    () => assert.fail("expected the call to be refused"),
+    (e: unknown) => e,
+  );
+  assert.ok(err instanceof ApiError, `expected an ApiError, got ${String(err)}`);
+  return err;
+}
+
+test("join by code: an existing member's 409 carries code 'already-member' and the league id (owner too, any code case)", async () => {
+  const deps = await depsWith([league({ id: "lg", name: "Synth Club", visibility: "private", memberIds: ["u-owner", "u-me"] })]);
+  await deps.repo.putInvite("C-LG", "lg");
+
+  for (const [caller, code] of [["u-me", "C-LG"], ["u-owner", " c-lg "]] as const) {
+    const err = await rejectionOf(joinLeague(deps, caller, code));
+    assert.equal(err.statusCode, 409, caller);
+    assert.equal(err.message, "You're already a member of Synth Club.", `${caller}: message text unchanged`);
+    assert.deepEqual(err.details, { code: "already-member", leagueId: "lg" }, caller);
+  }
+  // Through the real route table (what both HTTP adapters run) as well.
+  const viaRoute = await rejectionOf(callRoute(deps, "POST", "/leagues/join", "u-me", { code: "c-lg" }));
+  assert.deepEqual(viaRoute.details, { code: "already-member", leagueId: "lg" });
+  // …and the JSON body the adapters send: the old `error` plus the marker.
+  assert.deepEqual(errorBody(viaRoute), { error: "You're already a member of Synth Club.", code: "already-member", leagueId: "lg" });
+  assert.deepEqual((await deps.repo.getLeague("lg"))?.memberIds, ["u-owner", "u-me"], "nothing written");
+});
+
+test("join by code: a frozen H2H league's member still gets the already-member marker, not 'season locked'", async () => {
+  const deps = await h2hDeps();
+  await openRound1(deps);
+  const err = await rejectionOf(joinLeague(deps, "u-2", "duel-1"));
+  assert.equal(err.statusCode, 409);
+  assert.match(err.message, /already a member/);
+  assert.deepEqual(err.details, { code: "already-member", leagueId: "h2h" });
+});
+
+test("join and claim refusals other than already-member carry no marker: bad code, empty code, season locked, full, too late", async () => {
+  // Bad + empty code (invite path).
+  const deps = await depsWith([league({ id: "lg", name: "L", visibility: "private" })]);
+  const bad = await rejectionOf(joinLeague(deps, "u-me", "NOPE-0"));
+  assert.deepEqual([bad.statusCode, bad.message, bad.details], [404, "That code doesn't match any league.", undefined]);
+  const empty = await rejectionOf(joinLeague(deps, "u-me", "   "));
+  assert.deepEqual([empty.statusCode, empty.message, empty.details], [400, "Enter an invite code to join.", undefined]);
+  assert.deepEqual(errorBody(bad), { error: "That code doesn't match any league." }, "body stays exactly { error }");
+
+  // Season locked (invite path and claim path).
+  const h2h = await h2hDeps({ visibility: "public", maxMembers: 10 });
+  await openRound1(h2h);
+  for (const attempt of [joinLeague(h2h, "u-late", "DUEL-1"), claimPublicSpot(h2h, "u-late", "h2h")]) {
+    const locked = await rejectionOf(attempt);
+    assert.deepEqual([locked.statusCode, locked.message, locked.details], [409, SEASON_LOCKED_MESSAGE, undefined]);
+    assert.deepEqual(errorBody(locked), { error: SEASON_LOCKED_MESSAGE });
+  }
+
+  // Full and too late (the claim path; the invite path bypasses both).
+  const pub = await depsWith(
+    [
+      league({ id: "full", name: "Full", visibility: "public", memberIds: ["u-owner", "u-2"], maxMembers: 2 }),
+      league({ id: "late", name: "Late", visibility: "public" }),
+    ],
+    [{ id: "late~1", leagueId: "late", index: 1, theme: "Go", status: "voting" }],
+  );
+  const full = await rejectionOf(claimPublicSpot(pub, "u-me", "full"));
+  assert.deepEqual([full.statusCode, full.message, full.details], [409, "This league is full.", undefined]);
+  const late = await rejectionOf(claimPublicSpot(pub, "u-me", "late"));
+  assert.equal(late.statusCode, 409);
+  assert.match(late.message, /too late to join/);
+  assert.equal(late.details, undefined);
 });

@@ -6,7 +6,7 @@
 import { randomInt, randomUUID } from "node:crypto";
 import type { League, LeagueFormat, LeagueSettings, LeagueVisibility, RoundProgression, Round } from "../domain/types.ts";
 import { DEFAULT_LEAGUE_SETTINGS, H2H_FORCED_SETTINGS, LEAGUE_FORMATS, applyFormatSettings, leagueFormat } from "../domain/types.ts";
-import { badRequest, conflict, forbidden, notFound } from "../domain/errors.ts";
+import { alreadyMember, badRequest, conflict, forbidden, notFound } from "../domain/errors.ts";
 import { sortStandings } from "../domain/standings.ts";
 import { SEASON_LOCKED_MESSAGE, lockedOutOfSeason, seasonLocked } from "../domain/freeze.ts";
 import type { RandomInt } from "../domain/freeze.ts";
@@ -654,7 +654,9 @@ export async function joinLeague(deps: Deps, caller: string, rawCode: string): P
   const leagueId = await deps.repo.getLeagueIdForInvite(code);
   const league = leagueId ? await deps.repo.getLeague(leagueId) : undefined;
   if (!league) throw notFound("That code doesn't match any league.");
-  if (league.memberIds.includes(caller)) throw conflict(`You're already a member of ${league.name}.`);
+  // Re-opening an invite link for a league you're in: a 409 whose body also
+  // names the league (code "already-member"), so the client can open it.
+  if (league.memberIds.includes(caller)) throw alreadyMember(league);
   // The invite path deliberately bypasses the join window and the player cap
   // (standard leagues: an owner can always bring a friend in). Head-to-head
   // is the exception: once round 1 opens the season is frozen, and a newcomer

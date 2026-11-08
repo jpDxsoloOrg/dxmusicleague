@@ -449,8 +449,13 @@ export function createLeague(input: CreateLeagueInput): League {
   return league;
 }
 
+/** Outcome of joining by invite code or claiming a spot. `alreadyMember`
+ *  (join by code only): the caller was already in the league, so nothing
+ *  changed and only its id is known — all the API's already-member 409
+ *  carries. Pages open `league.id` either way. */
 export type JoinResult =
-  | { ok: true; league: League }
+  | { ok: true; league: League; alreadyMember?: false }
+  | { ok: true; league: Pick<League, "id">; alreadyMember: true }
   | { ok: false; error: string };
 
 /** Join the current user to a league by invite code (case-insensitive). */
@@ -460,9 +465,9 @@ export function joinLeague(rawCode: string): JoinResult {
   const leagueId = inviteCodes[code];
   const league = leagues.find((lg) => lg.id === leagueId);
   if (!league) return { ok: false, error: "That code doesn't match any league." };
-  if (league.memberIds.includes(currentUser.id)) {
-    return { ok: false, error: `You're already a member of ${league.name}.` };
-  }
+  // Already in it (a re-opened invite link, your own code): mirrors the API's
+  // already-member 409, which ApiClient maps to this same result.
+  if (league.memberIds.includes(currentUser.id)) return { ok: true, league: { id: league.id }, alreadyMember: true };
   // Invite codes bypass the join window and the cap — except a head-to-head
   // season that has frozen (round 1 opened): mirrors the backend's lock.
   if (lockedOutOfSeason(seasonView(league), currentUser.id)) return { ok: false, error: SEASON_LOCKED_MESSAGE };
