@@ -631,8 +631,9 @@ export async function getLeagueDetail(deps: Deps, caller: string, leagueId: stri
     }
   }
 
+  const view = await withRematchLink(deps, toLeagueView(league), caller);
   return {
-    league: isMember ? toLeagueView(league) : { ...toLeagueView(league), inviteCode: "" },
+    league: isMember ? view : { ...view, inviteCode: "" },
     rounds,
     currentRound,
     // The owner's planned count; fall back to created rounds for legacy leagues.
@@ -841,6 +842,20 @@ function rematchName(name: string): string {
  *  0–0–0 record in head-to-head). The old league stays readable (results,
  *  standings) but closed.
  *
+ *  One live rematch per league (BUG-13): the old league records the league
+ *  it spawned (`rematchLeagueId`), and asking again — a second tab, a stale
+ *  page, a retried or concurrent POST — returns that league (200) instead of
+ *  enrolling everyone in yet another copy. Only once that league has been
+ *  deleted does a rematch create a new one, replacing the pointer. Race-safe
+ *  by create-then-claim: the new league is written first, then claimed with
+ *  the repo's conditional `setRematchPointer`; a request whose claim loses
+ *  deletes its league again and returns the winner's. (Claiming first would
+ *  let a concurrent request see a pointer to a league not written yet, take
+ *  it for a deleted one and overwrite it.) The standing seeds and invite
+ *  code are written only once the claim has landed, so a losing request
+ *  has nothing but the league itself to remove; should the winner fail
+ *  part-way through them, the owner's retry finishes them.
+ *
  *  Head-to-head: the clone starts UN-frozen. Its fields are copied one by one
  *  and `h2hParticipants` / `h2hSalt` deliberately are not, so the clone takes
  *  players again until its own round 1 opens, then freezes with its own
@@ -851,6 +866,14 @@ export async function rematchLeague(deps: Deps, caller: string, leagueId: string
   const rounds = await deps.repo.getRoundsForLeague(leagueId);
   if (!isLeagueFinished(league, rounds)) {
     throw conflict("You can start a rematch once every round has been played.");
+  }
+
+  // Already rematched, and that league still exists: it's the answer —
+  // finished first if the request that made it died part-way (see repairRematch).
+  const existing = await liveRematch(deps, league);
+  if (existing) {
+    await repairRematch(deps, existing);
+    return toLeagueView(existing);
   }
 
   const name = rematchName(league.name);
@@ -874,18 +897,120 @@ export async function rematchLeague(deps: Deps, caller: string, leagueId: string
     // Timed leagues restart their clock now; the old startAt is history.
     startAt: league.progression === "timed" ? new Date().toISOString() : undefined,
     phaseDays: league.phaseDays,
-    // h2hParticipants / h2hSalt: never copied (see above).
+    // h2hParticipants / h2hSalt: never copied (see above). Nor is
+    // rematchLeagueId: the clone has had no rematch of its own yet.
   };
   await deps.repo.createLeague(next);
-  await deps.repo.putInvite(next.inviteCode, next.id);
-  for (const memberId of next.memberIds) {
-    await deps.repo.addStandingPoints(next.id, memberId, 0); // seed everyone at 0
+  // Claim it as THE rematch; a request that claimed first wins (ours is gone).
+  // A pointer read just now whose league is gone is the one we may replace.
+  // Only then the standings and invite, so a loser has just the league to remove.
+  const winner = await claimRematch(deps, leagueId, next, league.rematchLeagueId);
+  if (winner) return toLeagueView(winner);
+  await seedRematch(deps, next);
+  return toLeagueView(next);
+}
+
+/** A claimed rematch's remaining writes: everyone's 0-point standing row,
+ *  then its invite code. Every one of them is idempotent (an ADD of 0, a
+ *  plain Put), so running it again is harmless — and the invite goes LAST:
+ *  a rematch whose invite row exists is complete, which is how
+ *  `repairRematch` tells one whose request died part-way (after the claim)
+ *  from a whole one with a single read. */
+async function seedRematch(deps: Deps, rematch: League): Promise<void> {
+  for (const memberId of rematch.memberIds) {
+    await deps.repo.addStandingPoints(rematch.id, memberId, 0); // seed everyone at 0
     // H2H: an explicit 0–0–0 record on the fresh row too (reads would default
     // it anyway; this keeps the clone's rows complete). Standard rematches
     // write exactly what they always did.
-    if (format === "headToHead") {
-      await deps.repo.addStandingRecord(next.id, memberId, { wins: 0, losses: 0, draws: 0 });
+    if (leagueFormat(rematch) === "headToHead") {
+      await deps.repo.addStandingRecord(rematch.id, memberId, { wins: 0, losses: 0, draws: 0 });
     }
   }
-  return toLeagueView(next);
+  await deps.repo.putInvite(rematch.inviteCode, rematch.id);
+}
+
+/** The idempotent answer's safety net: if the request that claimed this
+ *  rematch failed after its claim landed (before or during `seedRematch`),
+ *  the owner's retry lands here and finishes the job instead of handing back
+ *  a league nobody can join with its code and that has no standing rows. A
+ *  whole rematch costs one read (its invite row, written last); should that
+ *  read lag a rematch made a moment ago, the idempotent writes just run
+ *  again. */
+async function repairRematch(deps: Deps, rematch: League): Promise<void> {
+  if ((await deps.repo.getLeagueIdForInvite(rematch.inviteCode)) === rematch.id) return;
+  await seedRematch(deps, rematch);
+}
+
+/** How many times a rematch whose claim lost re-reads the pointer and, finding
+ *  its league deleted too, claims over it again before giving up (409). Each
+ *  retry needs another rematch to have been deleted in between, so more than
+ *  one is already unlikely. */
+const REMATCH_CLAIM_ATTEMPTS = 3;
+
+/** The league `league` was rematched into, if it has been and that league
+ *  still exists. Read strongly consistent: the rematch league is written
+ *  before the pointer to it, so a consistent read finds it unless it was
+ *  deleted — whereas an eventually consistent one could miss a rematch made
+ *  a moment ago, and the caller would then replace a live pointer. */
+async function liveRematch(deps: Deps, league: League): Promise<League | undefined> {
+  if (!league.rematchLeagueId) return undefined;
+  return deps.repo.getLeague(league.rematchLeagueId, { consistent: true });
+}
+
+/** Claim `next` (already written) as `leagueId`'s rematch, replacing at most
+ *  `stale` — a pointer read earlier whose league is gone. Resolves
+ *  `undefined` once the claim lands. When another rematch claimed first,
+ *  `next` is deleted and that rematch's league is returned instead. A lost
+ *  claim re-reads the pointer strongly consistent (the first read may have
+ *  been stale either way): `next` itself there means the claim landed after
+ *  all; another live league is the winner; a deleted one is claimed over
+ *  again. Whatever else ends the attempt before a claim has landed — the
+ *  claim or one of those reads erroring, a 404/409 — deletes `next` too and
+ *  propagates; should the claim have landed after all (its response lost),
+ *  the pointer dangles, which every reader treats as "no rematch". */
+async function claimRematch(deps: Deps, leagueId: string, next: League, stale: string | undefined): Promise<League | undefined> {
+  // Best effort: the winner to return, or the error to report, matters more
+  // than a failed clean-up — which is logged with the orphan's id instead.
+  const discard = () =>
+    deps.repo.deleteLeague(next.id, { consistent: true }).catch((err: unknown) => {
+      console.error(`Couldn't discard the losing rematch league ${next.id}:`, err);
+    });
+  let replaces = stale;
+  try {
+    for (let attempt = 1; ; attempt++) {
+      if (await deps.repo.setRematchPointer(leagueId, next.id, replaces)) return undefined;
+
+      const current = await deps.repo.getLeague(leagueId, { consistent: true });
+      // Our own pointer: the write did land — an SDK retry of it (the first
+      // response lost) then failed its own write-once condition.
+      if (current?.rematchLeagueId === next.id) return undefined;
+      const winner = current && (await liveRematch(deps, current));
+      if (winner) {
+        await discard();
+        return winner;
+      }
+      if (!current) throw notFound("That league doesn't exist.");
+      if (attempt >= REMATCH_CLAIM_ATTEMPTS) throw conflict("Couldn't start the rematch just now — try again.");
+      replaces = current.rematchLeagueId; // points at a deleted league too: claim over that one
+    }
+  } catch (err) {
+    await discard(); // unclaimed as far as we know: it mustn't linger on members' dashboards
+    throw err;
+  }
+}
+
+/** The league detail's copy of the rematch pointer (BUG-13): kept only while
+ *  the rematch league exists and the caller is one of its members — what the
+ *  overview's "Go to the rematch" link needs. A pointer to a deleted league
+ *  is dropped (the owner is offered "Run it back" again), as is one to a
+ *  rematch the caller isn't in (they left it, or are spectating). Read
+ *  strongly consistent, like `liveRematch`: one extra read, and only for a
+ *  league that has a pointer, so a rematch made or deleted a moment ago is
+ *  never missed or still linked. */
+async function withRematchLink(deps: Deps, view: League, caller: string): Promise<League> {
+  if (!view.rematchLeagueId) return view;
+  const rematch = await deps.repo.getLeague(view.rematchLeagueId, { consistent: true });
+  if (rematch?.memberIds.includes(caller)) return view;
+  const { rematchLeagueId: _hidden, ...rest } = view;
+  return rest;
 }

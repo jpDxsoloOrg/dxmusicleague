@@ -128,6 +128,11 @@ export function RoundOverviewPage() {
   // the players already in it.
   const scheduleSet = !headToHead || h2hScheduleSet(rounds);
   const seasonLocked = headToHead && scheduleSet;
+  // A finished league's one live rematch (BUG-13). The detail carries it only
+  // while that league exists and the viewer plays in it (checked with a
+  // strongly consistent read), so it's safe to link; without it the owner
+  // gets "Run it back" (again, if the rematch was deleted).
+  const rematchId = league.rematchLeagueId;
 
   async function handleLeave() {
     // Head-to-head mid-season: say what leaving does to the schedule, as the
@@ -282,11 +287,19 @@ export function RoundOverviewPage() {
               </h2>
               <p className="hero-desc">
                 All {totalRounds} rounds have been played and the final standings are locked in.
-                {isOwner ? " Fancy another run with the same crew?" : ""}
+                {rematchId
+                  ? " A rematch is underway — same settings, fresh standings."
+                  : isOwner
+                    ? " Fancy another run with the same crew?"
+                    : ""}
               </p>
               <div className="hero-footer">
                 <Link to={`/leagues/${league.id}/reveal`} className="btn hero-cta">View final results</Link>
-                {isOwner && <RematchButton leagueId={league.id} />}
+                {rematchId ? (
+                  <Link to={`/leagues/${rematchId}`} className="btn btn-primary hero-cta">Go to the rematch →</Link>
+                ) : (
+                  isOwner && <RematchButton leagueId={league.id} />
+                )}
               </div>
             </section>
           ) : currentRound ? (
@@ -399,8 +412,11 @@ export function RoundOverviewPage() {
   );
 }
 
-// Owner-only, shown once the league finishes: creates a fresh league with the
-// same players + settings (standings reset) and jumps straight to it.
+// Owner-only, shown once the league finishes and has no live rematch yet:
+// creates a fresh league with the same players + settings (standings reset)
+// and jumps straight to it. Clicked again from a stale page or a second tab,
+// the API answers with the rematch that already exists (BUG-13), so it lands
+// there instead of creating another.
 function RematchButton({ leagueId }: { leagueId: string }) {
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);

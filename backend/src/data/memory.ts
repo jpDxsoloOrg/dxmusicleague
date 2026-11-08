@@ -130,7 +130,19 @@ export class MemoryRepository implements Repository {
     lg.roundCount = freeze.roundCount;
     return true;
   }
-  async deleteLeague(leagueId: string): Promise<void> {
+  async setRematchPointer(leagueId: string, rematchId: string, replacesStale?: string): Promise<boolean> {
+    // Same contract as DynamoRepository's conditional write: lands while no
+    // pointer is set, or over exactly the stale one the caller names; never
+    // on a league that no longer exists. Check and write are synchronous, so
+    // of two racing rematches only the first claim lands.
+    const lg = this.leagues.get(leagueId);
+    if (!lg) return false;
+    if (lg.rematchLeagueId !== undefined && lg.rematchLeagueId !== replacesStale) return false;
+    lg.rematchLeagueId = rematchId;
+    return true;
+  }
+  async deleteLeague(leagueId: string, _opts?: { consistent?: boolean }): Promise<void> {
+    // Every read here is strongly consistent; `consistent` changes nothing.
     const lg = this.leagues.get(leagueId);
     if (!lg) return;
     // Drop every record scoped to this league so nothing is orphaned.

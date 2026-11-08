@@ -933,11 +933,12 @@ export function getLeagueDetail(leagueId: string): LeagueDetail | undefined {
   });
   let submissionProgress: RoundParticipation | undefined;
   let votingProgress: RoundParticipation | undefined;
+  const view = withRematchLink(league);
   if (isHeadToHead(league)) {
     // Real progress + activity from the head-to-head store (see below).
     const live = headToHeadLiveRound(league, currentRound);
     return {
-      league: isMember ? league : { ...league, inviteCode: "" },
+      league: isMember ? view : { ...view, inviteCode: "" },
       rounds: leagueRounds,
       currentRound,
       totalRounds: summary?.totalRounds ?? (league.roundCount || leagueRounds.length),
@@ -965,7 +966,7 @@ export function getLeagueDetail(leagueId: string): LeagueDetail | undefined {
   }
 
   return {
-    league: isMember ? league : { ...league, inviteCode: "" },
+    league: isMember ? view : { ...view, inviteCode: "" },
     rounds: leagueRounds,
     currentRound,
     totalRounds: summary?.totalRounds ?? leagueRounds.length,
@@ -977,8 +978,24 @@ export function getLeagueDetail(leagueId: string): LeagueDetail | undefined {
   };
 }
 
+/** handlers/leagues.ts `withRematchLink` (BUG-13): the detail keeps the
+ *  rematch pointer only while that league exists and the viewer is one of
+ *  its members — a pointer to a deleted rematch, or to one the viewer isn't
+ *  in, is dropped, so the overview never links to a league that's gone. */
+function withRematchLink(league: League): League {
+  if (!league.rematchLeagueId) return league;
+  const rematch = leagues.find((lg) => lg.id === league.rematchLeagueId);
+  if (rematch?.memberIds.includes(currentUser.id)) return league;
+  const { rematchLeagueId: _hidden, ...rest } = league;
+  return rest;
+}
+
 /** Owner starts a fresh league with the same players + settings once this one
- *  has finished (mock: mirrors the backend rematchLeague). */
+ *  has finished (mock: mirrors the backend rematchLeague). One live rematch
+ *  per league (BUG-13): the old league records it (`rematchLeagueId`), and
+ *  asking again returns that league; only once it has been deleted does a
+ *  new one replace the pointer. (The mock is synchronous, so the backend's
+ *  create-then-claim race handling has nothing to guard here.) */
 export function rematchLeague(leagueId: string): League {
   const league = leagues.find((lg) => lg.id === leagueId);
   if (!league) throw new Error("That league doesn't exist.");
@@ -987,10 +1004,14 @@ export function rematchLeague(leagueId: string): League {
   if (!isLeagueFinished(league, leagueRounds)) {
     throw new Error("You can start a rematch once every round has been played.");
   }
+  const existing = league.rematchLeagueId ? leagues.find((lg) => lg.id === league.rematchLeagueId) : undefined;
+  if (existing) return existing;
   createdLeagueSeq += 1;
   const numbered = league.name.match(/^(.*?)(\d+)\s*$/);
+  // Never copy the pointer into the clone: it has had no rematch of its own.
+  const { rematchLeagueId: _notCopied, ...source } = league;
   const next: League = {
-    ...league,
+    ...source,
     id: `lg-rematch-${createdLeagueSeq}`,
     name: (numbered ? `${numbered[1]}${Number(numbered[2]) + 1}` : `${league.name} 2`).slice(0, 50),
     // A rematch keeps the format (head-to-head stays head-to-head) and, like
@@ -1005,6 +1026,7 @@ export function rematchLeague(leagueId: string): League {
     startAt: league.progression === "timed" ? new Date().toISOString() : undefined,
   };
   leagues.push(next);
+  league.rematchLeagueId = next.id; // replaces a pointer whose league was deleted
   inviteCodes[next.inviteCode] = next.id;
   // Head-to-head: the clone starts un-frozen (the mock keeps season secrets
   // per league id, so there is nothing to copy) and everyone restarts 0–0–0.

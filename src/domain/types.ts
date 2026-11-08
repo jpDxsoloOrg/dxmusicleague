@@ -73,6 +73,15 @@ export interface League {
   startAt?: string;
   /** Timed mode: days each phase lasts before it auto-advances. */
   phaseDays?: number;
+  /** Once this finished league has been rematched: the rematch league's id.
+   *  A finished league has at most one live rematch (BUG-13). Only the league
+   *  detail's copy is filtered: it is present only while that league exists
+   *  and the viewer is one of its members — the overview's "Go to the
+   *  rematch" link (and, for the owner, instead of "Run it back"). Elsewhere
+   *  (dashboard summaries, join/settings responses) it is the raw stored
+   *  pointer, which may name a deleted league or one the viewer left, so
+   *  link from the detail only. */
+  rematchLeagueId?: string;
 }
 
 export interface Round {

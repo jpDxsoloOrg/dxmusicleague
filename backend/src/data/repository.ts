@@ -52,9 +52,24 @@ export interface Repository {
    *    one. Only the opening request does this, before round 1 is written;
    *    once a round has opened, the order never changes. */
   freezeH2HSeason(leagueId: string, freeze: SeasonFreeze, replacesSalt?: string): Promise<boolean>;
+  /** Record `rematchId` as the league's rematch (`rematchLeagueId`, BUG-13),
+   *  as one conditional write. Resolves `true` when it landed, `false`
+   *  (writing nothing) when its condition failed:
+   *  - without `replacesStale`: write-once — refused once any pointer is set
+   *    (a concurrent rematch claimed first) or the league no longer exists;
+   *  - with `replacesStale`: also lands over exactly that pointer — one the
+   *    caller found pointing at a league that has since been deleted — and
+   *    over none; refused over any other pointer.
+   *  Losing is a normal outcome (the caller discards its own league and
+   *  returns the winner's), not an error. */
+  setRematchPointer(leagueId: string, rematchId: string, replacesStale?: string): Promise<boolean>;
   /** Delete a league and every record scoped to it (members, rounds, their
-   *  submissions/ballots, standings, and invite codes). */
-  deleteLeague(leagueId: string): Promise<void>;
+   *  submissions/ballots, standings, and invite codes). `consistent`: find
+   *  those records with strongly consistent reads — a rematch discarding the
+   *  league it wrote a moment ago (BUG-13), which an eventually consistent
+   *  read could miss, leaving it orphaned. Every other delete reads as
+   *  before. */
+  deleteLeague(leagueId: string, opts?: { consistent?: boolean }): Promise<void>;
 
   // ---- Invites ----
   putInvite(code: string, leagueId: string): Promise<void>;

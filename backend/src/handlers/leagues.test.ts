@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MemoryRepository, MemoryUserDirectory } from "../data/memory.ts";
 import type { Deps } from "./leagues.ts";
-import { claimPublicSpot, createLeague, getLeagueDetail, getPublicLeaguePreview, joinLeague, leaveLeague, listBrowseLeagues, listMyLeagues, listOpenPublicLeagues, rematchLeague, toLeagueView, updateLeagueSettings } from "./leagues.ts";
+import { claimPublicSpot, createLeague, deleteLeague, getLeagueDetail, getPublicLeaguePreview, joinLeague, leaveLeague, listBrowseLeagues, listMyLeagues, listOpenPublicLeagues, rematchLeague, toLeagueView, updateLeagueSettings } from "./leagues.ts";
 import { createRound, updateRound } from "./rounds.ts";
 import { ApiError } from "../domain/errors.ts";
 import { SEASON_LOCKED_MESSAGE } from "../domain/freeze.ts";
@@ -1723,4 +1723,376 @@ test("finished flow: a 4-player H2H league plays its 3 rounds → finished; the 
   assert.ok(fresh.standings.every((s) => s.wins === 0 && s.losses === 0 && s.draws === 0));
   await joinLeague(f.deps, "u-jpop", clone.inviteCode); // the lobby is open again
   await assert.rejects(joinLeague(f.deps, "u-luna", f.inviteCode), seasonLockedError, "the original stays locked");
+});
+
+// ---- one live rematch per finished league (BUG-13) ----
+
+/** A finished standard league "Szn 1": owner u-owner, three players, its one
+ *  round revealed, invite code and standings wired as createLeague would. */
+async function finishedDeps(repo: MemoryRepository = new MemoryRepository(false)): Promise<Deps> {
+  const lg = league({ id: "s1", name: "Szn 1", visibility: "private", roundCount: 1, memberIds: ["u-owner", "u-2", "u-3"] });
+  await repo.createLeague(lg);
+  await repo.createRound({ id: "s1~1", leagueId: "s1", index: 1, theme: "One", status: "revealed" });
+  await repo.putInvite(lg.inviteCode, lg.id);
+  for (const id of lg.memberIds) await repo.addStandingPoints(lg.id, id, 0);
+  return { repo, users: new MemoryUserDirectory() };
+}
+
+/** A MemoryRepository that records every league created through it, so a test
+ *  can check that a rematch it threw away left nothing behind. */
+class CreateSpyRepository extends MemoryRepository {
+  created: League[] = [];
+  override async createLeague(...args: Parameters<MemoryRepository["createLeague"]>): Promise<void> {
+    this.created.push(structuredClone(args[0]));
+    return super.createLeague(...args);
+  }
+}
+
+/** Assert a league id left no trace: no META, no invite, no standing row. */
+async function assertGone(deps: Deps, lg: League): Promise<void> {
+  assert.equal(await deps.repo.getLeague(lg.id), undefined, `${lg.id} is gone`);
+  assert.equal(await deps.repo.getLeagueIdForInvite(lg.inviteCode), undefined, `${lg.id}'s invite is gone`);
+  assert.deepEqual(await deps.repo.getStandings(lg.id), [], `${lg.id} has no standing rows`);
+}
+
+test("BUG-13: rematching twice in a row creates one league — the second call returns it (idempotent)", async () => {
+  const deps = await finishedDeps();
+  const first = await rematchLeague(deps, "u-owner", "s1");
+  const second = await rematchLeague(deps, "u-owner", "s1");
+  assert.equal(second.id, first.id);
+  assert.deepEqual([second.name, second.inviteCode, second.memberIds], [first.name, first.inviteCode, first.memberIds]);
+  assert.deepEqual((await deps.repo.getAllLeagues()).map((lg) => lg.id).sort(), [first.id, "s1"].sort());
+  // Every member's dashboard lists the old league and ONE rematch.
+  for (const member of ["u-owner", "u-2", "u-3"]) {
+    assert.deepEqual((await listMyLeagues(deps, member)).map((s) => s.league.name).sort(), ["Szn 1", "Szn 2"], member);
+  }
+  // The old league records its rematch; the rematch itself has none yet.
+  assert.equal((await deps.repo.getLeague("s1"))!.rematchLeagueId, first.id);
+  assert.equal((await deps.repo.getLeague(first.id))!.rematchLeagueId, undefined);
+  assert.equal("rematchLeagueId" in first, false);
+});
+
+test("BUG-13: concurrent rematch calls create exactly one league and leave no orphan behind", async () => {
+  const repo = new CreateSpyRepository(false);
+  const deps = await finishedDeps(repo);
+  repo.created = [];
+  const results = await Promise.all([1, 2, 3].map(() => rematchLeague(deps, "u-owner", "s1")));
+  const winner = results[0]!;
+  assert.deepEqual(results.map((r) => r.id), [winner.id, winner.id, winner.id]);
+  assert.deepEqual((await repo.getAllLeagues()).map((lg) => lg.id).sort(), [winner.id, "s1"].sort());
+  assert.equal((await repo.getLeague("s1"))!.rematchLeagueId, winner.id);
+  // Every league a losing call wrote (it creates before it claims) was removed.
+  const losers = repo.created.filter((lg) => lg.id !== winner.id);
+  assert.equal(losers.length, 2, "the race really happened: three leagues were written");
+  for (const lg of losers) await assertGone(deps, lg);
+  // The winner is whole: its invite and one 0-point standing row per player.
+  assert.equal(await repo.getLeagueIdForInvite(winner.inviteCode), winner.id);
+  assert.deepEqual((await repo.getStandings(winner.id)).map((s) => [s.userId, s.points]), [["u-owner", 0], ["u-2", 0], ["u-3", 0]]);
+  assert.equal((await listMyLeagues(deps, "u-2")).length, 2);
+});
+
+test("BUG-13: once the rematch league is deleted, the old league stops pointing at it and a fresh rematch replaces the pointer", async () => {
+  const deps = await finishedDeps();
+  const first = await rematchLeague(deps, "u-owner", "s1");
+  assert.equal((await getLeagueDetail(deps, "u-owner", "s1")).league.rematchLeagueId, first.id);
+  await deleteLeague(deps, "u-owner", first.id);
+
+  // The stored pointer dangles; the detail view drops it (the UI offers "Run it back" again).
+  assert.equal((await deps.repo.getLeague("s1"))!.rematchLeagueId, first.id);
+  const detail = await getLeagueDetail(deps, "u-owner", "s1");
+  assert.equal("rematchLeagueId" in detail.league, false);
+
+  const second = await rematchLeague(deps, "u-owner", "s1");
+  assert.notEqual(second.id, first.id);
+  assert.equal((await deps.repo.getLeague("s1"))!.rematchLeagueId, second.id);
+  assert.equal((await getLeagueDetail(deps, "u-owner", "s1")).league.rematchLeagueId, second.id);
+  assert.equal((await rematchLeague(deps, "u-owner", "s1")).id, second.id, "idempotent again");
+  assert.deepEqual((await deps.repo.getAllLeagues()).map((lg) => lg.id).sort(), [second.id, "s1"].sort());
+});
+
+test("BUG-13: concurrent rematches after the rematch was deleted still make exactly one replacement", async () => {
+  const repo = new CreateSpyRepository(false);
+  const deps = await finishedDeps(repo);
+  const first = await rematchLeague(deps, "u-owner", "s1");
+  await deleteLeague(deps, "u-owner", first.id);
+  repo.created = [];
+
+  const results = await Promise.all([1, 2].map(() => rematchLeague(deps, "u-owner", "s1")));
+  const winner = results[0]!;
+  assert.equal(results[1]!.id, winner.id);
+  assert.equal((await repo.getLeague("s1"))!.rematchLeagueId, winner.id);
+  assert.deepEqual((await repo.getAllLeagues()).map((lg) => lg.id).sort(), [winner.id, "s1"].sort());
+  for (const lg of repo.created.filter((c) => c.id !== winner.id)) await assertGone(deps, lg);
+});
+
+test("BUG-13: league detail names the rematch to its members only; a league with no rematch carries no pointer", async () => {
+  const deps = await finishedDeps();
+  for (const caller of ["u-owner", "u-2", "u-stranger"]) {
+    assert.equal("rematchLeagueId" in (await getLeagueDetail(deps, caller, "s1")).league, false, caller);
+  }
+  const next = await rematchLeague(deps, "u-owner", "s1");
+  for (const member of ["u-owner", "u-2", "u-3"]) {
+    assert.equal((await getLeagueDetail(deps, member, "s1")).league.rematchLeagueId, next.id, member);
+  }
+  // A player who left the rematch, and a spectator, get no link to it.
+  await leaveLeague(deps, "u-3", next.id, "u-3");
+  assert.equal("rematchLeagueId" in (await getLeagueDetail(deps, "u-3", "s1")).league, false);
+  assert.equal("rematchLeagueId" in (await getLeagueDetail(deps, "u-stranger", "s1")).league, false);
+  // Someone who joined only the rematch does see where it went.
+  await joinLeague(deps, "u-new", next.inviteCode);
+  assert.equal((await getLeagueDetail(deps, "u-new", "s1")).league.rematchLeagueId, next.id);
+});
+
+/** A MemoryRepository whose eventually consistent league reads come from a
+ *  replica that hasn't caught up: while `replica` holds a league id, a
+ *  getLeague without `consistent` returns that copy (undefined = "not
+ *  replicated yet"). Strongly consistent reads always see the latest write,
+ *  as DynamoDB's do. */
+class LaggingReplicaRepository extends MemoryRepository {
+  replica = new Map<string, League | undefined>();
+  override async getLeague(...args: Parameters<MemoryRepository["getLeague"]>): Promise<League | undefined> {
+    const [id, opts] = args;
+    if (!opts?.consistent && this.replica.has(id)) return structuredClone(this.replica.get(id));
+    return super.getLeague(...args);
+  }
+}
+
+test("BUG-13: a stale read that misses the pointer still ends on the existing rematch (the claim refuses, the new league is discarded)", async () => {
+  const repo = new LaggingReplicaRepository(false);
+  const deps = await finishedDeps(repo);
+  repo.replica.set("s1", await repo.getLeague("s1", { consistent: true })); // the replica: no pointer, ever
+  const first = await rematchLeague(deps, "u-owner", "s1");
+  const second = await rematchLeague(deps, "u-owner", "s1");
+  assert.equal(second.id, first.id);
+  assert.deepEqual((await repo.getAllLeagues()).map((lg) => lg.id).sort(), [first.id, "s1"].sort());
+});
+
+test("BUG-13: a rematch league not yet replicated is never mistaken for a deleted one (its existence is read strongly consistent)", async () => {
+  const repo = new LaggingReplicaRepository(false);
+  const deps = await finishedDeps(repo);
+  const first = await rematchLeague(deps, "u-owner", "s1");
+  repo.replica.set(first.id, undefined); // an eventually consistent read would say it doesn't exist
+  const again = await rematchLeague(deps, "u-owner", "s1");
+  assert.equal(again.id, first.id, "not overwritten as if stale");
+  assert.equal((await repo.getLeague("s1", { consistent: true }))!.rematchLeagueId, first.id);
+  assert.deepEqual((await repo.getAllLeagues()).map((lg) => lg.id).sort(), [first.id, "s1"].sort());
+});
+
+test("BUG-13: a stale read that misses a pointer to a DELETED rematch retries over that pointer and replaces it", async () => {
+  const repo = new LaggingReplicaRepository(false);
+  const deps = await finishedDeps(repo);
+  repo.replica.set("s1", await repo.getLeague("s1", { consistent: true })); // no pointer
+  const first = await rematchLeague(deps, "u-owner", "s1");
+  await deleteLeague(deps, "u-owner", first.id);
+  const second = await rematchLeague(deps, "u-owner", "s1");
+  assert.notEqual(second.id, first.id);
+  assert.equal((await repo.getLeague("s1", { consistent: true }))!.rematchLeagueId, second.id);
+  assert.deepEqual((await repo.getAllLeagues()).map((lg) => lg.id).sort(), [second.id, "s1"].sort());
+});
+
+test("BUG-13: a claim that errors discards the league it created and propagates the error", async () => {
+  class FailingClaimRepository extends CreateSpyRepository {
+    override async setRematchPointer(): Promise<boolean> {
+      throw Object.assign(new Error("throttled"), { name: "ProvisionedThroughputExceededException" });
+    }
+  }
+  const repo = new FailingClaimRepository(false);
+  const deps = await finishedDeps(repo);
+  repo.created = [];
+  await assert.rejects(rematchLeague(deps, "u-owner", "s1"), /throttled/);
+  assert.equal(repo.created.length, 1);
+  await assertGone(deps, repo.created[0]!);
+  assert.deepEqual((await repo.getAllLeagues()).map((lg) => lg.id), ["s1"]);
+});
+
+test("BUG-13: a claim that landed but reported a failed condition (an SDK retry of it) keeps the new league", async () => {
+  class RetriedClaimRepository extends MemoryRepository {
+    override async setRematchPointer(...args: Parameters<MemoryRepository["setRematchPointer"]>): Promise<boolean> {
+      await super.setRematchPointer(...args); // the first attempt lands…
+      return super.setRematchPointer(...args); // …and the retry fails its write-once condition
+    }
+  }
+  const repo = new RetriedClaimRepository(false);
+  const deps = await finishedDeps(repo);
+  const next = await rematchLeague(deps, "u-owner", "s1");
+  assert.equal((await repo.getLeague("s1"))!.rematchLeagueId, next.id);
+  assert.ok(await repo.getLeague(next.id), "not discarded");
+  assert.equal(await repo.getLeagueIdForInvite(next.inviteCode), next.id);
+  assert.equal((await repo.getStandings(next.id)).length, 3);
+});
+
+test("BUG-13: a claim that keeps losing to pointers at deleted leagues gives up after a few tries with a 409, leaving nothing behind", async () => {
+  // Every claim is refused and the re-read always shows yet another pointer
+  // at a league that's gone (rematches being made and deleted in between).
+  class ChurningRepository extends CreateSpyRepository {
+    tries = 0;
+    override async setRematchPointer(): Promise<boolean> {
+      this.tries++;
+      return false;
+    }
+    override async getLeague(...args: Parameters<MemoryRepository["getLeague"]>): Promise<League | undefined> {
+      const lg = await super.getLeague(...args);
+      return lg?.id === "s1" ? { ...lg, rematchLeagueId: `lg-deleted-${this.tries}` } : lg;
+    }
+  }
+  const repo = new ChurningRepository(false);
+  const deps = await finishedDeps(repo);
+  repo.created = [];
+  await assert.rejects(rematchLeague(deps, "u-owner", "s1"), isStatus(409));
+  assert.equal(repo.tries, 3);
+  assert.equal(repo.created.length, 1);
+  await assertGone(deps, repo.created[0]!);
+});
+
+test("BUG-13: H2H — concurrent rematches make one un-frozen clone, and asking again once it has frozen returns it without its season secrets", async () => {
+  const deps = await h2hDeps({ memberIds: ["u-owner", "u-2", "u-3"] }, 5);
+  await openRound1(deps);
+  for (let index = 2; index <= 3; index++) await createRound(deps, "u-owner", "h2h", { theme: `R${index}` });
+  for (const r of await deps.repo.getRoundsForLeague("h2h")) await deps.repo.updateRound({ ...r, status: "revealed" });
+
+  const [a, b] = await Promise.all([rematchLeague(deps, "u-owner", "h2h"), rematchLeague(deps, "u-owner", "h2h")]);
+  assert.equal(b!.id, a!.id);
+  const clones = (await deps.repo.getAllLeagues()).filter((lg) => lg.id !== "h2h");
+  assert.deepEqual(clones.map((lg) => lg.id), [a!.id]);
+  const stored = clones[0]!;
+  assert.equal(stored.format, "headToHead");
+  assert.equal(stored.h2hParticipants, undefined);
+  assert.equal(stored.h2hSalt, undefined);
+
+  // The clone opens its own round 1 and freezes; the old league's rematch
+  // button (a stale page) still lands on it — with no frozen order or salt.
+  await createRound(deps, "u-owner", a!.id, { theme: "Rematch R1" });
+  await updateRound(deps, "u-owner", a!.id, `${a!.id}~0001`, { status: "submitting" });
+  const frozen = (await deps.repo.getLeague(a!.id))!;
+  assert.ok(frozen.h2hParticipants?.length && frozen.h2hSalt);
+  const again = await rematchLeague(deps, "u-owner", "h2h");
+  assert.equal(again.id, a!.id);
+  const json = JSON.stringify(again);
+  assert.equal(json.includes("h2hParticipants"), false);
+  assert.equal(json.includes("h2hSalt"), false);
+  assert.equal(json.includes(frozen.h2hSalt!), false);
+});
+
+/** A CreateSpyRepository whose next strongly consistent league read matching
+ *  `failOn` throws — but only once a claim has been refused, i.e. inside the
+ *  losing request's follow-up reads (the old league's re-read, then the
+ *  winner's existence check). */
+class FailAfterLostClaimRepository extends CreateSpyRepository {
+  armed = false;
+  failOn: (id: string) => boolean;
+  constructor(failOn: (id: string) => boolean) {
+    super(false);
+    this.failOn = failOn;
+  }
+  override async setRematchPointer(...args: Parameters<MemoryRepository["setRematchPointer"]>): Promise<boolean> {
+    const claimed = await super.setRematchPointer(...args);
+    if (!claimed) this.armed = true;
+    return claimed;
+  }
+  override async getLeague(...args: Parameters<MemoryRepository["getLeague"]>): Promise<League | undefined> {
+    const [id, opts] = args;
+    if (this.armed && opts?.consistent && this.failOn(id)) {
+      this.armed = false;
+      throw Object.assign(new Error("throttled"), { name: "ProvisionedThroughputExceededException" });
+    }
+    return super.getLeague(...args);
+  }
+}
+
+for (const [step, failOn] of [
+  ["the old league's consistent re-read", (id: string) => id === "s1"],
+  ["the winner's existence check", (id: string) => id !== "s1"],
+] as const) {
+  test(`BUG-13: a lost claim whose follow-up read fails (${step}) still discards its league — no duplicate is left behind`, async () => {
+    const repo = new FailAfterLostClaimRepository(failOn);
+    const deps = await finishedDeps(repo);
+    repo.created = [];
+    const results = await Promise.allSettled([1, 2].map(() => rematchLeague(deps, "u-owner", "s1")));
+    const won = results.filter((r): r is PromiseFulfilledResult<League> => r.status === "fulfilled");
+    const lost = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    assert.equal(won.length, 1);
+    assert.equal(lost.length, 1);
+    assert.match(String(lost[0]!.reason), /throttled/);
+    const winner = won[0]!.value;
+    assert.equal(repo.created.length, 2, "the race really happened");
+    for (const lg of repo.created.filter((c) => c.id !== winner.id)) await assertGone(deps, lg);
+    assert.deepEqual((await repo.getAllLeagues()).map((lg) => lg.id).sort(), [winner.id, "s1"].sort());
+    assert.deepEqual((await listMyLeagues(deps, "u-2")).map((s) => s.league.name).sort(), ["Szn 1", "Szn 2"]);
+  });
+}
+
+test("BUG-13: a losing request whose clean-up fails still answers with the winner (and logs the orphan's id)", async (t) => {
+  class FailingDiscardRepository extends CreateSpyRepository {
+    override async deleteLeague(): Promise<void> {
+      throw Object.assign(new Error("throttled"), { name: "ProvisionedThroughputExceededException" });
+    }
+  }
+  const logged = t.mock.method(console, "error", () => undefined);
+  const repo = new FailingDiscardRepository(false);
+  const deps = await finishedDeps(repo);
+  repo.created = [];
+  const results = await Promise.all([1, 2].map(() => rematchLeague(deps, "u-owner", "s1")));
+  const winner = results[0]!;
+  assert.equal(results[1]!.id, winner.id);
+  assert.equal((await repo.getLeague("s1"))!.rematchLeagueId, winner.id);
+  const orphan = repo.created.find((c) => c.id !== winner.id)!;
+  assert.ok(orphan, "the race really happened");
+  assert.equal(logged.mock.callCount(), 1);
+  assert.match(String(logged.mock.calls[0]!.arguments[0]), new RegExp(orphan.id));
+});
+
+for (const step of ["addStandingPoints", "putInvite"] as const) {
+  test(`BUG-13: a rematch whose request died after its claim (${step} failed) is finished by the owner's retry`, async () => {
+    class FlakyWriteRepository extends MemoryRepository {
+      fail = true;
+      writes = 0;
+      override async addStandingPoints(...args: Parameters<MemoryRepository["addStandingPoints"]>): Promise<void> {
+        if (args[0] !== "s1") this.writes++;
+        if (step === "addStandingPoints" && args[0] !== "s1" && args[1] === "u-2" && this.fail) {
+          this.fail = false; // dies part-way: u-owner is seeded, u-2 and u-3 aren't
+          throw new Error("InternalServerError");
+        }
+        return super.addStandingPoints(...args);
+      }
+      override async putInvite(...args: Parameters<MemoryRepository["putInvite"]>): Promise<void> {
+        if (args[1] !== "s1") this.writes++;
+        if (step === "putInvite" && args[1] !== "s1" && this.fail) {
+          this.fail = false;
+          throw new Error("InternalServerError");
+        }
+        return super.putInvite(...args);
+      }
+    }
+    const repo = new FlakyWriteRepository(false);
+    const deps = await finishedDeps(repo);
+    await assert.rejects(rematchLeague(deps, "u-owner", "s1"), /InternalServerError/);
+    const pointer = (await repo.getLeague("s1"))!.rematchLeagueId!;
+    assert.ok(pointer, "the claim had landed");
+    assert.equal(await repo.getLeagueIdForInvite((await repo.getLeague(pointer))!.inviteCode), undefined, "half-built");
+
+    const retry = await rematchLeague(deps, "u-owner", "s1");
+    assert.equal(retry.id, pointer, "the same league, not a new one");
+    assert.equal(await repo.getLeagueIdForInvite(retry.inviteCode), retry.id);
+    assert.deepEqual((await repo.getStandings(retry.id)).map((s) => [s.userId, s.points]), [["u-owner", 0], ["u-2", 0], ["u-3", 0]]);
+    await joinLeague(deps, "u-new", retry.inviteCode); // its code works
+    assert.deepEqual((await repo.getAllLeagues()).map((lg) => lg.id).sort(), [retry.id, "s1"].sort());
+
+    // Once whole, asking again only reads: no write repeats.
+    repo.writes = 0;
+    assert.equal((await rematchLeague(deps, "u-owner", "s1")).id, retry.id);
+    assert.equal(repo.writes, 0);
+  });
+}
+
+test("BUG-13: the detail's rematch link checks the rematch strongly consistent — a lagging replica neither hides a new rematch nor keeps a deleted one", async () => {
+  const repo = new LaggingReplicaRepository(false);
+  const deps = await finishedDeps(repo);
+  const first = await rematchLeague(deps, "u-owner", "s1");
+  const copy = await repo.getLeague(first.id, { consistent: true });
+  repo.replica.set(first.id, undefined); // not replicated yet
+  assert.equal((await getLeagueDetail(deps, "u-owner", "s1")).league.rematchLeagueId, first.id, "linked straight away");
+  repo.replica.delete(first.id); // caught up
+  await deleteLeague(deps, "u-owner", first.id);
+  repo.replica.set(first.id, copy); // …but hasn't seen the delete yet
+  assert.equal("rematchLeagueId" in (await getLeagueDetail(deps, "u-owner", "s1")).league, false, "no link to a deleted league");
 });

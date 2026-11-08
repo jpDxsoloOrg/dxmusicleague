@@ -2,7 +2,7 @@
 // Repository port the MemoryRepository implements. Schema is exactly
 // docs/data-model-and-api.md §1:
 //
-//   League meta   PK=LEAGUE#<id>      SK=META
+//   League meta   PK=LEAGUE#<id>      SK=META   (rematchLeagueId once the league is rematched)
 //   Membership    PK=LEAGUE#<id>      SK=MEMBER#<userId>   (+ GSI1: USER#<id> / LEAGUE#<id>)
 //   Round         PK=LEAGUE#<id>      SK=ROUND#<index4>   (h2hDeparted + h2hTally once an H2H round is revealed)
 //   Submission    PK=ROUND#<roundId>  SK=SUB#<userId>
@@ -72,6 +72,9 @@ export class DynamoRepository implements Repository {
         // values are dropped by removeUndefinedValues.
         h2hParticipants: league.h2hParticipants,
         h2hSalt: league.h2hSalt,
+        // The rematch pointer (BUG-13): absent at creation — a rematch never
+        // copies it; setRematchPointer writes it later — so normally dropped.
+        rematchLeagueId: league.rematchLeagueId,
         createdAt: new Date().toISOString(),
       },
       ...league.memberIds.map((userId) => this.memberItem(league.id, userId)),
@@ -128,6 +131,9 @@ export class DynamoRepository implements Repository {
       // standard league). Server-only: handlers strip both from payloads.
       h2hParticipants: meta.Item.h2hParticipants as string[] | undefined,
       h2hSalt: meta.Item.h2hSalt as string | undefined,
+      // Only a rematched league carries it (BUG-13); every other league reads
+      // back without the key, exactly as before.
+      ...(typeof meta.Item.rematchLeagueId === "string" ? { rematchLeagueId: meta.Item.rematchLeagueId } : {}),
     };
   }
 
@@ -275,13 +281,47 @@ export class DynamoRepository implements Repository {
     }
   }
 
-  async deleteLeague(leagueId: string): Promise<void> {
+  async setRematchPointer(leagueId: string, rematchId: string, replacesStale?: string): Promise<boolean> {
+    // One conditional UpdateItem on the old league's META — the same pattern
+    // as the season freeze above. Write-once: it lands only while no pointer
+    // is set, so of two concurrent rematches exactly one claims and the other
+    // discards the league it made. With `replacesStale` it may also land over
+    // exactly that pointer (its league was deleted), never over a newer one.
+    // attribute_exists(PK): never create a phantom META for a deleted league.
+    const condition =
+      replacesStale === undefined
+        ? "attribute_exists(PK) AND attribute_not_exists(rematchLeagueId)"
+        : "attribute_exists(PK) AND (attribute_not_exists(rematchLeagueId) OR rematchLeagueId = :stale)";
+    const guard = replacesStale === undefined ? {} : { ":stale": replacesStale };
+    try {
+      await this.doc.send(
+        new UpdateCommand({
+          TableName: this.tableName,
+          Key: { PK: `LEAGUE#${leagueId}`, SK: "META" },
+          UpdateExpression: "SET rematchLeagueId = :r",
+          ConditionExpression: condition,
+          ExpressionAttributeValues: { ":r": rematchId, ...guard },
+        }),
+      );
+      return true;
+    } catch (err) {
+      if ((err as { name?: string } | null)?.name === "ConditionalCheckFailedException") return false;
+      throw err;
+    }
+  }
+
+  async deleteLeague(leagueId: string, opts?: { consistent?: boolean }): Promise<void> {
+    // Strongly consistent only when asked (a rematch discarding the league it
+    // just wrote, BUG-13 — a default Query could miss those items and leave
+    // them behind); every other delete reads as before, unchanged.
+    const consistency = opts?.consistent ? { ConsistentRead: true } : {};
     // 1) Everything under PK=LEAGUE#<id>: META, MEMBER#, ROUND#, STANDING#.
     const leagueItems = await this.doc.send(
       new QueryCommand({
         TableName: this.tableName,
         KeyConditionExpression: "PK = :pk",
         ExpressionAttributeValues: { ":pk": `LEAGUE#${leagueId}` },
+        ...consistency,
       }),
     );
     const keys: Array<{ PK: string; SK: string }> = (leagueItems.Items ?? []).map((it) => ({
@@ -299,6 +339,7 @@ export class DynamoRepository implements Repository {
           TableName: this.tableName,
           KeyConditionExpression: "PK = :pk",
           ExpressionAttributeValues: { ":pk": `ROUND#${roundId}` },
+          ...consistency,
         }),
       );
       for (const it of children.Items ?? []) keys.push({ PK: it.PK as string, SK: it.SK as string });

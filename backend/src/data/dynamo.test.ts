@@ -16,12 +16,18 @@
 // how both reveals' settle-guarded writes survive DynamoDB's transaction
 // conflicts (two overlapping reveals: the later one is sent again and loses
 // the claim cleanly), modelled by an in-flight-transaction fake; and the
-// strongly consistent ballot Query both reveals tally from (BUG-05).
+// strongly consistent ballot Query both reveals tally from (BUG-05); and the
+// rematch pointer (BUG-13): its write-once conditional UpdateItem on META and
+// the stale-pointer replacement, its mapping, the strongly consistent cascade
+// delete a losing rematch discards its league with, and `rematchLeague` run
+// over this repository (concurrent requests leave one league, no orphans).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { BatchWriteCommand, GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { DynamoRepository, isTransactionConflict, retryOnTransactionConflict } from "./dynamo.ts";
+import { MemoryUserDirectory } from "./memory.ts";
+import { rematchLeague } from "../handlers/leagues.ts";
 import { DEFAULT_LEAGUE_SETTINGS } from "../domain/types.ts";
 import type { Ballot, League, Round } from "../domain/types.ts";
 
@@ -180,8 +186,18 @@ function fakeRepo(): { repo: DynamoRepository; table: Map<string, Item>; sent: u
     if (cmd instanceof QueryCommand) {
       const values = cmd.input.ExpressionAttributeValues ?? {};
       const pk = values[":pk"];
-      const prefix = String(values[":m"] ?? values[":s"] ?? values[":b"] ?? "");
+      const prefix = String(values[":m"] ?? values[":s"] ?? values[":b"] ?? values[":r"] ?? "");
       return { Items: [...table.values()].filter((it) => it.PK === pk && String(it.SK).startsWith(prefix)) };
+    }
+    if (cmd instanceof BatchWriteCommand) {
+      // deleteLeague's cascade: batches of DeleteRequests (a missing key is a no-op).
+      for (const requests of Object.values(cmd.input.RequestItems ?? {})) {
+        for (const r of requests) {
+          if (!r.DeleteRequest) throw new Error("fake doc client: only DeleteRequest batches are modelled");
+          table.delete(key(r.DeleteRequest.Key?.PK, r.DeleteRequest.Key?.SK));
+        }
+      }
+      return {};
     }
     throw new Error(`fake doc client: unexpected command ${(cmd as object).constructor.name}`);
   };
@@ -1086,4 +1102,140 @@ test("a transaction conflict that outlasts the retries propagates with nothing w
   const banked = storedPoints(big.table);
   assert.equal(Object.keys(banked).length, 100);
   assert.ok(Object.values(banked).every((p) => p === 3), "each row once");
+});
+
+// ---- the rematch pointer (BUG-13) ----
+
+test("setRematchPointer: one write-once conditional UpdateItem on META; getLeague reads the pointer back", async () => {
+  const { repo, table, sent } = fakeRepo();
+  await repo.createLeague(league({ id: "old" }));
+  sent.length = 0;
+
+  assert.equal(await repo.setRematchPointer("old", "lg-new-1"), true);
+  assert.equal(sent.length, 1);
+  const update = sent[0] as UpdateCommand;
+  assert.ok(update instanceof UpdateCommand);
+  assert.deepEqual(update.input.Key, { PK: "LEAGUE#old", SK: "META" });
+  assert.equal(update.input.UpdateExpression, "SET rematchLeagueId = :r");
+  assert.equal(update.input.ConditionExpression, "attribute_exists(PK) AND attribute_not_exists(rematchLeagueId)");
+  assert.deepEqual(update.input.ExpressionAttributeValues, { ":r": "lg-new-1" }); // no :stale left dangling
+  const meta = table.get("LEAGUE#old|META")!;
+  assert.equal(meta.rematchLeagueId, "lg-new-1");
+  assert.equal(meta.name, "League"); // the rest of META untouched
+  assert.equal((await repo.getLeague("old"))?.rematchLeagueId, "lg-new-1");
+
+  // A second claim (a concurrent rematch that lost) is refused and writes nothing.
+  assert.equal(await repo.setRematchPointer("old", "lg-new-2"), false);
+  assert.equal(table.get("LEAGUE#old|META")?.rematchLeagueId, "lg-new-1");
+});
+
+test("setRematchPointer with replacesStale lands over exactly that pointer (or none) and never over another", async () => {
+  const { repo, table, sent } = fakeRepo();
+  await repo.createLeague(league({ id: "old" }));
+  const pointer = () => table.get("LEAGUE#old|META")?.rematchLeagueId;
+
+  assert.equal(await repo.setRematchPointer("old", "lg-a", "lg-gone"), true, "no pointer at all: lands");
+  assert.equal(pointer(), "lg-a");
+  assert.equal(await repo.setRematchPointer("old", "lg-b", "lg-gone"), false, "a pointer it didn't name: refused");
+  assert.equal(pointer(), "lg-a");
+
+  sent.length = 0;
+  assert.equal(await repo.setRematchPointer("old", "lg-b", "lg-a"), true, "over the stale one it named: lands");
+  const update = sent[0] as UpdateCommand;
+  assert.equal(
+    update.input.ConditionExpression,
+    "attribute_exists(PK) AND (attribute_not_exists(rematchLeagueId) OR rematchLeagueId = :stale)",
+  );
+  assert.deepEqual(update.input.ExpressionAttributeValues, { ":r": "lg-b", ":stale": "lg-a" });
+  assert.equal(pointer(), "lg-b");
+  assert.equal(await repo.setRematchPointer("old", "lg-c", "lg-a"), false, "that stale id is no longer there");
+  assert.equal(pointer(), "lg-b");
+});
+
+test("setRematchPointer on a missing league writes no phantom META and returns false; other errors propagate", async () => {
+  const { repo, table } = fakeRepo();
+  assert.equal(await repo.setRematchPointer("gone", "lg-new"), false);
+  assert.equal(await repo.setRematchPointer("gone", "lg-new", "lg-old"), false);
+  assert.equal(table.has("LEAGUE#gone|META"), false);
+
+  const boom = fakeRepo();
+  Object.assign(boom.repo, {
+    doc: { send: async () => { throw Object.assign(new Error("throttled"), { name: "ProvisionedThroughputExceededException" }); } },
+  });
+  await assert.rejects(boom.repo.setRematchPointer("old", "lg-new"), /throttled/);
+});
+
+test("rematchLeagueId round-trips through createLeague/getLeague; a league without one reads back with no key at all", async () => {
+  const { repo, table } = fakeRepo();
+  await repo.createLeague(league({ id: "pointed", rematchLeagueId: "lg-next" }));
+  assert.equal(table.get("LEAGUE#pointed|META")?.rematchLeagueId, "lg-next");
+  assert.equal((await repo.getLeague("pointed"))?.rematchLeagueId, "lg-next");
+
+  await repo.createLeague(league({ id: "plain" }));
+  assert.equal("rematchLeagueId" in table.get("LEAGUE#plain|META")!, false);
+  const plain = (await repo.getLeague("plain"))!;
+  assert.equal("rematchLeagueId" in plain, false); // additive: exactly the League it was before
+  assert.equal("rematchLeagueId" in JSON.parse(JSON.stringify(plain)), false);
+  table.get("LEAGUE#plain|META")!.rematchLeagueId = 42; // junk is not a pointer
+  assert.equal("rematchLeagueId" in (await repo.getLeague("plain"))!, false);
+});
+
+test("deleteLeague({ consistent: true }) finds what it deletes with strongly consistent Queries; the default delete is unchanged", async () => {
+  for (const consistent of [true, false]) {
+    const { repo, table, sent } = fakeRepo();
+    await repo.createLeague(league({ id: "x", memberIds: ["u-owner", "u-2"] }));
+    await repo.putInvite("DXL-AAAAAA", "x");
+    await repo.addStandingPoints("x", "u-2", 3);
+    await repo.createRound({ id: "x~0001", leagueId: "x", index: 1, theme: "One", status: "voting" });
+    await repo.putBallot({ roundId: "x~0001", voterId: "u-2", allocations: {}, castAt: "2026-01-01T00:00:00Z" });
+    sent.length = 0;
+
+    await repo.deleteLeague("x", consistent ? { consistent: true } : undefined);
+    assert.deepEqual([...table.keys()], [], "the cascade removed every item");
+    const queries = sent.filter((c): c is QueryCommand => c instanceof QueryCommand);
+    assert.equal(queries.length, 2); // the league partition + its one round's partition
+    for (const q of queries) {
+      if (consistent) assert.equal(q.input.ConsistentRead, true);
+      else assert.equal("ConsistentRead" in q.input, false);
+    }
+  }
+});
+
+test("rematchLeague over DynamoRepository: concurrent requests leave ONE league (no orphaned items), the pointer names it, and an H2H clone carries no season secrets", async () => {
+  for (const format of ["standard", "headToHead"] as const) {
+    const { repo, table, sent } = fakeRepo();
+    const deps = { repo, users: new MemoryUserDirectory() };
+    const frozen = format === "headToHead" ? { h2hParticipants: ["u-2", "u-owner"], h2hSalt: "a".repeat(32) } : {};
+    await repo.createLeague(league({ id: "old", name: "Szn 1", format, memberIds: ["u-owner", "u-2"], roundCount: 1, ...frozen }));
+    await repo.putInvite("DXL-AAAAAA", "old");
+    for (const id of ["u-owner", "u-2"]) await repo.addStandingPoints("old", id, 5);
+    await repo.createRound({ id: "old~0001", leagueId: "old", index: 1, theme: "One", status: "revealed" });
+    sent.length = 0;
+
+    const results = await Promise.all([1, 2, 3].map(() => rematchLeague(deps, "u-owner", "old")));
+    const winner = results[0]!;
+    assert.deepEqual(results.map((r) => r.id), [winner.id, winner.id, winner.id], format);
+    // The race really happened: all three wrote a league (create, then claim).
+    const created = sent.filter((c) => c instanceof TransactWriteCommand && c.input.TransactItems?.some((t) => t.Put?.Item?.entity === "league"));
+    assert.equal(created.length, 3);
+    assert.equal(table.get("LEAGUE#old|META")?.rematchLeagueId, winner.id);
+
+    // Only the old league's and the winner's items remain: every losing
+    // request's META and MEMBER# rows were deleted, and none wrote an invite
+    // or a standing row.
+    const leagueIds = new Set([...table.values()].filter((it) => String(it.PK).startsWith("LEAGUE#")).map((it) => String(it.PK).slice(7)));
+    assert.deepEqual([...leagueIds].sort(), ["old", winner.id].sort(), format);
+    const invites = [...table.values()].filter((it) => it.entity === "invite").map((it) => it.leagueId);
+    assert.deepEqual(invites.sort(), ["old", winner.id].sort());
+    assert.deepEqual((await repo.getStandings(winner.id)).map((s) => [s.userId, s.points]), [["u-owner", 0], ["u-2", 0]]);
+
+    const meta = table.get(`LEAGUE#${winner.id}|META`)!;
+    assert.equal(meta.format, format);
+    assert.equal("h2hParticipants" in meta, false);
+    assert.equal("h2hSalt" in meta, false);
+    assert.equal("rematchLeagueId" in meta, false);
+
+    // And asking again returns it.
+    assert.equal((await rematchLeague(deps, "u-owner", "old")).id, winner.id);
+  }
 });

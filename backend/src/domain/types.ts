@@ -94,6 +94,17 @@ export interface League {
    *  SERVER-ONLY like the order — stripped from every payload, never copied
    *  by a rematch. */
   h2hSalt?: string;
+  /** Set once this (finished) league has been rematched: the id of the
+   *  league the rematch created (BUG-13). A finished league has at most one
+   *  live rematch — `rematchLeague` returns this one instead of creating
+   *  another, and replaces the pointer only once its league has been
+   *  deleted. Written by the repo's conditional `setRematchPointer`, never
+   *  copied into the rematch itself. Unset on every other league. Only the
+   *  league detail filters it — keeping it only while that league exists and
+   *  the caller is one of its members (the "Go to the rematch" link); every
+   *  other League payload carries the stored pointer as is, which may name a
+   *  deleted league, so link from the detail's copy only. */
+  rematchLeagueId?: string;
 }
 
 export interface Round {

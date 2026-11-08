@@ -25,7 +25,7 @@ because every read below is a point-get or a single-partition `Query` — no cro
 
 | Entity | PK | SK | Key attributes |
 |---|---|---|---|
-| League meta | `LEAGUE#<leagueId>` | `META` | `name, ownerId, musicProvider, format, settings{}, roundCount, createdAt`, head-to-head only once frozen: `h2hParticipants[], h2hSalt` |
+| League meta | `LEAGUE#<leagueId>` | `META` | `name, ownerId, musicProvider, format, settings{}, roundCount, createdAt`, head-to-head only once frozen: `h2hParticipants[], h2hSalt`; once rematched: `rematchLeagueId` (its one live rematch — claimed by a conditional write, replaced only once that league is deleted) |
 | Membership | `LEAGUE#<leagueId>` | `MEMBER#<userId>` | `joinedAt, displayName` |
 | Round | `LEAGUE#<leagueId>` | `ROUND#<index4>` | `roundId, theme, description, status, submissionDeadline, voteDeadline, playlistUrl`; head-to-head once revealed: `h2hDeparted[]` (who had departed at the reveal) and `h2hTally[]` (`{ matchupId, votesA, votesB }` as the reveal counted them) |
 | Submission | `ROUND#<roundId>` | `SUB#<userId>` | `track{}, submittedAt` |
