@@ -1,28 +1,63 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { data } from "../data";
+import type { LeagueDetail } from "../data";
 import { getProvider, formatDuration } from "../music";
 import type { Track } from "../music";
 import { useAsync } from "../lib/useAsync";
+import { useAuth } from "../auth/AuthContext";
 import { TrackArt } from "../components/TrackArt";
+import { RoundStateCard } from "../components/RoundStateCard";
 import "./SubmitSongPage.css";
 
 export function SubmitSongPage() {
   const { leagueId = "" } = useParams();
+  const { user } = useAuth();
   const { data: detail, loading: detailLoading } = useAsync(() => data.getLeagueDetail(leagueId), [leagueId]);
 
+  if (detailLoading) {
+    return <div className="submit-page"><p className="page-loading">Loading…</p></div>;
+  }
+
+  if (!detail) {
+    return (
+      <div className="submit-page">
+        <h2>League not found</h2>
+        <Link to="/" className="link-muted">← Back to dashboard</Link>
+      </div>
+    );
+  }
+
+  // Shared by both formats. The search is only for a member while the current
+  // round is submitting (BUG-12); anything else — a spectator, no round yet, or
+  // a round in another phase (a stale tab, a bookmark, a timed deadline that
+  // passed as the league loaded) — gets a state card instead. The gate sits
+  // here, outside the form, so the form's member-only read (my-submissions)
+  // and its provider searches never run otherwise. It reads the detail loaded
+  // at mount, which isn't reloaded, so the "Song submitted!" card still shows
+  // after a submit that closes the round (a timed league's last song).
+  const isMember = Boolean(user && detail.league.memberIds.includes(user.id));
+  if (!isMember || detail.currentRound?.status !== "submitting") {
+    return (
+      <div className="submit-page">
+        <RoundStateCard page="submit" detail={detail} spectator={!isMember} />
+      </div>
+    );
+  }
+  return <SubmitForm detail={detail} />;
+}
+
+/** The search + submission form, for a member while the round is submitting. */
+function SubmitForm({ detail }: { detail: LeagueDetail }) {
   // The caller's existing picks — drives the slot count and the remove list.
-  const activeRoundId = detail?.currentRound?.id;
+  const activeRoundId = detail.currentRound?.id;
   const { data: mySubs, reload: reloadMySubs } = useAsync(
     () => (activeRoundId ? data.getMySubmissions(activeRoundId) : Promise.resolve([])),
     [activeRoundId],
   );
 
   // Resolve the league's chosen music service. The page never names Spotify.
-  const provider = useMemo(
-    () => (detail ? getProvider(detail.league.musicProvider) : undefined),
-    [detail],
-  );
+  const provider = useMemo(() => getProvider(detail.league.musicProvider), [detail]);
 
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Track[]>([]);
@@ -35,7 +70,6 @@ export function SubmitSongPage() {
 
   // Debounced search through the provider abstraction.
   useEffect(() => {
-    if (!provider) return;
     let active = true;
     setLoading(true);
     const t = setTimeout(async () => {
@@ -51,19 +85,6 @@ export function SubmitSongPage() {
       clearTimeout(t);
     };
   }, [provider, query]);
-
-  if (detailLoading) {
-    return <div className="submit-page"><p className="page-loading">Loading…</p></div>;
-  }
-
-  if (!detail) {
-    return (
-      <div className="submit-page">
-        <h2>League not found</h2>
-        <Link to="/" className="link-muted">← Back to dashboard</Link>
-      </div>
-    );
-  }
 
   const { league, currentRound } = detail;
   const theme = currentRound?.theme ?? "Current round";
@@ -118,7 +139,7 @@ export function SubmitSongPage() {
     <div className="submit-page">
       <header className="submit-head">
         <Link to={`/leagues/${league.id}`} className="link-muted">← {league.name}</Link>
-        <span className="provider-badge">via {provider?.info.name}</span>
+        <span className="provider-badge">via {provider.info.name}</span>
       </header>
 
       <div className="submit-grid">

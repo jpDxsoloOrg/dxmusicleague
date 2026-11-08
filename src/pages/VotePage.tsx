@@ -5,13 +5,16 @@ import type { LeagueDetail } from "../data";
 import { leagueFormat } from "../domain/types";
 import { formatDuration } from "../music";
 import { useAsync } from "../lib/useAsync";
+import { useAuth } from "../auth/AuthContext";
 import { TrackArt } from "../components/TrackArt";
 import { MatchupBallot } from "../components/MatchupBallot";
+import { RoundStateCard } from "../components/RoundStateCard";
 import { effectivePool } from "../../backend/src/domain/rules.ts";
 import "./VotePage.css";
 
 export function VotePage() {
   const { leagueId = "" } = useParams();
+  const { user } = useAuth();
   const { data: detail, loading: detailLoading } = useAsync(() => data.getLeagueDetail(leagueId), [leagueId]);
 
   if (detailLoading) {
@@ -27,11 +30,38 @@ export function VotePage() {
     );
   }
 
+  // Only members vote (BUG-12): a spectator gets the state card in either
+  // format, before any ballot mounts, so neither ballot's member-only reads
+  // fire for them (the song list / matchups, their submissions and their
+  // ballot — each a 403 for a non-member).
+  const isMember = Boolean(user && detail.league.memberIds.includes(user.id));
+  if (!isMember) {
+    return (
+      <div className="vote-page">
+        <RoundStateCard page="vote" detail={detail} spectator />
+      </div>
+    );
+  }
   // Head-to-head leagues pick a winner in each matchup instead of spending
-  // points (HTH-10): a ballot of their own. The points ballot below is the
-  // standard path, unchanged. Keyed by round so a new round starts blank.
+  // points (HTH-10): a ballot of their own, with its own closed states for a
+  // round that isn't voting. The points ballot below is the standard path.
+  // Keyed by round so a new round starts blank.
   if (leagueFormat(detail.league) === "headToHead") {
     return <MatchupBallot key={detail.currentRound?.id ?? ""} detail={detail} />;
+  }
+  // The points ballot is only for the current round while it is voting
+  // (BUG-12); no round yet, or a round in another phase (a stale tab, a
+  // bookmark, a timed deadline that passed as the league loaded), gets a state
+  // card instead of a ballot the server would refuse. The gate sits here,
+  // outside PointsBallot, so its reads never fire otherwise: the song list (a
+  // 400 outside previewing/voting, swallowed into an empty ballot) and the
+  // caller's ballot.
+  if (detail.currentRound?.status !== "voting") {
+    return (
+      <div className="vote-page">
+        <RoundStateCard page="vote" detail={detail} spectator={false} />
+      </div>
+    );
   }
   return <PointsBallot detail={detail} />;
 }
