@@ -9,7 +9,9 @@
 // (HTH-08): who can vote and who has, and whom the who-voted panel and the
 // activity feed may name as having voted — and that the vote page's view-side
 // helpers (HTH-10) read the same votable set off that view as the ballot
-// referee demands.
+// referee demands. BUG-01: anonymous song lists come out in submission-id
+// order (`inAnonymousOrder`), and the matchups view never follows the order
+// the repository read the submissions in.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -20,6 +22,7 @@ import {
   departedParticipants,
   deriveRoundMatchups,
   everyoneEligibleVoted,
+  inAnonymousOrder,
   inMatchup,
   matchupState,
   matchupsView,
@@ -229,6 +232,38 @@ test("matchupsView: anonymized songs (id + track only), null for missing sides, 
   for (const id of ["u-ana", "u-ben", "u-cyd", "u-dot", "u-eli", "u-fay", "u-gus"]) assert.ok(!json.includes(`"${id}"`), id);
   assert.ok(!json.includes("submitter note"));
   assert.deepEqual(matchupsView({ matchups: [] }, "u-ana"), { matchups: [], bye: null });
+});
+
+// ---- BUG-01: the order of an anonymous list names nobody -------------------
+
+test("inAnonymousOrder: a copy sorted by submission id (code-unit order, never locale), every element kept, input untouched", () => {
+  // Read order deliberately unrelated to the ids; one upper-case id pins the
+  // comparison to code units ("sub-B…" < "sub-a…"), so every runtime agrees.
+  const rows = [sub("u-dot", "sub-c41f"), sub("u-ben", "sub-e07a"), sub("u-eli", "sub-0d93"), sub("u-cyd", "sub-a3f8"), sub("u-ana", "sub-B9a6")];
+  const before = structuredClone(rows);
+  const sorted = inAnonymousOrder(rows);
+  assert.deepEqual(sorted.map((s) => s.id), ["sub-0d93", "sub-B9a6", "sub-a3f8", "sub-c41f", "sub-e07a"]);
+  assert.deepEqual(rows, before, "the input array is not reordered or changed");
+  assert.notEqual(sorted, rows);
+  // The same elements (by reference): nothing dropped, added or copied.
+  assert.equal(sorted.length, rows.length);
+  for (const row of rows) assert.ok(sorted.includes(row), row.id);
+  // Whatever order the repository hands back, the output is the same.
+  assert.deepEqual(inAnonymousOrder([...rows].reverse()), sorted);
+  assert.deepEqual(inAnonymousOrder([rows[3]!, rows[0]!, rows[4]!, rows[2]!, rows[1]!]), sorted);
+  // Works on the anonymized shape as well (the frontend mock's canned list).
+  assert.deepEqual(inAnonymousOrder(rows.map(anonymousSong)), sorted.map(anonymousSong));
+  assert.deepEqual(inAnonymousOrder([]), []);
+});
+
+test("matchupsView doesn't depend on the order the submissions were read in: sides come from the salted pairing, matchups sort by id", () => {
+  // The submission ids sort in a different order from the players.
+  const subs = FIVE.map((id, i) => sub(id, `sub-${["q7", "c2", "x9", "a4", "m1"][i]}`));
+  const view = (rows: Submission[]) => matchupsView(deriveRoundMatchups(frozen(), ROUND, rows), "u-cyd");
+  const expected = view(subs);
+  for (const rows of [[...subs].reverse(), inAnonymousOrder(subs), [subs[2]!, subs[4]!, subs[0]!, subs[3]!, subs[1]!]]) {
+    assert.deepEqual(view(rows), expected, rows.map((s) => s.id).join(","));
+  }
 });
 
 // ---- turnout (HTH-08): who a round waits on --------------------------------

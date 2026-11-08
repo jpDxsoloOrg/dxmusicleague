@@ -9,6 +9,7 @@
 
 import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import { badRequest } from "../domain/errors.ts";
+import { inAnonymousOrder } from "../domain/matchups.ts";
 import type { League, Round, Submission } from "../domain/types.ts";
 
 interface ApiTrack {
@@ -150,6 +151,11 @@ async function spotifyWrite<T>(token: string, method: string, path: string, body
  * URL, or null when there's nothing to make one from (non-Spotify league, no
  * Spotify tracks). Throws only on an actual Spotify failure — callers decide
  * whether that should block the round transition.
+ *
+ * The playlist is public and goes up before the reveal, so its tracks are in
+ * submission-id order (`inAnonymousOrder`, domain/matchups.ts) — the same as
+ * the anonymous vote list — never in the order `submissions` arrives in:
+ * that's repository order, which follows the submitter (BUG-01).
  */
 export async function createPlaylistForRound(
   league: League,
@@ -157,7 +163,7 @@ export async function createPlaylistForRound(
   submissions: Submission[],
 ): Promise<string | null> {
   if (league.musicProvider !== "spotify") return null;
-  const trackIds = submissions
+  const trackIds = inAnonymousOrder(submissions)
     .filter((s) => s.track.provider === "spotify" && s.track.providerTrackId)
     .map((s) => s.track.providerTrackId);
   if (trackIds.length === 0) return null;

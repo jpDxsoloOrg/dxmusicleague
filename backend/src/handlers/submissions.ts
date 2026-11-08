@@ -12,7 +12,7 @@ import { randomUUID } from "node:crypto";
 import type { MusicProviderId, Submission, Track } from "../domain/types.ts";
 import { leagueFormat } from "../domain/types.ts";
 import { badRequest, forbidden, notFound } from "../domain/errors.ts";
-import { anonymousSong, departedParticipants } from "../domain/matchups.ts";
+import { anonymousSong, departedParticipants, inAnonymousOrder } from "../domain/matchups.ts";
 import type { AnonSong } from "../domain/matchups.ts";
 import { autoAdvanceRound } from "./progression.ts";
 import type { Deps } from "./leagues.ts";
@@ -152,8 +152,10 @@ export async function getMySubmissions(
 }
 
 /** The anonymized song list — every submission except the caller's own, with no
- *  submitter identity. Available once submissions close: during `previewing`
- *  (listen to the playlist) and `voting`. */
+ *  submitter identity, in submission-id order (`inAnonymousOrder`: the order
+ *  the repository reads in follows the submitter, so it would name them).
+ *  Available once submissions close: during `previewing` (listen to the
+ *  playlist) and `voting`. */
 export async function listVotableSubmissions(
   deps: Deps,
   caller: string,
@@ -170,6 +172,7 @@ export async function listVotableSubmissions(
   // disagree about a round. Standard leagues keep every song, as before.
   const departed = leagueFormat(league) === "headToHead" ? departedParticipants(league, round) : new Set<string>();
   // The shared anonymizer (domain/matchups.ts) — the H2H matchups read uses
-  // the same one, so both vote screens get the identical song shape.
-  return subs.filter((s) => s.userId !== caller && !departed.has(s.userId)).map(anonymousSong);
+  // the same one, so both vote screens get the identical song shape — over
+  // the songs in submission-id order, never the repository's (BUG-01).
+  return inAnonymousOrder(subs.filter((s) => s.userId !== caller && !departed.has(s.userId))).map(anonymousSong);
 }

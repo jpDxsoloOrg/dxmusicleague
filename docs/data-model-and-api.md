@@ -170,7 +170,11 @@ auto-advance writes the same way. Standard leagues write unconditionally, as bef
 
 `POST` validations: caller is a league member; round status is `submitting`; submission
 deadline not passed. Upserts `SUB#<me>` (re-submit overwrites). `GET` returns the anonymized
-list **excluding the caller's own pick**, and only when the round is `voting`.
+list **excluding the caller's own pick**, only once submissions close (`previewing` or
+`voting`). The list is in submission-id order, never the order the repository reads in: that
+follows the submitter (insertion time in memory, user id via DynamoDB's `SUB#<userId>#<subId>`
+key), so it would say whose song is whose. The round's public Spotify playlist lists its tracks
+in the same order.
 
 ### Votes & reveal
 

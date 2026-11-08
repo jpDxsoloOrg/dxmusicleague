@@ -60,6 +60,28 @@ export function anonymousSong(sub: Pick<Submission, "id" | "track">): AnonSong {
   return { id: sub.id, track: sub.track };
 }
 
+/**
+ * The one order an anonymous song list goes out in: by submission id (code
+ * units, never locale, so every runtime agrees). Returns a sorted copy; the
+ * input is left as it was.
+ *
+ * Why not the order the songs were read in: repository order follows the
+ * submitter. MemoryRepository reads in insertion order — submission time,
+ * which the activity feed shows ("X submitted a song"); DynamoDB reads in
+ * sort-key order, SK = `SUB#<userId>#<subId>` — submitter user id, the same
+ * every round, so one revealed round maps every later list. Either way, the
+ * position of a song names its owner, and in a head-to-head round the
+ * matched-up song ids then name who plays whom before the reveal. Submission
+ * ids are `sub-<random UUID>`, new every round and kept across a re-submit
+ * (handlers/submissions.ts), so their order is stable within a round and says
+ * nothing about who or when. Used by the anonymous vote list
+ * (`listVotableSubmissions`), the round's public Spotify playlist
+ * (`createPlaylistForRound`) and the frontend mock's vote lists.
+ */
+export function inAnonymousOrder<T extends { id: string }>(subs: readonly T[]): T[] {
+  return [...subs].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
 /** One player's slot in a matchup (or the bye), with their song if they have
  *  one this round. Server-side only — it names the player. */
 export interface MatchupSide {

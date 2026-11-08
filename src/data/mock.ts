@@ -21,6 +21,7 @@ import {
   anonymousSong,
   departedParticipants,
   deriveRoundMatchups,
+  inAnonymousOrder,
   matchupsView,
   roundSettled,
   votableMatchups,
@@ -825,10 +826,11 @@ export function saveVoteComments(leagueId: string, comments: Record<string, stri
   myVoteComments[leagueId] = cleaned;
 }
 
-// Submissions to vote on: anonymized, excluding the current user's own pick.
+// Submissions to vote on: anonymized, excluding the current user's own pick,
+// in submission-id order like the API (`inAnonymousOrder` — the order songs
+// were stored in would say who submitted them; BUG-01).
 export function getVotableSubmissions(_leagueId: string): VotableSubmission[] {
-  return CANON_SUBMISSIONS
-    .filter((s) => s.submitterId !== currentUser.id)
+  return inAnonymousOrder(CANON_SUBMISSIONS.filter((s) => s.submitterId !== currentUser.id))
     .map((s) => ({ id: s.id, track: mockTrack(s.pid, s.title, s.artists, s.album, s.dur) }));
 }
 
@@ -1340,15 +1342,15 @@ export function removeHeadToHeadSubmission(roundId: string, submissionId: string
 }
 
 /** listVotableSubmissions for a head-to-head round: every song but the
- *  caller's own and departed players' withdrawn ones, anonymized. */
+ *  caller's own and departed players' withdrawn ones, anonymized, in
+ *  submission-id order (`inAnonymousOrder`), as the API sends it. */
 export function getHeadToHeadVotableSubmissions(roundId: string): VotableSubmission[] {
   const { round, league } = memberRound(roundId);
   if (round.status !== "previewing" && round.status !== "voting") {
     throw new Error("The songs aren't revealed yet for this round.");
   }
   const departed = departedParticipants(seasonView(league), roundState(round));
-  return roundSubmissions(roundId)
-    .filter((s) => s.userId !== currentUser.id && !departed.has(s.userId))
+  return inAnonymousOrder(roundSubmissions(roundId).filter((s) => s.userId !== currentUser.id && !departed.has(s.userId)))
     .map(anonymousSong);
 }
 
