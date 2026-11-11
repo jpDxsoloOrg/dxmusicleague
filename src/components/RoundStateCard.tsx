@@ -27,6 +27,7 @@
 import { Link } from "react-router-dom";
 import type { LeagueDetail } from "../data";
 import type { RoundStatus } from "../domain/types";
+import { leagueFormat } from "../domain/types";
 import "./RoundStateCard.css";
 
 const STATUS_LABEL: Record<RoundStatus, string> = {
@@ -80,6 +81,13 @@ function cardCopy({ page, detail, spectator }: RoundStateCardProps): CardCopy {
   }
 
   const theme = `“${round.theme}”`;
+  // Only Spotify leagues get a playlist (and only best-effort), so the
+  // Listening copy names one only when the round has it. Without one, a
+  // standard league lists its songs on the league page, and a head-to-head
+  // round's songs stay hidden until voting opens and they appear in their
+  // matchups.
+  const headToHeadNoPlaylist = !round.playlistUrl && leagueFormat(league) === "headToHead";
+  const listenWhere = round.playlistUrl ? "the playlist is on the league page" : "they're listed on the league page";
   switch (round.status) {
     case "draft":
       return voting
@@ -93,14 +101,20 @@ function cardCopy({ page, detail, spectator }: RoundStateCardProps): CardCopy {
         action: { label: "Submit a song", to: `${base}/submit` },
       };
     case "previewing":
+      if (headToHeadNoPlaylist) {
+        return {
+          title: voting ? "Voting opens after the listening phase" : "Submissions are closed for this round",
+          body: `The songs for ${theme} are in. You'll hear them in their matchups once voting opens.`,
+        };
+      }
       return voting
         ? {
             title: "Voting opens after the listening phase",
-            body: `The songs for ${theme} are in. Give the playlist a listen on the league page before voting opens.`,
+            body: `The songs for ${theme} are in, and ${listenWhere}. Give them a listen before voting opens.`,
           }
         : {
             title: "Submissions are closed for this round",
-            body: `The songs for ${theme} are in, and the playlist is on the league page. Voting opens after the listening phase.`,
+            body: `The songs for ${theme} are in, and ${listenWhere}. Voting opens after the listening phase.`,
           };
     case "voting":
       // Only the submit page gets here: an open vote page never shows the card.

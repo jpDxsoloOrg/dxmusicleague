@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { data } from "../data";
 import type { RoundStatus } from "../domain/types";
 import { leagueFormat } from "../domain/types";
+import { plural } from "../lib/plural";
 import { useAsync } from "../lib/useAsync";
 import { FormatTag, LeagueCard, PublicLeagueCard } from "./DashboardPage";
 import "./DashboardPage.css";
@@ -90,7 +91,7 @@ export function LeaguesPage() {
                   <span className="browse-round">
                     {lg.currentRound
                       ? `Round ${lg.currentRound.index} of ${lg.totalRounds} · ${lg.currentRound.theme}`
-                      : `${lg.totalRounds} rounds`}
+                      : plural(lg.totalRounds, "round")}
                   </span>
                 </div>
                 {lg.currentRound && (
@@ -98,7 +99,7 @@ export function LeaguesPage() {
                     {STATUS_LABEL[lg.currentRound.status]}
                   </span>
                 )}
-                <span className="browse-members">{lg.memberCount} players</span>
+                <span className="browse-members">{plural(lg.memberCount, "player")}</span>
                 <span className="browse-cta">👀 Spectate →</span>
               </Link>
             ))}

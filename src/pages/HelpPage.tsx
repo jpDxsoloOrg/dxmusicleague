@@ -35,7 +35,7 @@ const TOC: { group: string; items: { id: string; label: string }[] }[] = [
     group: "Playing a round",
     items: [
       { id: "submit", label: "Submit a song" },
-      { id: "listen", label: "Listen to the playlist" },
+      { id: "listen", label: "Listen to the songs" },
       { id: "vote", label: "Vote" },
       { id: "results", label: "Results & reveal" },
     ],
@@ -141,7 +141,7 @@ export function HelpPage() {
             <ol className="help-flow">
               <li>The league <strong>owner</strong> announces a <Term>theme</Term> (for example, <em>“Songs that sound like summer”</em>).</li>
               <li>Every player <strong>submits one song</strong> that fits the theme.</li>
-              <li>Once submissions close, all songs are collected into a <strong>playlist</strong> to listen to — with nobody's name attached.</li>
+              <li>Once submissions close, all songs are shared to <strong>listen</strong> to (as a playlist too, in Spotify leagues) — with nobody's name attached.</li>
               <li>Players <strong>vote</strong> by spreading a pool of points across the songs they liked best.</li>
               <li>The round is <strong>revealed</strong>: submitters' names come out, points are tallied, and a winner is crowned.</li>
             </ol>
@@ -180,8 +180,9 @@ export function HelpPage() {
                 change your pick right up until it closes.
               </Phase>
               <Phase pill="previewing" name="Listening">
-                Submissions are closed and the songs are revealed as an anonymous
-                playlist. Give everything a listen — voting hasn't opened yet.
+                Submissions are closed and the songs are shared anonymously (as a
+                playlist too, in Spotify leagues). Give everything a listen — voting
+                hasn't opened yet.
               </Phase>
               <Phase pill="voting" name="Voting">
                 Spend your points across the songs you liked best — or, in a
@@ -437,7 +438,7 @@ export function HelpPage() {
             </Callout>
           </Section>
 
-          <Section id="listen" title="Listen to the playlist">
+          <Section id="listen" title="Listen to the songs">
             <p>
               Once submissions close, the round moves to the{" "}
               <StatusPill pill="previewing">Listening</StatusPill> phase. Voting isn't
@@ -449,8 +450,9 @@ export function HelpPage() {
             <p>
               Each song in the list has a <strong>▶ Listen</strong> link when it links
               to its music service, and an <strong>Open playlist</strong> button shows
-              when the round has a playlist. The list stays up through voting. In a
-              head-to-head league, the songs appear in their matchups once voting opens.
+              when the round has a playlist. The list stays up through voting. A
+              head-to-head league has no list: its songs appear in their matchups once
+              voting opens (a Spotify head-to-head league still gets the playlist).
             </p>
           </Section>
 
@@ -551,7 +553,7 @@ export function HelpPage() {
             <ol className="help-steps">
               <li><strong>Create round</strong> — type the theme for the next round to create it as a <StatusPill pill="draft">Draft</StatusPill>.</li>
               <li><strong>Open for submissions</strong> — moves it to <StatusPill pill="submitting">Submitting</StatusPill> so players can add songs.</li>
-              <li><strong>Close submissions &amp; reveal songs</strong> — moves it to <StatusPill pill="previewing">Listening</StatusPill> and builds the playlist.</li>
+              <li><strong>Close submissions &amp; reveal songs</strong> — moves it to <StatusPill pill="previewing">Listening</StatusPill> and, in a Spotify league, builds the playlist.</li>
               <li><strong>Open voting</strong> — moves it to <StatusPill pill="voting">Voting</StatusPill>.</li>
               <li><strong>Close voting &amp; reveal results</strong> — tallies the votes and reveals everything.</li>
             </ol>
