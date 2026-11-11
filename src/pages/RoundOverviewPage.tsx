@@ -294,7 +294,7 @@ export function RoundOverviewPage() {
                 🏆 {wrapUpHeadline}
               </h2>
               <p className="hero-desc">
-                All {totalRounds} rounds have been played and the final standings are locked in.
+                {totalRounds === 1 ? "The league's only round has" : `All ${totalRounds} rounds have`} been played and the final standings are locked in.
                 {rematchId
                   ? " A rematch is underway — same settings, fresh standings."
                   : isOwner

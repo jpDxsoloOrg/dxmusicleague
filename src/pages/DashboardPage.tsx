@@ -115,7 +115,9 @@ export function LeagueCard({ summary }: { summary: LeagueSummary }) {
   // (the schedule is drawn then), so the card doesn't count rounds yet.
   const preSeason = headToHead && !h2hScheduleSet(currentRound ? [currentRound] : []);
   const roundTag = finished
-    ? `All ${totalRounds} rounds played`
+    ? totalRounds === 1
+      ? "1 round played"
+      : `All ${totalRounds} rounds played`
     : preSeason
       ? "Pre-season"
       : `Round ${currentRound?.index ?? 0} of ${totalRounds}`;

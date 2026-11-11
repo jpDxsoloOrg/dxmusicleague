@@ -33,12 +33,17 @@
   transition: border-color 0.12s ease;
 }
 .result-row.selected { border-color: var(--magenta); background: var(--panel-2); }
-.result-info { display: flex; flex-direction: column; min-width: 0; }
-.result-info strong { font-size: 15px; }
+/* The info column takes the free space, so the duration and the Select button
+   line up down the list whatever the title length (and even when the duration
+   is hidden on phones). */
+.result-row .track-art { flex-shrink: 0; }
+.result-info { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.result-info strong { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .result-info span { font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.result-dur { font-size: 12px; color: var(--text-dim); margin-left: auto; }
-.select-btn { padding: 8px 16px; font-size: 13px; }
-.select-btn.is-selected { background: var(--grad); border: none; color: white; }
+.result-dur { flex-shrink: 0; min-width: 3.5em; text-align: right; font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+/* Same width whether it says Select or Selected, so picking a track doesn't shift it. */
+.select-btn { flex-shrink: 0; min-width: 104px; text-align: center; padding: 8px 16px; font-size: 13px; }
+.select-btn.is-selected { background: var(--grad); border-color: transparent; color: white; }
 
 /* submission column */
 .submission-col { position: sticky; top: 96px; }
@@ -152,7 +157,7 @@
   .theme-title { font-size: 23px; margin-bottom: 16px; }
   .result-row { gap: 10px; }
   .result-dur { display: none; }
-  .select-btn { padding: 8px 12px; }
+  .select-btn { min-width: 96px; padding: 8px 12px; }
   /* keep the cover art a sensible size on narrow screens */
   .submission-card .track-art { max-width: 220px; margin: 0 auto; }
 }

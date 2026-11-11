@@ -34,8 +34,8 @@ const TUTORIAL_STEPS: TutorialStep[] = [
     hint: "You get one submission per round, so make it count.",
   },
   {
-    title: "Listen to the playlist",
-    body: "When submissions close, all the round's songs are collected into a playlist. Take some time to listen through before voting opens.",
+    title: "Listen to the songs",
+    body: "When submissions close, the round's songs are shared with nobody's name attached: listed on the league page, and as a playlist in Spotify leagues. Take some time to listen through before voting opens.",
   },
   {
     title: "Vote for your favorites",
