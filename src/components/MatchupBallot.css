@@ -1,0 +1,133 @@
+/* Head-to-head ballot (MatchupBallot.tsx). The page shell — header, picks-left
+   chip, sticky footer, comment box, done panel — reuses VotePage.css; these
+   are the matchup cards. Every class is mb-prefixed so nothing here can touch
+   the points ballot. */
+
+.mb-list { display: flex; flex-direction: column; gap: 14px; }
+
+.mb-nothing {
+  margin: 0 0 14px; padding: 12px 16px;
+  font-size: 13px; color: var(--text-muted);
+  background: var(--panel); border: 1px dashed var(--border); border-radius: var(--radius-sm);
+}
+
+.mb-card {
+  /* the songs stack by the card's own width (see the bottom of this file) */
+  container-type: inline-size;
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 14px 16px 16px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  transition: border-color 0.12s ease;
+}
+.mb-card.has-pick:not(.locked) { border-color: var(--magenta); }
+
+.mb-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.mb-card-title {
+  font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.mb-status {
+  flex-shrink: 0;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 4px 10px; border-radius: 999px;
+  color: var(--text-muted); background: rgba(155, 144, 179, 0.12);
+}
+.mb-status.open { color: var(--status-voting); background: rgba(139, 92, 246, 0.14); }
+.mb-status.picked { color: var(--status-revealed); background: rgba(34, 197, 94, 0.14); }
+.mb-status.mine { color: var(--status-previewing); background: rgba(56, 189, 248, 0.14); }
+
+.mb-note { margin: -4px 0 0; font-size: 13px; color: var(--text-muted); }
+
+/* the two songs: side by side with a "vs" divider between them */
+.mb-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 12px;
+}
+.mb-pair.single { grid-template-columns: minmax(0, 1fr); max-width: calc(50% - 29px); }
+
+.mb-vs {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  color: var(--text-dim);
+}
+.mb-vs::before, .mb-vs::after { content: ""; flex: 1; width: 1px; background: var(--border); }
+.mb-vs span {
+  width: 34px; height: 34px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-muted); background: var(--bg-2); border: 1px solid var(--border);
+}
+
+.mb-side { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+
+/* a song's face: the points vote card's rendering (art, title, artists,
+   anonymous submitter, duration) */
+.mb-song {
+  position: relative;
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  transition: border-color 0.12s ease, background 0.12s ease, opacity 0.12s ease;
+}
+.mb-song .vote-info { flex: 1; }
+/* half a card is narrow: a long unbroken title or artist wraps instead of
+   running over the duration and the pick circle (or off a phone screen) */
+.mb-song .vote-info strong, .mb-song .vote-info span { overflow-wrap: anywhere; }
+/* the viewer's own song: tinted like the "Locked" chip, never picked */
+.mb-song.mine { border-color: rgba(56, 189, 248, 0.35); }
+.mb-song.pickable {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+}
+.mb-song.pickable:hover { border-color: rgba(224, 64, 251, 0.55); }
+.mb-song.pickable:has(.mb-radio:focus-visible) { outline: 2px solid var(--magenta); outline-offset: 2px; }
+.mb-side.picked .mb-song {
+  border-color: var(--magenta);
+  background: rgba(224, 64, 251, 0.1);
+  box-shadow: inset 0 0 0 1px var(--magenta);
+}
+/* once a side is picked, the other one steps back */
+.mb-card.has-pick:not(.locked) .mb-side:not(.picked) .mb-song { opacity: 0.6; }
+.mb-card.has-pick:not(.locked) .mb-side:not(.picked) .mb-song:hover { opacity: 0.85; }
+
+/* the native radio stays for keyboard + screen readers, visually replaced by .mb-check */
+.mb-radio {
+  position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; pointer-events: none;
+}
+.mb-check {
+  flex-shrink: 0;
+  width: 26px; height: 26px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 14px; font-weight: 800; color: white;
+  border: 2px solid var(--border);
+}
+.mb-side.picked .mb-check { border: none; background: var(--grad); }
+
+.mb-song.mb-empty { border-style: dashed; background: transparent; }
+.mb-empty-art {
+  flex-shrink: 0; width: 56px; height: 56px; border-radius: 9px;
+  border: 1px dashed var(--border);
+}
+.mb-empty .vote-info strong { color: var(--text-muted); }
+
+.mb-listen { align-self: flex-start; font-size: 12px; font-weight: 600; color: var(--text-muted); }
+.mb-listen:hover { color: var(--text); }
+
+/* (doubled class: VotePage.css loads after this file and sets .vote-hint's color) */
+.vote-hint.mb-error { color: #ff8a8a; }
+
+/* ---- narrow cards: stack the two songs with a horizontal "vs" divider ----
+   Keyed to the card's own (content-box) width, not the viewport's: phones
+   (and up to ~750px), but also from the sidebar's return at 821px to ~1050px,
+   where side by side would squeeze each title column under ~140px. */
+@container (max-width: 679.98px) {
+  .mb-pair { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .mb-pair.single { max-width: none; }
+  .mb-vs { flex-direction: row; }
+  .mb-vs::before, .mb-vs::after { width: auto; height: 1px; }
+  .mb-vs span { width: 30px; height: 30px; font-size: 11px; }
+}
+@media (max-width: 640px) {
+  .mb-card { padding: 12px 12px 14px; }
+  .mb-song { gap: 12px; padding: 10px; }
+}

@@ -1,0 +1,229 @@
+# Head-to-head format — design notes
+
+> Living notes for the "Head-to-Head Format" epic (HTH-01 … HTH-12). Each section
+> records a behavior that was a judgment call, so the next person (or playoffs,
+> HTH-13) doesn't have to rediscover it from the code. The code comments carry
+> the detail; this is the overview.
+
+## Progression, completion % and departures (HTH-08)
+
+The round machinery — timed auto-advance (`backend/src/handlers/progression.ts`),
+the owner's phase changes (`handlers/rounds.ts`), the dashboard completion %
+and the round's who-submitted / who-voted panels (`handlers/leagues.ts`) — stays
+format-agnostic: one song and one ballot row per member. Deadlines, cascades
+through elapsed phases, and early-advance re-basing work unchanged for
+head-to-head leagues. The only thing that differs is **who "everyone" is**,
+defined once in `backend/src/domain/matchups.ts` ("turnout"):
+
+| Phase | Standard league | Head-to-head league |
+|---|---|---|
+| Submitting is done when… | every **current** member has used all their songs-per-player slots | every **current** member has their one song |
+| Voting is done when… | every **current** member has a ballot (and songs exist) | every member **who has a matchup to pick in** has picked in all of them |
+| Completion % | members' songs (each up to the allowance) / slots, members with a ballot / members | the same people-counts as the row above (100 when nobody can vote) |
+| Who-voted panel names | every member, voted or waiting | every member while everyone can vote; otherwise only the viewer (see below) |
+| Activity feed "cast their votes" | every ballot | the viewer's own; others' only while everyone can vote, and only once they have voted (the panel's done list; see below) |
+
+Why the head-to-head counts differ:
+
+- **A departed player's song doesn't count toward "everyone submitted".** Their
+  song is withdrawn (their pair plays as a walkover), so it must not stand in
+  for a member who stayed and hasn't submitted yet — in head-to-head that member
+  would lose by walkover the moment the phase closed early. (Standard leagues
+  count current members too since BUG-09, though there the song still ranks.)
+- **Members with nothing to vote on aren't waited for.** A voter's votable set is
+  every contest (both songs present) that isn't their own matchup. It is empty
+  for both players of a two-player league, and for the pair of a round whose
+  only contest is their own. Counting them would keep the round from ever
+  finishing early and the completion % from ever reaching 100.
+- **A ballot row isn't proof of a vote.** A member with nothing to vote on can
+  still leave a comments-only ballot, and a ballot cast while a player was
+  departed would have no pick in that player's pair if they rejoined (the pair
+  a contest again — no longer reachable since HTH-14, see
+  [Leave / kick mid-season](#leave--kick-mid-season)). A member counts as voted
+  only when their ballot picks one of the two songs in every matchup they can
+  vote in now — exactly the picks the tally would count.
+
+### A round nobody can vote in goes straight to the reveal
+
+When no member has a matchup to pick in — every pair is a walkover or a no
+contest, or it's a two-player league whose one matchup is both players' own —
+no ballot could ever arrive. Rather than sit dead in voting until a deadline
+(timed) or until the owner notices (manual), the round is revealed on the spot:
+
+- **Owner opens voting** (`PATCH` previewing → voting, manual or timed league):
+  the response is the round already `revealed`, the PATCH's own edits included,
+  with W/L/D banked by the normal reveal (HTH-07 rules: walkover W/L, no contest
+  nothing, a contest nobody could vote in is a 0–0 draw). If another reveal
+  settled the round first (a second PATCH, or a timed advance), the PATCH's
+  edits never landed, so it answers 409 "That round was just revealed", as any
+  head-to-head round write does in that race; nothing is banked twice.
+- **Timed league reaches voting by deadline:** the auto-advance's everyone-voted
+  check is vacuously true when nobody can vote, so the same read that moves the
+  round into voting reveals it. The same applies if departures mid-voting leave
+  nobody who can vote: the next read reveals the round.
+
+A consequence worth knowing: a two-player head-to-head league never has a
+voting phase. Both players submit, and the round reveals as a draw (or a
+walkover if one of them didn't submit). That's inherent to the format — nobody
+outside the matchup exists to judge it.
+
+### Who-voted panel and anonymity
+
+The panel's counts (`X of N ballots in`) are over the voters the round waits
+on, as above. Its **names** are a different matter, because eligibility is
+itself identifying. Two or more contests give every member something to judge,
+and with none nobody can vote; so a round has members with nothing to vote on
+exactly when it has a single contest, and those members are that contest's
+pair. Listing only the eligible voters, or showing the others as "n/a", would
+therefore name the pair of the only contest, and with it:
+
+- the owner of every song outside that contest: the bye song (shown anonymously
+  by `GET /rounds/:id/matchups`), and any walkover song (the no-show was
+  already named by the submissions panel);
+- for each of the two contest players, who their opponent is, and so who wrote
+  the other song in their own matchup. In a three-player league (one contest
+  plus a bye, every round) that attributes every song in the round.
+
+That is exactly what the matchups payload hides (`isMine` is its only identity
+signal, HTH-05). So the panel names voters only while **every** member can vote
+(eligibility then says nothing about who plays whom). Otherwise it names
+nobody but the viewer, and only if they can vote, which they already know from
+their own matchups. The counts are still sent (the number of eligible voters
+follows from the matchups payload anyway). `votingPanelNames` in
+`domain/matchups.ts` is the rule; the HTH-09 MockClient imports and calls it,
+so mock mode names exactly whom the API names.
+
+A useful side effect: a member who appears in **neither** list has nothing to
+vote on this round (the pair of the only contest), which the round overview can
+use for its call to action (HTH-11) instead of "Vote now".
+
+**The activity feed follows the same rule.** Its "cast their votes" entries name
+a ballot's author, and next to a voted / eligible count that is attributable
+from a single snapshot: an entry that moved the count belongs to an eligible
+voter (in a three-player league, the bye player, so the bye song is theirs and
+each contest player learns their opponent), and an entry that didn't is a
+contest player's comments-only ballot. (Before HTH-08 the count was ballot
+rows / members, so every entry moved it and said nothing about eligibility;
+counting only eligible voters is what makes the names identifying.) So while
+the panel withholds names, the feed shows each viewer **only their own**
+ballot entry; other members' ballots (comments-only rows and departed voters'
+ballots included) are left out until the reveal, when the feed shows them all
+again.
+
+While every member can vote, the feed shows another member's entry **only once
+they have voted** (they are in the panel's done list), so its other-member
+entries are always exactly the panel's done list and the feed never names more
+than the panel (BUG-06). A ballot row from a member the panel shows waiting is
+itself identifying: every eligible voter must cast a complete ballot, so such a
+row was written while a departure mid-voting had left its author less to vote
+on, and a comments-only one while they had nothing at all, i.e. while their
+matchup was the round's only contest. Had the departed player rejoined (every
+member able to vote again — no longer reachable since HTH-14), an entry for
+that waiting member would name them as one of that contest's pair, and so tell
+the other player who their anonymous opponent is. Also left out: a ballot left
+incomplete by such a rejoin (its author waiting again until they re-cast), and
+a departed voter's ballot (they are in neither panel list).
+
+One predicate, `votersNameable` in `domain/matchups.ts`, drives both the panel
+(`votingPanelNames`) and the feed (`ballotAuthorVisible`, which adds the
+done-list condition); the HTH-09 MockClient imports and calls both (BUG-07),
+so mock mode's panel and feed match the API's for every viewer.
+
+Residuals, both read across time (only the first is still reachable since
+HTH-14; the second is kept as the reasoning for if rejoining ever returns):
+
+- Names shown while everyone could vote (voters in the panel's done list, and
+  their feed entries) stay in a viewer's memory. If a departure mid-voting then
+  leaves a single contest, the count after it can be read against who had
+  voted before, which can narrow down who is in that contest. That needs a
+  leave or kick mid-voting that drops the round to a single contest, and a
+  viewer who looked before it.
+- The reverse, after a rejoin (no longer reachable since HTH-14: a locked
+  season can't be rejoined). Each feed entry carries its ballot's cast time
+  (its id, and "time ago"), which the panel doesn't. A done voter whose ballot
+  was cast while the departed player was away must be that player's opponent:
+  anyone else would now have to pick in the restored matchup as well, so their
+  ballot would be incomplete and they would show as waiting. Whoever knows when
+  the player was away, above all the player who left and came back, can read
+  their opponent from one snapshot. (Without the times, the panel's done list
+  says the same when read against a look from before the departure.)
+
+Closing these would mean never naming head-to-head voters at all, in the panel
+or the feed (or at least coarsening or hiding ballot times); that is a product
+call for the lead, not made here.
+
+### Leave / kick mid-season
+
+Allowed at any point, as for standard leagues. The departed player's song is
+withdrawn from the current round, so their pair resolves as a walkover for the
+player who stayed at that round's reveal (the departed player takes no L; their
+standing row stays stored, off the board — HTH-04/HTH-07). Every voter whose set
+included that pair simply has one fewer matchup to pick in, so progress and the
+everyone-voted check follow the shrunken sets immediately.
+
+**Permanent once the season is locked (HTH-14, owner decision 2026-11-08).**
+HTH-03 let a frozen participant who left or was kicked rejoin by invite code.
+That let a player dodge a loss — leave before a reveal (no L), rejoin after —
+so after round 1 opens nobody joins or rejoins: `seasonJoinRefusal`
+(`domain/freeze.ts`) gives a former participant their own 409 ("You can't
+rejoin this head-to-head season — …"), and both repositories' season-gated
+join refuses everyone once frozen. The lobby (before round 1) can still be
+left and joined again. The departed set of a round in play therefore only
+grows, so the rejoin handling in this file's notes above (a ballot
+"incomplete since a rejoin", the restored-contest residual) is no longer a live
+path; the code keeps it as harmless defence.
+
+### Finished league and rematch
+
+Unchanged: the league is finished once its final round (`roundCount`, set to
+the round-robin length when round 1 opens — HTH-03) is revealed; the wrap-up
+winner is `standings[0]`, which the head-to-head sort makes the best record
+(HTH-04); the rematch clone keeps the format and starts un-frozen (HTH-03).
+
+### Places progression needed a format branch
+
+Flagged per the ticket, in case they point at a leak worth refactoring:
+
+1. `autoAdvanceRound` everyone-submitted — counted by member, not by row.
+2. `autoAdvanceRound` everyone-voted — the turnout above instead of a row count.
+3. `updateRound` opening voting — the reveal-on-the-spot for a round nobody can
+   vote in.
+4. `completionPct`, and the submitting / voting panels in `getLeagueDetail` —
+   the same people-counts (plus the voting-round activity feed's ballot
+   entries, which follow the panel's naming rule).
+
+All four read the one turnout definition in `domain/matchups.ts`, so they can't
+drift from each other or from ballot validation and the tally (which share
+`votableMatchups`). The standard league's counts were row counts at the time,
+so a departed member's song or ballot still counted toward "everyone"; BUG-09
+later made them count current members too ("points turnout" in
+`domain/matchups.ts`). A departed member's songs and ballot still rank and
+score at a standard reveal — they just don't stand in for a member who stayed.
+
+## Help, tour and copy (HTH-12)
+
+- **The first-login tour stays format-neutral.** It opens on a first sign-in
+  (`AppLayout`) or from Help, never inside a league, so it can't know which
+  format the player will meet. The scoring, voting and standings steps
+  describe both formats and point to Help (`src/components/Tutorial.tsx`).
+- **Help keeps the full head-to-head rules in one place.** "League formats"
+  compares Points and Head-to-Head, and "Head-to-head, in detail" covers
+  pairings, byes, picking winners, draws, walkovers and no contests,
+  standings, the season lock, and rounds that skip voting. The other sections
+  still describe the points game and add a short head-to-head note that links
+  there (`src/pages/HelpPage.tsx`).
+- **Help isn't gated on `H2H_ENABLED`.** That flag only hides the format
+  picker on Create league. Existing head-to-head leagues and the rest of the
+  head-to-head UI stay live when it's off, and Help already documents timed
+  rounds without checking `TIMED_ROUNDS_ENABLED`, so Help follows the same rule.
+- **Nothing user-facing promises playoffs** (HTH-13).
+- **Copy audit of HTH-01 to HTH-11.** The server messages read clearly and
+  are unchanged: season locked, forced settings, ballot referee, matchup
+  read guards. The UI copy for the lock note, ballot gate and outcome badges
+  is also unchanged. Changes: the Create-league one-liners (the Points blurb
+  said everyone votes on every song, but players spread a capped pool
+  instead), "W/L" changed to "W–L" to match the standings table, and the
+  head-to-head leave confirmation now mentions walkovers, as the owner's kick
+  confirmation already did.
+- **Format on discovery:** fixed in IMP-01 (the public card, preview and
+  browse row show the H2H tag).

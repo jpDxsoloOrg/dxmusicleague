@@ -8,7 +8,7 @@
 // Point the frontend's API client at this base URL during local development.
 
 import { createServer } from "node:http";
-import { ApiError } from "../domain/errors.ts";
+import { ApiError, errorBody } from "../domain/errors.ts";
 import { MemoryRepository, MemoryUserDirectory } from "../data/memory.ts";
 import { buildRoutes, matchRoute } from "./routes.ts";
 
@@ -63,7 +63,7 @@ const server = createServer(async (req, res) => {
     const result = await match.route.handler({ caller, params: match.params, query, body });
     send(200, result ?? null);
   } catch (err) {
-    if (err instanceof ApiError) return send(err.statusCode, { error: err.message });
+    if (err instanceof ApiError) return send(err.statusCode, errorBody(err));
     console.error("Unhandled error:", err);
     send(500, { error: "Something went wrong." });
   }

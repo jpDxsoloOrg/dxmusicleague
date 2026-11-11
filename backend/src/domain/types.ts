@@ -28,6 +28,14 @@ export interface Track {
 export interface LeagueSettings {
   votePoolSize: number;
   maxPointsPerSong: number;
+  /** Deprecated — always false. Self-voting is never allowed, in any league
+   *  (BUG-17): there is no such option any more. Kept only because leagues
+   *  stored before it was removed may still hold `true`; nothing reads it.
+   *  Create, rematch and the settings PATCH store false whatever they are
+   *  sent (`applyFormatSettings`, `updateLeagueSettings`), every League the
+   *  API returns reads false (`toLeagueView`), and the referee
+   *  (`validateBallot`, domain/rules.ts) refuses points and anti-votes on any
+   *  of the voter's own songs regardless. */
   allowSelfVote: boolean;
   submissionsPerPlayer: number;
   /** Anti-votes each voter may place per round (0 disables; each subtracts
@@ -42,11 +50,23 @@ export type LeagueVisibility = "private" | "public";
  *  `timed` = phases auto-advance after `phaseDays` days (see League). */
 export type RoundProgression = "manual" | "timed";
 
+/** How a league is scored. `standard` = every voter spreads a points pool over
+ *  every song, standings by total points. `headToHead` = round-robin 1v1
+ *  matchups each round, most votes wins, standings by W/L/D record. Chosen at
+ *  creation and immutable afterwards. Older records (no field) are standard —
+ *  always read it through `leagueFormat()`, never raw. */
+export type LeagueFormat = "standard" | "headToHead";
+
+export const LEAGUE_FORMATS: readonly LeagueFormat[] = ["standard", "headToHead"];
+
 export interface League {
   id: string;
   name: string;
   ownerId: string;
   musicProvider: MusicProviderId;
+  /** Scoring format, fixed at creation. Legacy rows lack it — read it with
+   *  `leagueFormat(league)`, which defaults to "standard". */
+  format: LeagueFormat;
   settings: LeagueSettings;
   memberIds: string[];
   /** Shareable code players enter to join. Minted at creation, case-insensitive. */
@@ -67,6 +87,32 @@ export interface League {
   /** Timed mode: how many days each phase (submitting/previewing/voting) lasts
    *  before it auto-advances. Ignored in manual mode. */
   phaseDays?: number;
+  /** Head-to-head only: the season's frozen participant order — every member
+   *  at the moment round 1 opened, shuffled once (rounds.ts freeze hook,
+   *  HTH-03). Unset until then (the league is "un-frozen" and still takes
+   *  players); once set it never changes and the league takes no new players.
+   *  Every round's pairings derive from it (domain/schedule.ts). SERVER-ONLY:
+   *  the order would deanonymize future matchups, so `toLeagueView` strips it
+   *  from every payload (owner included) and the frontend types never carry
+   *  it. Never copied by a rematch. Stored as a plain attribute on META. */
+  h2hParticipants?: string[];
+  /** Head-to-head only: the secret salt keying the schedule's per-round
+   *  presentation order (see domain/schedule.ts). 128 random bits as 32 hex
+   *  chars, generated in the same freeze write as `h2hParticipants`.
+   *  SERVER-ONLY like the order — stripped from every payload, never copied
+   *  by a rematch. */
+  h2hSalt?: string;
+  /** Set once this (finished) league has been rematched: the id of the
+   *  league the rematch created (BUG-13). A finished league has at most one
+   *  live rematch — `rematchLeague` returns this one instead of creating
+   *  another, and replaces the pointer only once its league has been
+   *  deleted. Written by the repo's conditional `setRematchPointer`, never
+   *  copied into the rematch itself. Unset on every other league. Only the
+   *  league detail filters it — keeping it only while that league exists and
+   *  the caller is one of its members (the "Go to the rematch" link); every
+   *  other League payload carries the stored pointer as is, which may name a
+   *  deleted league, so link from the detail's copy only. */
+  rematchLeagueId?: string;
 }
 
 export interface Round {
@@ -81,6 +127,65 @@ export interface Round {
   previewDeadline?: string;
   voteDeadline?: string;
   playlistUrl?: string;
+  /** Head-to-head only: the frozen participants who had departed (left or
+   *  were kicked) when this round was revealed — pinned by the reveal
+   *  (`finalizeReveal`, handlers/results.ts) in the same conditional write
+   *  that settles the round. Every later read of the revealed round
+   *  withdraws exactly these players' songs (domain/matchups.ts
+   *  `departedParticipants`), so its walkovers read back exactly as they were
+   *  banked whatever the member list says afterwards. Unset before the reveal
+   *  and on standard rounds (an empty list = nobody had departed). Not
+   *  secret — it names only former members, whom the revealed results name
+   *  anyway — so it rides along on round payloads; the frontend ignores it. */
+  h2hDeparted?: string[];
+  /** Head-to-head only: the picks each matchup won, as the reveal counted
+   *  them — pinned in the same write as `h2hDeparted` (and the W/L/D it
+   *  banked). GET results reads these instead of re-tallying the ballot
+   *  rows, so a ballot that lands after the reveal read them (one that
+   *  passed castBallot's status check just before the reveal) can never make
+   *  the results disagree with the banked records. Unset before the reveal
+   *  and on standard rounds; a revealed round without it (hand-made data)
+   *  re-tallies. Public once revealed, like `h2hDeparted`. */
+  h2hTally?: MatchupTally[];
+  /** Standard (points) rounds only (BUG-18): each song's numbers as the
+   *  reveal counted them — pinned in the same conditional write that settles
+   *  the round and banks those points (`finalizeReveal`, handlers/results.ts;
+   *  `revealPointsRoundOnce`). One entry per song the reveal ranked, zeros
+   *  included. GET results, the reveal page on reload and a reveal that lost
+   *  its claim rank from these instead of re-tallying the ballot rows, so a
+   *  ballot that lands after the reveal read them (one that passed
+   *  castBallot's status check just before the reveal, or was written
+   *  between the reveal's read and its write) can never make the results
+   *  disagree with the banked standings. Unset before the reveal and on
+   *  head-to-head rounds; a revealed round without it (seeded data, or one
+   *  revealed before the pin existed) re-tallies, as before. Public once
+   *  revealed — the results show the same numbers, plus a distinct-voter
+   *  count — so it rides along on round payloads; the frontend ignores it. */
+  pointsTally?: SongTally[];
+}
+
+/** One song's tally in a standard round (BUG-18; the domain tally is
+ *  `tallySongs` in domain/rules.ts): what the ranked results show for it and
+ *  what the tie-break reads. The net total is `pointsFor − pointsAgainst`. */
+export interface SongTally {
+  /** The song's submission id — what ballot allocations are keyed by. */
+  submissionId: string;
+  /** Sum of positive votes. */
+  pointsFor: number;
+  /** Sum of anti-votes (as a positive number; 0 when none). */
+  pointsAgainst: number;
+  /** Count of distinct voters who placed > 0 points on the song — the
+   *  first tie-break after points. */
+  distinctVoters: number;
+}
+
+/** Picks counted for each side of one head-to-head matchup (HTH-07; the
+ *  domain tally is `tallyMatchups` in domain/rules.ts). */
+export interface MatchupTally {
+  /** `<roundId>~M<n>` — the id ballots key their picks by. */
+  matchupId: string;
+  votesA: number;
+  votesB: number;
 }
 
 export interface Submission {
@@ -93,14 +198,27 @@ export interface Submission {
   submittedAt?: string;
 }
 
-/** A cast ballot: the whole point allocation for one voter in one round. */
+/** A cast ballot: one voter's whole vote in one round, stored as one atomic
+ *  item (`BALLOT#<voterId>`) in either format — so "one ballot row per voter"
+ *  (completion %, everyone-voted) holds for head-to-head leagues unchanged.
+ *  Standard: the point allocation (+ anti-votes). Head-to-head: `picks`, with
+ *  `allocations` stored empty. */
 export interface Ballot {
   roundId: string;
   voterId: string;
-  /** submissionId -> points. Stored as one atomic item. */
+  /** submissionId -> points. Always present; `{}` on a head-to-head ballot. */
   allocations: Record<string, number>;
   /** submissionId -> anti-votes; each subtracts a point at tally. */
   downvotes?: Record<string, number>;
+  /** Head-to-head only: matchupId (`<roundId>~M<n>`, domain/schedule.ts) ->
+   *  the submissionId the voter picked to win that matchup. One entry per
+   *  matchup the voter could vote in when they cast (`validateH2HBallot`,
+   *  domain/rules.ts), plus any pick made before a departure turned its pair
+   *  into a walkover (kept, inert — a rejoin would restore it, though since
+   *  HTH-14 a locked season can't be rejoined) — so count only
+   *  picks in `votableMatchups` at the reveal. Absent on standard ballots. */
+  picks?: Record<string, string>;
+  /** submissionId -> the voter's comment on that song (either format). */
   comments?: Record<string, string>;
   castAt: string;
 }
@@ -112,3 +230,30 @@ export const DEFAULT_LEAGUE_SETTINGS: LeagueSettings = {
   submissionsPerPlayer: 1,
   downvotePoolSize: 0,
 };
+
+/** A league's format, back-compat safe: leagues stored before formats existed
+ *  (no field) — or anything unrecognised — read as "standard". This accessor
+ *  is the single read path for the field; a raw `league.format` on a legacy
+ *  row is `undefined` and would fail an `=== "standard"` check. */
+export function leagueFormat(league: { format?: LeagueFormat | null }): LeagueFormat {
+  return league.format === "headToHead" ? "headToHead" : "standard";
+}
+
+/** Settings a head-to-head league is locked to: one song per player (so a
+ *  pairing of players is a pairing of songs) and no anti-votes (a matchup
+ *  ballot picks a winner; there is no points pool to subtract from). Creation
+ *  and rematch apply these; the settings PATCH rejects anything else. */
+export const H2H_FORCED_SETTINGS: Pick<LeagueSettings, "submissionsPerPlayer" | "downvotePoolSize"> = {
+  submissionsPerPlayer: 1,
+  downvotePoolSize: 0,
+};
+
+/** Overlay the settings a new league is forced to onto a settings object:
+ *  self-voting off in every format (BUG-17 — it isn't an option, so a legacy
+ *  `allowSelfVote: true` copied by a rematch is cleared), plus the format's
+ *  forced settings (none for standard leagues). Used by the create and
+ *  rematch paths to clamp. Always a copy. */
+export function applyFormatSettings(format: LeagueFormat, settings: LeagueSettings): LeagueSettings {
+  const clamped: LeagueSettings = { ...settings, allowSelfVote: false };
+  return format === "headToHead" ? { ...clamped, ...H2H_FORCED_SETTINGS } : clamped;
+}

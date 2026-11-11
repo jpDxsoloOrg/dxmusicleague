@@ -8,6 +8,7 @@ import * as leagues from "../handlers/leagues.ts";
 import * as rounds from "../handlers/rounds.ts";
 import * as submissions from "../handlers/submissions.ts";
 import * as voting from "../handlers/voting.ts";
+import * as matchups from "../handlers/matchups.ts";
 import * as providers from "../handlers/providers.ts";
 
 export interface RouteRequest {
@@ -46,6 +47,8 @@ export function buildRoutes(deps: Deps): Route[] {
           progression: body.progression as never,
           startAt: asOptString(body.startAt),
           phaseDays: typeof body.phaseDays === "number" ? body.phaseDays : undefined,
+          // Passed through raw — the handler 400s on anything but a known format.
+          format: body.format as never,
         });
       },
     },
@@ -114,6 +117,10 @@ export function buildRoutes(deps: Deps): Route[] {
       handler: (req) => leagues.rematchLeague(deps, req.caller, req.params.leagueId!),
     },
     {
+      // Explicit field list on purpose: `format` is creation-time only and
+      // must never be forwarded here (it's immutable once the league exists),
+      // and `allowSelfVote` — still sent by older frontends — is dropped:
+      // self-voting is never allowed, so the save stores false (BUG-17).
       method: "PATCH",
       pattern: "/leagues/:leagueId/settings",
       handler: (req) => {
@@ -121,7 +128,6 @@ export function buildRoutes(deps: Deps): Route[] {
         return leagues.updateLeagueSettings(deps, req.caller, req.params.leagueId!, {
           votePoolSize: body.votePoolSize,
           maxPointsPerSong: body.maxPointsPerSong,
-          allowSelfVote: body.allowSelfVote,
           submissionsPerPlayer: body.submissionsPerPlayer,
           downvotePoolSize: body.downvotePoolSize,
         });
@@ -196,6 +202,9 @@ export function buildRoutes(deps: Deps): Route[] {
         submissions.removeSubmission(deps, req.caller, req.params.roundId!, req.params.submissionId!),
     },
     {
+      // Explicit field list: a body field missing here is silently dropped.
+      // `picks` = head-to-head winner picks (matchupId -> submissionId),
+      // passed through raw — the rules engine validates its shape.
       method: "POST",
       pattern: "/rounds/:roundId/ballot",
       handler: (req) => {
@@ -204,6 +213,7 @@ export function buildRoutes(deps: Deps): Route[] {
           allocations: body.allocations as Record<string, number>,
           downvotes: body.downvotes as Record<string, number> | undefined,
           comments: body.comments as Record<string, string> | undefined,
+          picks: body.picks as Record<string, string> | undefined,
         });
       },
     },
@@ -217,6 +227,14 @@ export function buildRoutes(deps: Deps): Route[] {
       method: "GET",
       pattern: "/rounds/:roundId/my-ballot",
       handler: (req) => voting.getMyBallot(deps, req.caller, req.params.roundId!),
+    },
+    {
+      // Head-to-head rounds: the matchups (anonymous songs, the caller's own
+      // pair flagged) + the bye's exhibition song. Members from voting on;
+      // anyone signed in once revealed, like results.
+      method: "GET",
+      pattern: "/rounds/:roundId/matchups",
+      handler: (req) => matchups.listMatchups(deps, req.caller, req.params.roundId!),
     },
     {
       method: "GET",

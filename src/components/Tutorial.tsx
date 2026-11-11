@@ -1,6 +1,12 @@
 // Guided "how it works" walkthrough. Shown automatically on a user's first
 // sign-in (AppLayout tracks that per user in localStorage) and replayable
 // from the Help page.
+//
+// Neither trigger runs inside a league, so the tour can't know which format
+// the player will meet: the steps that differ by format (scoring, voting,
+// standings) describe both — Points and Head-to-Head — and point to Help's
+// "League formats" section for the detail. Keep them neutral rather than
+// assuming points.
 
 import { useEffect, useState } from "react";
 import "./Tutorial.css";
@@ -14,7 +20,7 @@ interface TutorialStep {
 const TUTORIAL_STEPS: TutorialStep[] = [
   {
     title: "Welcome to Music League",
-    body: "It's a game of music discovery with friends. Each round everyone secretly submits a song, everyone listens, everyone votes — and the best picks score points.",
+    body: "It's a game of music discovery with friends. Each round everyone secretly submits a song, everyone listens, everyone votes — and the best picks win.",
     hint: "This tour takes about a minute. You can replay it any time from Help in the sidebar.",
   },
   {
@@ -33,11 +39,12 @@ const TUTORIAL_STEPS: TutorialStep[] = [
   },
   {
     title: "Vote for your favorites",
-    body: "You get a pool of points to spread across the other players' songs. There's a cap on how many points one song can get, so you'll be rewarding a few favorites — and you can't vote for your own.",
+    body: "It depends on the format. In a Points league, spread a pool of points over the songs you like, with a cap per song. In Head-to-Head, songs meet 1v1: pick the winner of every matchup but your own.",
+    hint: "More in Help → League formats.",
   },
   {
     title: "Climb the leaderboard",
-    body: "When votes are revealed, everyone sees who submitted what and how it scored. Points add up round after round — the most points when the final round ends wins the league.",
+    body: "At the reveal, everyone sees who submitted what and how it did. Points leagues add up points; Head-to-Head leagues keep a win–loss record. Top of the table at the end wins.",
     hint: "That's it. Join a league and play your first round!",
   },
 ];

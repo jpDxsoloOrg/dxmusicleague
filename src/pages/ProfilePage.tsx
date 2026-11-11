@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { data } from "../data";
+import { leagueFormat } from "../domain/types";
 import { useAsync } from "../lib/useAsync";
 import { useAuth } from "../auth/AuthContext";
 import { Avatar } from "../components/Avatar";
+import { formatRecord, leagueHasDraws } from "../lib/record";
 import "./ProfilePage.css";
 
 export function ProfilePage() {
@@ -45,7 +47,13 @@ export function ProfilePage() {
       summaries.map(async (s) => {
         const standings = await data.getStandings(s.league.id);
         const mine = standings.find((st) => st.user.id === user?.id);
-        return { league: s.league, rank: mine?.rank, points: mine?.points ?? 0, field: standings.length };
+        // A head-to-head league scores by W–L(–D) record, not points —
+        // written the way that league's board writes it.
+        const record =
+          leagueFormat(s.league) === "headToHead"
+            ? formatRecord(mine ?? { wins: 0, losses: 0, draws: 0 }, leagueHasDraws(standings))
+            : undefined;
+        return { league: s.league, rank: mine?.rank, points: mine?.points ?? 0, record, field: standings.length };
       }),
     );
   }, [user?.id]);
@@ -119,7 +127,7 @@ export function ProfilePage() {
               <span className="profile-league-rank">
                 {r.rank ? `Rank #${r.rank} of ${r.field}` : "Unranked"}
               </span>
-              <span className="standing-pts">{r.points} pts</span>
+              <span className="standing-pts">{r.record ?? <>{r.points} pts</>}</span>
             </Link>
           ))}
         </div>

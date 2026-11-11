@@ -9,10 +9,20 @@
 .reveal-head h1 { margin: 6px 0 0; font-size: 28px; }
 .reveal-theme { margin: 4px 0 0; color: var(--text-muted); }
 
-/* winner */
+/* winner
+   The "🏆 Winner · N pts" badge has a place of its own in the card's grid, so
+   the title wraps before it and never runs under it. (It used to be absolutely
+   positioned in the corner with no room kept for it, and the title's first line,
+   centred beside the art, sat at the badge's height.) On a wide card the badge
+   takes row 1's second column, beside the art and title, pulled into the
+   padding with negative margins to sit 14px from the top and 16px from the
+   right, where it always has. On a narrow card (the container query below) it
+   gets a row of its own above them. The note and comments span the card. */
 .winner-card {
-  position: relative;
-  display: flex; flex-direction: column; gap: 16px;
+  container: winner / inline-size;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
   padding: 24px;
   border-radius: var(--radius);
   background:
@@ -21,14 +31,27 @@
   color: white;
   overflow: hidden;
 }
+.winner-card > * { grid-column: 1 / -1; }
+.winner-card > .winner-top { grid-area: 1 / 1; }
+.winner-card > .winner-badge { grid-area: 1 / 2; }
 .winner-top { display: flex; align-items: center; gap: 18px; }
 .winner-badge {
-  position: absolute; top: 14px; right: 16px;
+  align-self: start;
+  margin: -10px -8px 0 0;
   font-size: 12px; font-weight: 800; letter-spacing: 0.03em;
   background: rgba(0, 0, 0, 0.28); padding: 6px 12px; border-radius: 999px;
 }
+/* A card under ~600px wide (560px inside its padding) would leave the title
+   too narrow a column beside the badge, more so with the (+for / −against)
+   breakdown in it, so the badge moves to its own row at the top. */
+@container winner (max-width: 559.98px) {
+  .winner-card > .winner-badge { grid-area: 1 / 1 / auto / -1; justify-self: start; margin: 0; }
+  .winner-card > .winner-top { grid-area: 2 / 1 / auto / -1; }
+}
 .winner-card .track-art { box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.5); }
-.winner-info { display: flex; flex-direction: column; gap: 4px; }
+/* min-width + overflow-wrap: a long unbroken word in the title breaks inside
+   the title's column instead of spilling under the badge or off the card */
+.winner-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
 .winner-info strong { font-size: 26px; line-height: 1.1; }
 .winner-info > span { font-size: 15px; opacity: 0.92; }
 .winner-by { display: inline-flex; align-items: center; gap: 8px; font-size: 13px !important; margin-top: 4px; }
@@ -44,12 +67,17 @@
   display: flex; align-items: center; gap: 14px;
   padding: 12px 16px;
 }
-.rank-num { width: 22px; text-align: center; font-weight: 800; color: var(--text-dim); font-size: 16px; }
-.rank-info { display: flex; flex-direction: column; min-width: 0; }
+/* Above 900px the row is a flex line. When a title is too long for it, only the
+   title column gives way: the rank and points keep their widths (flex-shrink: 0,
+   like the art), so the ranks, art and points stay lined up from row to row, and
+   overflow-wrap breaks a long unbroken word inside the title column instead of
+   letting it run under the inline submitter. Ordinary titles lay out as before. */
+.rank-num { width: 22px; flex-shrink: 0; text-align: center; font-weight: 800; color: var(--text-dim); font-size: 16px; }
+.rank-info { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
 .rank-info strong { font-size: 15px; }
 .rank-info span { font-size: 12px; color: var(--text-muted); }
 .rank-by { display: inline-flex; align-items: center; gap: 7px; margin-left: auto; font-size: 13px; color: var(--text-muted); }
-.rank-pts { width: 84px; text-align: right; font-weight: 700; color: var(--magenta); font-size: 14px; }
+.rank-pts { width: 84px; flex-shrink: 0; text-align: right; font-weight: 700; color: var(--magenta); font-size: 14px; }
 /* for/against breakdown, shown when a song took anti-votes */
 .rank-pts .pts-breakdown {
   display: block;
@@ -72,7 +100,19 @@
   padding: 10px 16px 12px 52px;
   border-top: 1px solid var(--border);
 }
-.winner-card .submitter-note { margin-top: 4px; }
+/* the winning submitter's note sits on the gradient, so it gets the same dark
+   translucent strip as the voter comments below it (.comments.on-winner).
+   A text colour alone can't pass there: muted grey measured 1.3 to 2.2:1, and
+   even pure white only reaches about 3.8:1 at the pink end of the gradient.
+   overflow-wrap keeps a long unbroken token (a pasted link) inside the strip
+   instead of spilling onto the gradient and being clipped by the card. */
+.winner-card .submitter-note {
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  overflow-wrap: anywhere;
+}
 
 /* voter comments */
 .comments { display: flex; flex-direction: column; gap: 8px; }
@@ -120,10 +160,14 @@
 .reveal-standings li { display: flex; align-items: center; gap: 12px; padding: 10px 8px; border-radius: var(--radius-sm); }
 .reveal-standings li.top { background: var(--bg-2); }
 
-@media (max-width: 900px) {
+/* One column, leaderboard below the results, up to 1100px. Beside the 248px
+   sidebar (shown above 820px) a 320px leaderboard column would leave the
+   results only ~245-440px between 901 and 1100px: too little for the winner
+   card and for the ranked rows' inline submitter, which then sat on the
+   titles. Stacked, the results get ~589-788px there. */
+@media (max-width: 1100px) {
   .reveal-grid { grid-template-columns: 1fr; }
   .reveal-standings { position: static; }
-  .rank-by { display: none; }
 }
 
 @media (max-width: 640px) {
@@ -131,11 +175,50 @@
   .winner-card { padding: 20px 18px; }
   .winner-top { gap: 14px; }
   .winner-info strong { font-size: 20px; }
-  .winner-badge { top: 10px; right: 12px; font-size: 11px; }
+  /* beside the title: 10px from the top and 12px from the right, as before */
+  .winner-badge { margin: -10px -6px 0 0; font-size: 11px; }
   .result-rank-row { padding: 12px; gap: 10px; }
   .rank-pts { width: auto; }
   .result-item .comments { padding: 12px 14px; }
   .reveal-standings { padding: 16px; }
+}
+
+/* ---- narrow screens (<=900px): the submitter gets its own line ----
+   Naming who submitted each song is the point of the reveal, so it shows at
+   every width. Above 900px the name stays inline before the points (the rules
+   above). Here each ranked row becomes a small grid instead:
+   rank | art | title, artist and then avatar + name | points.
+   The name sits under the title in the info column, so it never competes with
+   the points or a long title for width, and a long name is cut with an
+   ellipsis. The points stay right-aligned, centred beside the song and its
+   submitter. Kept after the 640px block so its row-gap wins over that
+   block's `gap`. */
+@media (max-width: 900px) {
+  .result-list { container: ranked / inline-size; }
+  .result-rank-row {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "num art info pts"
+      "num art by   pts";
+    row-gap: 4px;
+  }
+  .rank-num { grid-area: num; }
+  .result-rank-row > .track-art { grid-area: art; }
+  .rank-info { grid-area: info; align-self: end; }
+  .rank-by { grid-area: by; align-self: start; min-width: 0; margin-left: 0; }
+  .rank-by-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rank-pts { grid-area: pts; }
+
+  /* a very narrow list (phones under ~312px): the name's line also runs on
+     under the points, so a name isn't cut down to a letter */
+  @container ranked (max-width: 279.98px) {
+    .result-rank-row {
+      grid-template-areas:
+        "num art info pts"
+        "num art by   by";
+    }
+  }
 }
 
 /* round-not-yet-revealed state (owner reveal / waiting) */
@@ -151,4 +234,115 @@
   align-items: center;
   gap: 16px;
   color: var(--text-muted);
+}
+/* The owner's failed reveal, a compact line under the button. Not the global
+   .page-error (a full-page state with 48px of vertical padding); the card's
+   centred flex column and gap place it. */
+.reveal-error { margin: 0; font-size: 14px; color: #ff8a8a; }
+
+/* ---- head-to-head reveal: one card per matchup + the bye's exhibition ---- */
+.mr-list { display: flex; flex-direction: column; gap: 14px; }
+.mr-empty { margin: 0; color: var(--text-muted); }
+.mr-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.mr-card.mr-mine { border-color: rgba(224, 64, 251, 0.45); }
+.mr-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 16px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+}
+.mr-title {
+  display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px 8px;
+  font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-dim);
+}
+.mr-you {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+  background: var(--grad); color: white;
+  padding: 2px 8px; border-radius: 999px;
+}
+.mr-head-end { display: inline-flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.mr-score { font-size: 15px; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--text); }
+.mr-badge {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase;
+  padding: 3px 10px; border-radius: 999px; white-space: nowrap;
+}
+.mr-badge-draw     { color: #c4b5fd;                  background: rgba(139, 92, 246, 0.18); }
+.mr-badge-walkover { color: #fbbf24;                  background: rgba(245, 158, 11, 0.14); }
+.mr-badge-none     { color: var(--text-muted);        background: rgba(155, 144, 179, 0.12); }
+.mr-badge-bye      { color: var(--status-previewing); background: rgba(56, 189, 248, 0.14); }
+
+/* one side: result chip, song, player, picks won */
+.mr-row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; }
+.mr-side-win .mr-row { background: linear-gradient(90deg, rgba(224, 64, 251, 0.14), transparent 75%); }
+.mr-chip {
+  flex: none;
+  width: 24px; height: 24px;
+  display: grid; place-items: center;
+  border-radius: 7px;
+  font-size: 12px; font-weight: 800;
+  text-decoration: none;
+  color: var(--text-dim);
+  border: 1px dashed var(--border);
+}
+.mr-chip-win  { background: var(--grad); color: white; border: none; }
+.mr-chip-loss { background: var(--panel-2); color: var(--text-muted); border: 1px solid var(--border); }
+.mr-chip-draw { background: rgba(139, 92, 246, 0.18); color: #c4b5fd; border: 1px solid rgba(139, 92, 246, 0.45); }
+.mr-noart {
+  flex: none;
+  width: 48px; height: 48px;
+  border-radius: 8px;
+  background: var(--bg-2);
+  border: 1px dashed var(--border);
+}
+.mr-info { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
+.mr-info strong { font-size: 15px; overflow-wrap: anywhere; }
+.mr-info > span { font-size: 12px; color: var(--text-muted); }
+.mr-info .mr-missing { color: var(--text-muted); font-weight: 600; font-style: italic; }
+.mr-info .mr-player {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-top: 5px;
+  font-size: 13px; font-weight: 600; color: var(--text);
+}
+.mr-tally {
+  flex: none;
+  margin-left: auto;
+  text-align: right;
+  font-size: 14px; font-weight: 700;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.mr-side-win .mr-tally { color: var(--magenta); }
+
+/* "vs" between the two sides */
+.mr-vs {
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 16px;
+  font-size: 10px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--text-dim);
+}
+.mr-vs::before, .mr-vs::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+
+/* notes + comments: as under a ranked row, lined up with the song art */
+.mr-side .submitter-note {
+  padding: 10px 16px 12px 52px;
+  border-top: 1px solid var(--border);
+}
+.mr-side .comments {
+  padding: 12px 16px 14px 52px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-2);
+}
+
+@media (max-width: 640px) {
+  .mr-head { padding: 10px 12px; }
+  .mr-row { padding: 12px; gap: 10px; }
+  .mr-tally { font-size: 13px; white-space: normal; max-width: 76px; }
+  .mr-side .submitter-note { padding: 10px 12px 12px 46px; }
+  .mr-side .comments { padding: 12px 12px 14px 46px; }
 }

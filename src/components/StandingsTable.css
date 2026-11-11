@@ -1,0 +1,28 @@
+/* The league table (StandingsTable). These are the row pieces every surface
+   shares. Each surface styles its own list and row spacing (.standings li on
+   the round overview, .reveal-standings li on the reveal page,
+   .leaderboard-list li on the leaderboard). */
+.rank { width: 18px; text-align: center; font-weight: 700; color: var(--text-dim); font-size: 14px; }
+.top-1 .rank { color: #f5c518; }
+.top-2 .rank { color: #c0c5ce; }
+.top-3 .rank { color: #cd7f32; }
+.standing-info { display: flex; flex-direction: column; min-width: 0; }
+.standing-info strong { font-size: 14px; }
+.standing-note { font-size: 11px; color: var(--text-dim); }
+.standing-pts { margin-left: auto; font-weight: 700; color: var(--magenta); font-size: 14px; }
+
+/* head-to-head: the W–L(–D) record and the column header that names it */
+.standing-record { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.standing-record abbr { text-decoration: none; cursor: help; }
+.standings-colhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0 8px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.standings-colhead-key { margin-left: 4px; color: var(--text-muted); }

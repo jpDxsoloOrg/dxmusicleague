@@ -37,6 +37,43 @@ select.field-input { cursor: pointer; }
 
 .field-hint { font-size: 12px; color: var(--text-dim); line-height: 1.45; }
 
+/* format picker (Points vs Head-to-Head): two option cards, radio-style */
+.format-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.format-option {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  text-align: left;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.format-option:hover { border-color: var(--text-dim); }
+.format-option:focus-visible { outline: 2px solid var(--magenta); outline-offset: 2px; }
+.format-option.selected {
+  border-color: var(--magenta);
+  background: rgba(224, 64, 251, 0.08);
+  box-shadow: inset 0 0 0 1px var(--magenta);
+}
+.format-option-title { font-size: 15px; font-weight: 700; }
+.format-option-blurb { font-size: 12px; line-height: 1.45; color: var(--text-muted); }
+
+/* head-to-head: the rounds input is replaced by this note */
+.format-rounds-note {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
 .create-btn { align-self: flex-start; padding: 12px 22px; }
 .create-btn:disabled { opacity: 0.5; cursor: not-allowed; filter: none; }
 
@@ -44,4 +81,10 @@ select.field-input { cursor: pointer; }
   .create-card { padding: 20px 16px; gap: 18px; }
   .create-head h1 { font-size: 22px; }
   .create-btn { align-self: stretch; }
+}
+
+/* the narrowest phones: side-by-side cards would break "Head-to-Head" at a
+   hyphen, so stack them */
+@media (max-width: 359px) {
+  .format-options { grid-template-columns: 1fr; }
 }

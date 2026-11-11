@@ -1,40 +1,61 @@
 // MockClient — wraps the in-memory mock store (mock.ts) as an async DataClient.
 // Used for local development with no AWS. Round lifecycle ops mutate the mock
-// `rounds` array so the demo stays coherent; the vote/reveal screens keep using
-// the canned canonical submissions. Everything resolves instantly.
+// `rounds` array so the demo stays coherent; for standard leagues the
+// vote/reveal screens keep using the canned canonical submissions. Head-to-head
+// leagues (HTH-09) dispatch to mock.ts's H2H section instead, which runs them
+// for real over the backend's domain rules — same matchups, ballot referee,
+// tally and W/L/D as the API, same error messages. Everything resolves
+// instantly.
 
 import type { League, Round, RoundStatus, Submission } from "../domain/types";
 import type { Track } from "../music";
 import type { CreateRoundInput, DataClient, EditableLeagueSettings } from "./client";
 import {
+  advanceHeadToHeadRound,
+  assertCanCreateHeadToHeadRound,
+  castHeadToHeadBallot,
   claimPublicSpot,
   getBrowseLeagues,
   createLeague,
   currentUser,
   deleteLeague,
+  getHeadToHeadResults,
+  getHeadToHeadVotableSubmissions,
   getLeagueDetail,
+  getMatchups,
+  getMyHeadToHeadBallot,
+  getMyHeadToHeadSubmissions,
   getMyLeagueSummaries,
   getOpenPublicLeagues,
   getPublicLeaguePreview,
   getRoundResults,
   getStandings,
   getVotableSubmissions,
+  isHeadToHeadLeague,
+  isHeadToHeadRound,
   joinLeague,
   kickMember,
   leaveLeague,
   regenerateInvite,
+  rejectPointsBallotOnHeadToHead,
+  rejectSelfVotes,
   rematchLeague,
+  removeHeadToHeadSubmission,
+  revealHeadToHeadRound,
   rounds,
   saveVoteComments,
+  submitHeadToHeadSong,
   updateLeagueSettings,
   type BrowseLeagueSummary,
   type CreateLeagueInput,
   type JoinResult,
   type LeagueDetail,
   type LeagueSummary,
+  type MyBallot,
   type PublicLeaguePreview,
   type PublicLeagueSummary,
-  type RoundResult,
+  type RoundMatchups,
+  type RoundResults,
   type Standing,
   type VotableSubmission,
 } from "./mock";
@@ -89,8 +110,9 @@ export class MockClient implements DataClient {
   }
 
   async createRound(leagueId: string, input: CreateRoundInput): Promise<Round> {
-    mockRoundSeq += 1;
     const index = rounds.filter((r) => r.leagueId === leagueId).reduce((m, r) => Math.max(m, r.index), 0) + 1;
+    assertCanCreateHeadToHeadRound(leagueId, index); // no-op for standard leagues
+    mockRoundSeq += 1;
     const round: Round = {
       id: `r-mock-${mockRoundSeq}`,
       leagueId,
@@ -102,16 +124,18 @@ export class MockClient implements DataClient {
     rounds.push(round);
     return round;
   }
-  async advanceRound(_leagueId: string, roundId: string, status: RoundStatus): Promise<Round> {
+  async advanceRound(leagueId: string, roundId: string, status: RoundStatus): Promise<Round> {
+    if (isHeadToHeadLeague(leagueId)) return advanceHeadToHeadRound(leagueId, roundId, status);
     const round = rounds.find((r) => r.id === roundId);
     if (!round) throw new Error("Round not found.");
     round.status = status;
     return round;
   }
-  async revealRound(roundId: string): Promise<RoundResult[]> {
+  async revealRound(roundId: string): Promise<RoundResults> {
+    if (isHeadToHeadRound(roundId)) return revealHeadToHeadRound(roundId);
     const round = rounds.find((r) => r.id === roundId);
     if (round) round.status = "revealed";
-    return getRoundResults(roundId);
+    return { format: "standard", results: getRoundResults(roundId) };
   }
 
   // Remembers the current user's picks per round so the round page can show
@@ -127,6 +151,7 @@ export class MockClient implements DataClient {
   }
 
   async submitSong(roundId: string, track: Track, comment?: string): Promise<Submission> {
+    if (isHeadToHeadRound(roundId)) return submitHeadToHeadSong(roundId, track, comment);
     const mine = this.mySubs.get(roundId) ?? [];
     const allowance = this.allowanceForRound(roundId);
     if (allowance > 1 && mine.length >= allowance) {
@@ -143,17 +168,21 @@ export class MockClient implements DataClient {
     return sub;
   }
   async getVotableSubmissions(roundId: string): Promise<VotableSubmission[]> {
+    if (isHeadToHeadRound(roundId)) return getHeadToHeadVotableSubmissions(roundId);
     return getVotableSubmissions(roundId);
   }
   async getMySubmissions(roundId: string): Promise<Submission[]> {
+    if (isHeadToHeadRound(roundId)) return getMyHeadToHeadSubmissions(roundId);
     return this.mySubs.get(roundId) ?? [];
   }
   async removeSubmission(roundId: string, submissionId: string): Promise<void> {
+    if (isHeadToHeadRound(roundId)) return removeHeadToHeadSubmission(roundId, submissionId);
     const mine = this.mySubs.get(roundId) ?? [];
     this.mySubs.set(roundId, mine.filter((s) => s.id !== submissionId));
   }
 
   // Last cast ballot per round, so the vote page can pre-fill on a revisit.
+  // (Standard rounds only — head-to-head ballots live in mock.ts's store.)
   private myBallots = new Map<
     string,
     { allocations: Record<string, number>; downvotes: Record<string, number>; comments: Record<string, string> }
@@ -165,17 +194,32 @@ export class MockClient implements DataClient {
     comments?: Record<string, string>,
     downvotes?: Record<string, number>,
   ): Promise<void> {
+    if (isHeadToHeadRound(roundId)) {
+      rejectPointsBallotOnHeadToHead(roundId, allocations, downvotes); // throws for any points
+      return castHeadToHeadBallot(roundId, {}, comments); // an empty pick set — refereed like the API
+    }
+    // Never on any of the caller's own songs, in any league — as the API (BUG-17).
+    rejectSelfVotes(allocations, downvotes, (this.mySubs.get(roundId) ?? []).map((s) => s.id));
     this.myBallots.set(roundId, { allocations, downvotes: downvotes ?? {}, comments: comments ?? {} });
     saveVoteComments(roundId, comments ?? {});
   }
-  async getMyBallot(roundId: string): Promise<{
-    allocations: Record<string, number>;
-    downvotes: Record<string, number>;
-    comments: Record<string, string>;
-  } | null> {
+  async castMatchupBallot(roundId: string, picks: Record<string, string>, comments?: Record<string, string>): Promise<void> {
+    // The API's points path refuses picks only when there are some: an empty
+    // pick set on a standard round is just an (empty) points ballot.
+    if (!isHeadToHeadRound(roundId) && Object.keys(picks ?? {}).length === 0) {
+      return this.castBallot(roundId, {}, comments);
+    }
+    castHeadToHeadBallot(roundId, picks, comments); // refuses picks on a standard round, as the API does
+  }
+  async getMyBallot(roundId: string): Promise<MyBallot | null> {
+    if (isHeadToHeadRound(roundId)) return getMyHeadToHeadBallot(roundId);
     return this.myBallots.get(roundId) ?? null;
   }
-  async getResults(roundId: string): Promise<RoundResult[]> {
-    return getRoundResults(roundId);
+  async getMatchups(roundId: string): Promise<RoundMatchups> {
+    return getMatchups(roundId);
+  }
+  async getResults(roundId: string): Promise<RoundResults> {
+    if (isHeadToHeadRound(roundId)) return getHeadToHeadResults(roundId);
+    return { format: "standard", results: getRoundResults(roundId) };
   }
 }

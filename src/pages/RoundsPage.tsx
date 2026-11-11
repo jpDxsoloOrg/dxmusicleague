@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { data } from "../data";
-import type { Round, RoundStatus } from "../domain/types";
+import type { League, Round, RoundStatus } from "../domain/types";
+import { leagueFormat } from "../domain/types";
 import { useAsync } from "../lib/useAsync";
 import { formatCountdown } from "../lib/time";
 import "./RoundsPage.css";
@@ -14,11 +15,17 @@ const STATUS_LABEL: Record<RoundStatus, string> = {
   complete: "Complete",
 };
 
-function action(leagueId: string, round: Round) {
+function action(league: League, round: Round) {
+  const leagueId = league.id;
   switch (round.status) {
     case "submitting": return { label: "Submit song", to: `/leagues/${leagueId}/submit` };
     case "previewing": return { label: "Listen", to: `/leagues/${leagueId}` };
-    case "voting": return { label: "Vote now", to: `/leagues/${leagueId}/vote` };
+    case "voting":
+      // Head-to-head voting is picking a winner in each matchup.
+      return {
+        label: leagueFormat(league) === "headToHead" ? "Pick winners" : "Vote now",
+        to: `/leagues/${leagueId}/vote`,
+      };
     case "revealed":
     case "complete": return { label: "View results", to: `/leagues/${leagueId}/reveal` };
     default: return { label: "Open round", to: `/leagues/${leagueId}` };
@@ -47,7 +54,7 @@ export function RoundsPage() {
           {active.map((s) => {
             const round = s.currentRound!;
             const deadline = round.status === "voting" ? round.voteDeadline : round.submissionDeadline;
-            const a = action(s.league.id, round);
+            const a = action(s.league, round);
             return (
               <div key={s.league.id} className="round-row attention">
                 <div className="round-row-main">
@@ -69,7 +76,7 @@ export function RoundsPage() {
           <div className="rounds-list">
             {other.map((s) => {
               const round = s.currentRound!;
-              const a = action(s.league.id, round);
+              const a = action(s.league, round);
               return (
                 <div key={s.league.id} className="round-row">
                   <div className="round-row-main">

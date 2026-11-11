@@ -1,13 +1,39 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { data } from "../data";
 import { listProviderOptions } from "../music";
 import type { MusicProviderId } from "../music";
-import type { LeagueVisibility, RoundProgression } from "../domain/types";
+import type { LeagueFormat, LeagueVisibility, RoundProgression } from "../domain/types";
 import "./CreateLeaguePage.css";
 
 /** Beta gate for timed rounds — flip to false to hide them from new leagues. */
 const TIMED_ROUNDS_ENABLED = true;
+
+/** Beta gate for head-to-head leagues — flip to false to hide the format
+ *  picker (every new league is then "Points", and the create request is
+ *  exactly what it was before formats existed). */
+const H2H_ENABLED = true;
+
+/** A head-to-head league doesn't ask for a round count: the server sets it to
+ *  the round-robin length (everyone plays everyone once) when round 1 opens
+ *  and freezes the field. Creation still needs a valid number, so this
+ *  provisional one is sent and overwritten at the freeze. Until then
+ *  `league.roundCount` is only this placeholder: a page showing an H2H
+ *  league's round count before its round 1 leaves draft should say the
+ *  schedule is set when round 1 opens instead (overview stepper and
+ *  dashboard summary — HTH-11). */
+const H2H_PROVISIONAL_ROUNDS = 3;
+
+// The one-liners match Help's "League formats" section (HelpPage.tsx) — keep
+// the two in step when either changes.
+const FORMAT_OPTIONS: Array<{ id: LeagueFormat; title: string; blurb: string }> = [
+  { id: "standard", title: "Points", blurb: "Spend a pool of points on the songs you like. Most points overall wins." },
+  { id: "headToHead", title: "Head-to-Head", blurb: "1v1 matchups each round — most votes wins. Ranked by W–L record." },
+];
+
+/** Arrow key -> how far it moves the format selection (wrapping). */
+const ARROW_STEP: Record<string, number | undefined> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
 
 export function CreateLeaguePage() {
   const navigate = useNavigate();
@@ -22,15 +48,30 @@ export function CreateLeaguePage() {
   const [progression, setProgression] = useState<RoundProgression>("manual");
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [phaseDays, setPhaseDays] = useState(3);
+  const [format, setFormat] = useState<LeagueFormat>("standard");
+  const formatRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const isPublic = visibility === "public";
   const isTimed = progression === "timed";
+  const isH2H = H2H_ENABLED && format === "headToHead";
   const capOk = !isPublic || (maxMembers >= 2 && maxMembers <= 50);
-  const roundsOk = roundCount >= 1 && roundCount <= 20;
+  // Head-to-head hides the rounds input, so its value can't block creation.
+  const roundsOk = isH2H || (roundCount >= 1 && roundCount <= 20);
   const timingOk = !isTimed || (phaseDays >= 1 && phaseDays <= 30);
   const canCreate = name.trim().length >= 3 && capOk && roundsOk && timingOk && !busy;
+
+  // The format cards follow the radio-group keyboard pattern: the group is one
+  // tab stop (the checked card), and the arrow keys move the selection.
+  function handleFormatKey(e: KeyboardEvent<HTMLButtonElement>, i: number) {
+    const step = ARROW_STEP[e.key];
+    if (!step) return;
+    e.preventDefault();
+    const next = (i + step + FORMAT_OPTIONS.length) % FORMAT_OPTIONS.length;
+    setFormat(FORMAT_OPTIONS[next].id);
+    formatRefs.current[next]?.focus();
+  }
 
   async function handleCreate() {
     if (!canCreate) return;
@@ -42,10 +83,13 @@ export function CreateLeaguePage() {
         musicProvider: provider,
         visibility,
         maxMembers: isPublic ? maxMembers : undefined,
-        roundCount,
+        roundCount: isH2H ? H2H_PROVISIONAL_ROUNDS : roundCount,
         progression,
         startAt: isTimed && startDate ? new Date(startDate).toISOString() : undefined,
         phaseDays: isTimed ? phaseDays : undefined,
+        // Only sent for head-to-head: a points league's request stays exactly
+        // as it was (the server defaults an absent format to "standard").
+        format: isH2H ? "headToHead" : undefined,
       });
       navigate(`/leagues/${league.id}`);
     } catch (err) {
@@ -96,18 +140,58 @@ export function CreateLeaguePage() {
           </span>
         </label>
 
-        <label className="field">
-          <span className="field-label">Number of rounds</span>
-          <input
-            className="field-input"
-            type="number"
-            min={1}
-            max={20}
-            value={roundCount}
-            onChange={(e) => setRoundCount(Number(e.target.value))}
-          />
-          <span className="field-hint">How many rounds this league will run. Between 1 and 20 — you'll set each round's theme later.</span>
-        </label>
+        {H2H_ENABLED && (
+          <div className="field">
+            <span className="field-label" id="format-label">Format</span>
+            <div className="format-options" role="radiogroup" aria-labelledby="format-label">
+              {FORMAT_OPTIONS.map((opt, i) => (
+                <button
+                  key={opt.id}
+                  ref={(el) => {
+                    formatRefs.current[i] = el;
+                  }}
+                  type="button"
+                  role="radio"
+                  aria-checked={format === opt.id}
+                  tabIndex={format === opt.id ? 0 : -1}
+                  className={`format-option${format === opt.id ? " selected" : ""}`}
+                  onClick={() => setFormat(opt.id)}
+                  onKeyDown={(e) => handleFormatKey(e, i)}
+                >
+                  <span className="format-option-title">{opt.title}</span>
+                  <span className="format-option-blurb">{opt.blurb}</span>
+                </button>
+              ))}
+            </div>
+            <span className="field-hint">
+              {isH2H
+                ? "Odd number of players? One sits out each round with an exhibition song. New players can join until round 1 opens."
+                : "Set once, when the league is created — it can't be changed later."}
+            </span>
+          </div>
+        )}
+
+        {isH2H ? (
+          <div className="field">
+            <span className="field-label">Number of rounds</span>
+            <p className="format-rounds-note">
+              Everyone plays everyone once, so the number of rounds is set when round 1 opens.
+            </p>
+          </div>
+        ) : (
+          <label className="field">
+            <span className="field-label">Number of rounds</span>
+            <input
+              className="field-input"
+              type="number"
+              min={1}
+              max={20}
+              value={roundCount}
+              onChange={(e) => setRoundCount(Number(e.target.value))}
+            />
+            <span className="field-hint">How many rounds this league will run. Between 1 and 20 — you'll set each round's theme later.</span>
+          </label>
+        )}
 
         <label className="field">
           <span className="field-label">Round timing</span>

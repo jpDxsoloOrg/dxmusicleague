@@ -4,6 +4,14 @@
 }
 .vote-head h1 { margin: 6px 0 0; font-size: 28px; }
 .vote-sub { margin: 8px 0 0; color: var(--text-muted); max-width: 60ch; font-size: 14px; }
+/* the songs on offer can't take the whole pool (BUG-02): say why the chip
+   shows fewer points than the league's pool */
+.vote-pool-note {
+  margin: 10px 0 0; max-width: 60ch;
+  padding: 8px 12px; font-size: 13px; color: var(--text-muted);
+  background: rgba(56, 189, 248, 0.08);
+  border-left: 3px solid var(--status-previewing); border-radius: var(--radius-sm);
+}
 
 .vote-pools {
   flex-shrink: 0;

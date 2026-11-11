@@ -5,6 +5,9 @@
   display: grid;
   place-items: center;
   padding: 24px;
+  /* A step taller than a short phone scrolls rather than clipping its
+     Back / Next buttons below the fold. */
+  overflow-y: auto;
   background: rgba(12, 8, 16, 0.72);
   backdrop-filter: blur(6px);
 }

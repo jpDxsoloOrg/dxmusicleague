@@ -5,25 +5,34 @@
 import type { League, Round, RoundStatus, Submission } from "../domain/types";
 import type { Track } from "../music";
 import { auth } from "../auth/config";
+import { alreadyMemberLeagueId } from "../../backend/src/domain/errors.ts";
 import type { CreateRoundInput, DataClient, EditableLeagueSettings } from "./client";
 import type {
   BrowseLeagueSummary,
   CreateLeagueInput,
+  HeadToHeadResults,
   JoinResult,
   LeagueDetail,
   LeagueSummary,
+  MyBallot,
   PublicLeaguePreview,
   PublicLeagueSummary,
+  RoundMatchups,
   RoundResult,
+  RoundResults,
   Standing,
   VotableSubmission,
 } from "./mock";
 
 class ApiRequestError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** The parsed error body — `{ error }`, plus machine-readable fields such
+   *  as `code` on some errors — or null when it wasn't JSON. */
+  body: unknown;
+  constructor(status: number, message: string, body: unknown = null) {
     super(message);
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -31,6 +40,16 @@ class ApiRequestError extends Error {
 const BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/+$/, "");
 
 const enc = encodeURIComponent;
+
+/** What GET results / the reveal send: a standard round's bare ranked list —
+ *  unchanged since before formats existed, so older frontends keep working —
+ *  or a head-to-head round's `{ format: "headToHead", matchups, bye }`.
+ *  Normalized here into the client-side `RoundResults` union. */
+type RoundResultsWire = RoundResult[] | HeadToHeadResults;
+
+function toRoundResults(wire: RoundResultsWire): RoundResults {
+  return Array.isArray(wire) ? { format: "standard", results: wire } : wire;
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = await auth.idToken();
@@ -43,7 +62,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   const body = await res.json().catch(() => null);
-  if (!res.ok) throw new ApiRequestError(res.status, body?.error ?? `Request failed (${res.status})`);
+  if (!res.ok) throw new ApiRequestError(res.status, body?.error ?? `Request failed (${res.status})`, body);
   return body as T;
 }
 
@@ -62,6 +81,8 @@ export class ApiClient implements DataClient {
   }
 
   createLeague(input: CreateLeagueInput): Promise<League> {
+    // The whole input is forwarded, `format` included (omitted → the server
+    // defaults to "standard"; an unknown value is a 400).
     return request<League>("/leagues", { method: "POST", body: JSON.stringify(input) });
   }
 
@@ -110,6 +131,11 @@ export class ApiClient implements DataClient {
       });
       return { ok: true, league };
     } catch (err) {
+      // Already in that league (a re-opened invite link, your own code): the
+      // 409 names it, so the page opens it instead of showing a dead end. A
+      // server without the marker falls through to its message, as before.
+      const memberOf = err instanceof ApiRequestError && err.status === 409 ? alreadyMemberLeagueId(err.body) : undefined;
+      if (memberOf) return { ok: true, league: { id: memberOf }, alreadyMember: true };
       const message = err instanceof ApiRequestError ? err.message : "Couldn't join that league.";
       return { ok: false, error: message };
     }
@@ -143,8 +169,8 @@ export class ApiClient implements DataClient {
       body: JSON.stringify({ status }),
     });
   }
-  revealRound(roundId: string): Promise<RoundResult[]> {
-    return request<RoundResult[]>(`/rounds/${enc(roundId)}/reveal`, { method: "POST" });
+  async revealRound(roundId: string): Promise<RoundResults> {
+    return toRoundResults(await request<RoundResultsWire>(`/rounds/${enc(roundId)}/reveal`, { method: "POST" }));
   }
 
   // ---- Submissions ----
@@ -176,18 +202,20 @@ export class ApiClient implements DataClient {
       body: JSON.stringify({ allocations, comments, downvotes }),
     });
   }
-  getMyBallot(roundId: string): Promise<{
-    allocations: Record<string, number>;
-    downvotes: Record<string, number>;
-    comments: Record<string, string>;
-  } | null> {
-    return request<{
-      allocations: Record<string, number>;
-      downvotes: Record<string, number>;
-      comments: Record<string, string>;
-    } | null>(`/rounds/${enc(roundId)}/my-ballot`);
+  async castMatchupBallot(roundId: string, picks: Record<string, string>, comments?: Record<string, string>): Promise<void> {
+    // No `allocations` key: the H2H ballot path refuses any points.
+    await request(`/rounds/${enc(roundId)}/ballot`, {
+      method: "POST",
+      body: JSON.stringify({ picks, comments }),
+    });
   }
-  getResults(roundId: string): Promise<RoundResult[]> {
-    return request<RoundResult[]>(`/rounds/${enc(roundId)}/results`);
+  getMyBallot(roundId: string): Promise<MyBallot | null> {
+    return request<MyBallot | null>(`/rounds/${enc(roundId)}/my-ballot`);
+  }
+  getMatchups(roundId: string): Promise<RoundMatchups> {
+    return request<RoundMatchups>(`/rounds/${enc(roundId)}/matchups`);
+  }
+  async getResults(roundId: string): Promise<RoundResults> {
+    return toRoundResults(await request<RoundResultsWire>(`/rounds/${enc(roundId)}/results`));
   }
 }

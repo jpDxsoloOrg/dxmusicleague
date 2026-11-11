@@ -1,14 +1,18 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { data } from "../data";
-import type { RoundParticipation } from "../data";
+import type { RoundParticipation, VotableSubmission } from "../data";
 import type { League, Round, RoundStatus } from "../domain/types";
+import { h2hScheduleSet, leagueFormat } from "../domain/types";
 import { getProvider } from "../music";
 import { useAsync } from "../lib/useAsync";
 import { useAuth } from "../auth/AuthContext";
 import { formatCountdown } from "../lib/time";
+import { listenUrl } from "../lib/listenUrl";
 import { Avatar } from "../components/Avatar";
 import { TrackArt } from "../components/TrackArt";
+import { StandingsTable } from "../components/StandingsTable";
+import { formatRecord, leagueHasDraws } from "../lib/record";
 import "./RoundOverviewPage.css";
 
 const STATUS_LABEL: Record<RoundStatus, string> = {
@@ -21,13 +25,18 @@ const STATUS_LABEL: Record<RoundStatus, string> = {
 };
 
 // What the active round's primary button does, by status. `previewing` has no
-// action — players just listen until voting opens.
+// action — players just listen until voting opens. Head-to-head voting is
+// picking a winner in each matchup; `canVote` is false for a member with no
+// matchup to pick in (their own pair, walkovers, no contests), who can still
+// look at the matchups.
 function primaryAction(
   leagueId: string,
   round: Round,
   submittedCount: number,
   allowance: number,
   hasVoted: boolean,
+  headToHead = false,
+  canVote = true,
 ): { label: string; to: string } | undefined {
   switch (round.status) {
     case "submitting": {
@@ -44,6 +53,10 @@ function primaryAction(
     case "previewing":
       return undefined;
     case "voting":
+      if (headToHead) {
+        const label = !canVote ? "See the matchups" : hasVoted ? "Edit your picks" : "Pick your winners";
+        return { label, to: `/leagues/${leagueId}/vote` };
+      }
       return { label: hasVoted ? "Edit your votes" : "Vote now", to: `/leagues/${leagueId}/vote` };
     case "revealed":
     case "complete":
@@ -67,6 +80,28 @@ export function RoundOverviewPage() {
     () => (activeRoundId && isMember ? data.getMySubmissions(activeRoundId) : Promise.resolve([])),
     [activeRoundId, isMember],
   );
+  // The round's songs, anonymous, so members have something to listen to in
+  // Listening and Voting even with no playlist (only Spotify leagues get one,
+  // and only best-effort). It is the vote page's own list (GET
+  // /rounds/:id/submissions: everyone's songs but the caller's, in anonymous
+  // order), read only where the API serves it: members, while the round is
+  // previewing or voting. Standard leagues only — a head-to-head round's songs
+  // are its matchups, which stay closed until voting. The status is a dep
+  // because the owner's "Close submissions" only reload()s the same round;
+  // the result names its round so a list never outlives the round it is for.
+  const activeStatus = detail?.currentRound?.status;
+  const songsRoundId =
+    detail && isMember && !detail.finished && leagueFormat(detail.league) === "standard" &&
+    (activeStatus === "previewing" || activeStatus === "voting")
+      ? activeRoundId
+      : undefined;
+  const { data: roundSongs } = useAsync<{ roundId: string; songs: VotableSubmission[] } | null>(
+    () =>
+      songsRoundId
+        ? data.getVotableSubmissions(songsRoundId).then((songs) => ({ roundId: songsRoundId, songs }))
+        : Promise.resolve(null),
+    [songsRoundId, activeStatus],
+  );
 
   if (loading) {
     return <div className="round-overview"><p className="page-loading">Loading league…</p></div>;
@@ -86,9 +121,30 @@ export function RoundOverviewPage() {
   const isOwner = league.ownerId === user?.id;
   // A capped (public) league is full once every slot is taken; uncapped never is.
   const isFull = Boolean(league.maxMembers && league.memberIds.length >= league.maxMembers);
+  const format = leagueFormat(league);
+  const headToHead = format === "headToHead";
+  // Head-to-head: until round 1 opens, the round count is only provisional
+  // (the schedule is drawn then), and from then on the season is locked to
+  // the players already in it.
+  const scheduleSet = !headToHead || h2hScheduleSet(rounds);
+  const seasonLocked = headToHead && scheduleSet;
+  // A finished league's one live rematch (BUG-13). The detail carries it only
+  // while that league exists and the viewer plays in it (checked with a
+  // strongly consistent read), so it's safe to link; without it the owner
+  // gets "Run it back" (again, if the rematch was deleted).
+  const rematchId = league.rematchLeagueId;
 
   async function handleLeave() {
-    if (!window.confirm(`Leave ${league.name}? You can rejoin later with the invite code.`)) return;
+    // A locked head-to-head season can't be rejoined (HTH-14): say leaving is
+    // permanent and, mid-season, what it does to the schedule — as the
+    // owner's kick confirmation does (LeagueSettingsPage). Anywhere else
+    // (standard leagues, the pre-season lobby) the player can come back.
+    const prompt = seasonLocked
+      ? `Leave ${league.name}? This head-to-head season is locked, so you won't be able to rejoin it.${
+          finished ? "" : " Your remaining matchups become walkovers for your opponents."
+        }`
+      : `Leave ${league.name}? You can rejoin later with the invite code.`;
+    if (!window.confirm(prompt)) return;
     try {
       await data.leaveLeague(league.id);
       navigate("/");
@@ -106,8 +162,12 @@ export function RoundOverviewPage() {
   const myPicks = mySubmissions ?? [];
   // The voting-progress panel already knows who voted — reuse it for the CTA.
   const hasVoted = Boolean(user && votingProgress?.submitted.some((m) => m.id === user.id));
+  // Head-to-head voting progress lists only the members with a matchup to
+  // pick in; anyone else has nothing to vote on this round.
+  const canVote =
+    !votingProgress || [...votingProgress.submitted, ...votingProgress.waiting].some((m) => m.id === user?.id);
   const rawAction = currentRound
-    ? primaryAction(league.id, currentRound, myPicks.length, allowance, hasVoted)
+    ? primaryAction(league.id, currentRound, myPicks.length, allowance, hasVoted, headToHead, canVote)
     : undefined;
   // Spectators only get the read-only action (viewing revealed results).
   const action =
@@ -120,6 +180,19 @@ export function RoundOverviewPage() {
     (currentRound?.status === "submitting" ||
       currentRound?.status === "previewing" ||
       currentRound?.status === "voting");
+  // The anonymous song list (fetched above) — only ever the round on screen's.
+  const songs = songsRoundId && roundSongs?.roundId === songsRoundId ? roundSongs.songs : [];
+
+  // The wrap-up hero's headline: the top of the final board (a head-to-head
+  // champion's record too — the board already ranks by it, wins first). A
+  // head-to-head season in which nobody won a matchup (all no contests or
+  // draws) has no champion to name, just a wrap.
+  const champion = standings[0];
+  const wrapUpHeadline = !champion || (headToHead && champion.wins === 0)
+    ? "That's a wrap!"
+    : headToHead
+      ? `${champion.user.displayName} takes the league with a ${formatRecord(champion, leagueHasDraws(standings))} record!`
+      : `${champion.user.displayName} takes the league!`;
 
   // Build the stepper: one node per round index up to totalRounds. Finished
   // rounds link to their results so past reveals stay reachable.
@@ -163,8 +236,15 @@ export function RoundOverviewPage() {
 
           {/* Invite others. When a capped league is full it hides for members,
               but the owner keeps it — the cap only limits public claiming;
-              invite-code joins still work. */}
-          {league.inviteCode && !finished && (isOwner || !isFull) && (
+              invite-code joins still work. A locked head-to-head season takes
+              nobody at all (HTH-14), so its members get a note saying so
+              instead of a code that can't let anyone in. */}
+          {league.inviteCode && !finished && seasonLocked ? (
+            <p className="season-lock-note">
+              🔒 <strong>Season locked.</strong> The schedule was set when round 1 opened, so this
+              league can't take new players — and anyone who leaves can't rejoin.
+            </p>
+          ) : league.inviteCode && !finished && (isOwner || !isFull) && (
             <InvitePanel
               code={league.inviteCode}
               note={
@@ -175,27 +255,33 @@ export function RoundOverviewPage() {
             />
           )}
 
-          {/* round stepper — finished rounds click through to their results */}
-          <div className="stepper">
-            {steps.map((s) => {
-              const content = (
-                <>
-                  <span className="step-dot">
-                    {s.status === "complete" || s.status === "revealed" ? "✓" : s.idx}
-                  </span>
-                  <span className="step-label">R{s.idx}</span>
-                </>
-              );
-              const cls = `step step-${s.status}${s.isCurrent ? " current" : ""}`;
-              return s.resultsTo ? (
-                <Link key={s.idx} to={s.resultsTo} className={`${cls} step-clickable`} title={`Round ${s.idx} results`}>
-                  {content}
-                </Link>
-              ) : (
-                <div key={s.idx} className={cls}>{content}</div>
-              );
-            })}
-          </div>
+          {/* round stepper — finished rounds click through to their results.
+              A head-to-head league has no round count to show until round 1
+              opens and the schedule is drawn. */}
+          {!scheduleSet ? (
+            <p className="stepper-note">📅 The schedule is set when round 1 opens — everyone plays everyone once.</p>
+          ) : (
+            <div className="stepper">
+              {steps.map((s) => {
+                const content = (
+                  <>
+                    <span className="step-dot">
+                      {s.status === "complete" || s.status === "revealed" ? "✓" : s.idx}
+                    </span>
+                    <span className="step-label">R{s.idx}</span>
+                  </>
+                );
+                const cls = `step step-${s.status}${s.isCurrent ? " current" : ""}`;
+                return s.resultsTo ? (
+                  <Link key={s.idx} to={s.resultsTo} className={`${cls} step-clickable`} title={`Round ${s.idx} results`}>
+                    {content}
+                  </Link>
+                ) : (
+                  <div key={s.idx} className={cls}>{content}</div>
+                );
+              })}
+            </div>
+          )}
 
           {/* active round hero — or the wrap-up card once the league finishes */}
           {finished ? (
@@ -205,15 +291,23 @@ export function RoundOverviewPage() {
                 <span className="pill pill-complete">Finished</span>
               </div>
               <h2 className="hero-theme">
-                🏆 {standings[0] ? `${standings[0].user.displayName} takes the league!` : "That's a wrap!"}
+                🏆 {wrapUpHeadline}
               </h2>
               <p className="hero-desc">
                 All {totalRounds} rounds have been played and the final standings are locked in.
-                {isOwner ? " Fancy another run with the same crew?" : ""}
+                {rematchId
+                  ? " A rematch is underway — same settings, fresh standings."
+                  : isOwner
+                    ? " Fancy another run with the same crew?"
+                    : ""}
               </p>
               <div className="hero-footer">
                 <Link to={`/leagues/${league.id}/reveal`} className="btn hero-cta">View final results</Link>
-                {isOwner && <RematchButton leagueId={league.id} />}
+                {rematchId ? (
+                  <Link to={`/leagues/${rematchId}`} className="btn btn-primary hero-cta">Go to the rematch →</Link>
+                ) : (
+                  isOwner && <RematchButton leagueId={league.id} />
+                )}
               </div>
             </section>
           ) : currentRound ? (
@@ -260,6 +354,9 @@ export function RoundOverviewPage() {
               {currentRound.status === "voting" && votingProgress && (
                 <ParticipationPanel icon="🗳️" noun="ballots" doneLabel="Voted" progress={votingProgress} />
               )}
+
+              {/* Something to listen to: the round's songs, never who sent them. */}
+              {songs.length > 0 && <RoundSongList key={songsRoundId} songs={songs} />}
 
               <div className="hero-footer">
                 {countdown && (
@@ -316,27 +413,18 @@ export function RoundOverviewPage() {
             <h3>Overall Leaderboard</h3>
             <Link to={`/leagues/${league.id}/reveal`} className="link-muted">Full</Link>
           </div>
-          <ol>
-            {standings.map((s) => (
-              <li key={s.user.id} className={s.rank <= 3 ? `top top-${s.rank}` : ""}>
-                <span className="rank">{s.rank}</span>
-                <Avatar name={s.user.displayName} size={34} />
-                <span className="standing-info">
-                  <strong>{s.user.displayName}</strong>
-                  {s.note && <span className="standing-note">{s.note}</span>}
-                </span>
-                <span className="standing-pts">{s.points}</span>
-              </li>
-            ))}
-          </ol>
+          <StandingsTable standings={standings} format={format} avatarSize={34} showNotes />
         </aside>
       </div>
     </div>
   );
 }
 
-// Owner-only, shown once the league finishes: creates a fresh league with the
-// same players + settings (standings reset) and jumps straight to it.
+// Owner-only, shown once the league finishes and has no live rematch yet:
+// creates a fresh league with the same players + settings (standings reset)
+// and jumps straight to it. Clicked again from a stale page or a second tab,
+// the API answers with the rematch that already exists (BUG-13), so it lands
+// there instead of creating another.
 function RematchButton({ leagueId }: { leagueId: string }) {
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
@@ -359,13 +447,14 @@ function RematchButton({ leagueId }: { leagueId: string }) {
       <button className="btn btn-primary hero-cta" disabled={busy} onClick={handleRematch}>
         {busy ? "Setting up…" : "Run it back — new league, same players →"}
       </button>
-      {error && <span className="page-error">{error}</span>}
+      {error && <span className="owner-error">{error}</span>}
     </>
   );
 }
 
 // Invite strip — shows the league's shareable code and a ready-to-send join
-// link, each with a copy button. Any member can invite a friend.
+// link, each with a copy button. Any member can invite a friend. (Never shown
+// for a locked head-to-head season: its code lets nobody in — HTH-14.)
 function InvitePanel({ code, note }: { code: string; note?: string }) {
   const joinUrl = `${window.location.origin}/leagues/join?code=${encodeURIComponent(code)}`;
   const [copied, setCopied] = useState<"code" | "link" | null>(null);
@@ -432,6 +521,8 @@ function OwnerRoundControl({
   const needsNewRound = !currentRound || status === "revealed" || status === "complete";
   // Timed leagues auto-advance the phases; the owner only creates + opens rounds.
   const timed = league.progression === "timed";
+  // Head-to-head: opening round 1 draws the schedule and locks the season.
+  const locksSeason = leagueFormat(league) === "headToHead" && currentRound?.index === 1 && status === "draft";
 
   return (
     <div className="owner-control">
@@ -504,7 +595,73 @@ function OwnerRoundControl({
       {timed && !needsNewRound && status !== "draft" && (
         <span className="owner-hint">⏱ Auto-advances when the timer ends or everyone's done — or move it on now.</span>
       )}
-      {error && <span className="page-error">{error}</span>}
+      {locksSeason && (
+        <span className="owner-hint">🔒 Opening round 1 draws the schedule and closes the league to new players.</span>
+      )}
+      {error && <span className="owner-error">{error}</span>}
+    </div>
+  );
+}
+
+// How many songs the list shows until "Show all", at every width (four rows in
+// one column, two in the two-up grid), so a big ballot doesn't push the hero's
+// "Vote now" far down the page. A list just one song longer shows in full (the
+// button would only hide a single row).
+const SONGS_SHOWN = 4;
+
+/** The round's songs while players listen and vote (Listening, Voting):
+ *  art, title, artists and a "▶ Listen" link when the track has one that
+ *  passes `listenUrl` (https, a known music service). Anonymous — nothing says
+ *  who submitted what; the list arrives in the API's anonymous order. A long
+ *  list starts collapsed; its toggle stays put (and keeps focus) both ways. */
+function RoundSongList({ songs }: { songs: VotableSubmission[] }) {
+  const [showAll, setShowAll] = useState(false);
+  const listId = useId();
+  const collapsible = songs.length > SONGS_SHOWN + 1;
+  const shown = collapsible && !showAll ? songs.slice(0, SONGS_SHOWN) : songs;
+  return (
+    <div className="round-songs">
+      <span className="my-pick-label">
+        On the ballot · {songs.length} song{songs.length === 1 ? "" : "s"}
+      </span>
+      <ul id={listId} className="round-songs-list">
+        {shown.map((song) => {
+          const listen = listenUrl(song.track);
+          const artists = song.track.artists.join(", ");
+          return (
+            <li key={song.id} className="my-pick-card round-song">
+              <TrackArt track={song.track} size={40} />
+              {/* titles truncate on narrow cards; the tooltip has the full text */}
+              <div className="my-pick-info">
+                <strong title={song.track.title}>{song.track.title}</strong>
+                <span title={artists}>{artists}</span>
+              </div>
+              {listen && (
+                <a
+                  className="round-song-listen"
+                  href={listen}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label={`Listen to ${song.track.title}${artists ? ` by ${artists}` : ""}`}
+                >
+                  <span aria-hidden>▶</span> Listen
+                </a>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {collapsible && (
+        <button
+          type="button"
+          className="round-songs-all"
+          aria-expanded={showAll}
+          aria-controls={listId}
+          onClick={() => setShowAll((all) => !all)}
+        >
+          {showAll ? "Show fewer" : `Show all ${songs.length} songs`}
+        </button>
+      )}
     </div>
   );
 }

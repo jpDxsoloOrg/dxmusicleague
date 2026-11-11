@@ -1,0 +1,24 @@
+/* RoundStateCard — the vote / submit page's "not now" panel (BUG-12). The same
+   centred panel as the pages' done states (.vote-done, .submitted-card), with
+   the league, the round and its status above the title for context. User text
+   (league name, theme) may be one long unbroken word, such as a pasted link:
+   it wraps rather than pushing the page sideways. */
+.round-state {
+  max-width: 460px; margin: 60px auto 0; text-align: center;
+  display: flex; flex-direction: column; align-items: center; gap: 14px;
+  padding: 40px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.round-state h2 { margin: 0; text-wrap: balance; overflow-wrap: anywhere; }
+.round-state-eyebrow {
+  margin: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 10px;
+  font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim);
+}
+.round-state-where { min-width: 0; overflow-wrap: anywhere; text-wrap: balance; }
+.round-state-body { margin: 0; color: var(--text-muted); text-wrap: pretty; overflow-wrap: anywhere; }
+.round-state-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 4px; }
+
+/* Phones: the panel sits where the done states do (same top margin); only the
+   side padding narrows, so its two buttons still fit side by side. */
+@media (max-width: 640px) {
+  .round-state { padding: 28px 20px; }
+}

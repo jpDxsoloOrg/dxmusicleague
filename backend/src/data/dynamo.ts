@@ -2,17 +2,17 @@
 // Repository port the MemoryRepository implements. Schema is exactly
 // docs/data-model-and-api.md §1:
 //
-//   League meta   PK=LEAGUE#<id>      SK=META
+//   League meta   PK=LEAGUE#<id>      SK=META   (rematchLeagueId once the league is rematched)
 //   Membership    PK=LEAGUE#<id>      SK=MEMBER#<userId>   (+ GSI1: USER#<id> / LEAGUE#<id>)
-//   Round         PK=LEAGUE#<id>      SK=ROUND#<index4>
-//   Submission    PK=ROUND#<roundId>  SK=SUB#<userId>
-//   Ballot        PK=ROUND#<roundId>  SK=BALLOT#<voterId>
-//   Standing      PK=LEAGUE#<id>      SK=STANDING#<userId>
+//   Round         PK=LEAGUE#<id>      SK=ROUND#<index4>   (h2hDeparted + h2hTally once an H2H round is revealed; pointsTally once a standard one is)
+//   Submission    PK=ROUND#<roundId>  SK=SUB#<userId>#<submissionId>   (legacy rows: SUB#<userId>, still read)
+//   Ballot        PK=ROUND#<roundId>  SK=BALLOT#<voterId>   (allocations; picks for H2H)
+//   Standing      PK=LEAGUE#<id>      SK=STANDING#<userId>  (points; wins/losses/draws for H2H)
 //   Invite        PK=INVITE#<code>    SK=META
 //
-// The league-loop methods (create/get/list/addMember/invites/rounds/standings)
-// are fully implemented. Submission/ballot methods follow the same pattern and
-// are exercised once the round + voting handlers land (build-order steps 3–4).
+// Every Repository method is implemented here (handlers reach them only
+// through the port). dynamo.test.ts exercises the item mapping and the
+// conditional / transactional writes offline, over an in-process fake client.
 
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
@@ -26,14 +26,23 @@ import {
   TransactWriteCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
-import type { Ballot, League, LeagueSettings, Round, Submission } from "../domain/types.ts";
+import type { Ballot, League, LeagueSettings, MatchupTally, Round, SongTally, Submission } from "../domain/types.ts";
+import { leagueFormat } from "../domain/types.ts";
+import type { StandingPointsDelta, StandingRecordDelta, StandingTotals } from "../domain/standings.ts";
+import { mergePointDeltas, recordIncrements } from "../domain/standings.ts";
+import type { SeasonFreeze } from "../domain/freeze.ts";
 import type { Repository } from "./repository.ts";
 
 const index4 = (n: number) => String(n).padStart(4, "0");
 
 export class DynamoRepository implements Repository {
+  // Plain fields (no constructor parameter properties) so this module also
+  // loads under `node --experimental-strip-types`, which the offline unit
+  // tests run with.
+  private tableName: string;
   private doc: DynamoDBDocumentClient;
-  constructor(private tableName: string, client = new DynamoDBClient({})) {
+  constructor(tableName: string, client = new DynamoDBClient({})) {
+    this.tableName = tableName;
     this.doc = DynamoDBDocumentClient.from(client, { marshallOptions: { removeUndefinedValues: true } });
   }
 
@@ -49,6 +58,7 @@ export class DynamoRepository implements Repository {
         name: league.name,
         ownerId: league.ownerId,
         musicProvider: league.musicProvider,
+        format: leagueFormat(league),
         settings: league.settings,
         inviteCode: league.inviteCode,
         visibility: league.visibility,
@@ -57,6 +67,14 @@ export class DynamoRepository implements Repository {
         progression: league.progression,
         startAt: league.startAt,
         phaseDays: league.phaseDays,
+        // Head-to-head freeze fields (normally absent at creation — a rematch
+        // never copies them — and written later by freezeH2HSeason). Undefined
+        // values are dropped by removeUndefinedValues.
+        h2hParticipants: league.h2hParticipants,
+        h2hSalt: league.h2hSalt,
+        // The rematch pointer (BUG-13): absent at creation — a rematch never
+        // copies it; setRematchPointer writes it later — so normally dropped.
+        rematchLeagueId: league.rematchLeagueId,
         createdAt: new Date().toISOString(),
       },
       ...league.memberIds.map((userId) => this.memberItem(league.id, userId)),
@@ -68,9 +86,16 @@ export class DynamoRepository implements Repository {
     );
   }
 
-  async getLeague(leagueId: string): Promise<League | undefined> {
+  async getLeague(leagueId: string, opts?: { consistent?: boolean }): Promise<League | undefined> {
+    // Strongly consistent only when a caller needs to see a write that just
+    // landed (read-after-write): the head-to-head freeze's post-write check
+    // (rounds.ts `settleRoundOneOrder`), a refused head-to-head join's
+    // answer (leagues.ts `addJoiningMember`, HTH-14) and the rematch pointer's
+    // reads (`liveRematch`, `claimRematch`, `withRematchLink` — BUG-13).
+    // Every other read keeps the default, unchanged.
+    const consistency = opts?.consistent ? { ConsistentRead: true } : {};
     const meta = await this.doc.send(
-      new GetCommand({ TableName: this.tableName, Key: { PK: `LEAGUE#${leagueId}`, SK: "META" } }),
+      new GetCommand({ TableName: this.tableName, Key: { PK: `LEAGUE#${leagueId}`, SK: "META" }, ...consistency }),
     );
     if (!meta.Item) return undefined;
 
@@ -79,6 +104,7 @@ export class DynamoRepository implements Repository {
         TableName: this.tableName,
         KeyConditionExpression: "PK = :pk AND begins_with(SK, :m)",
         ExpressionAttributeValues: { ":pk": `LEAGUE#${leagueId}`, ":m": "MEMBER#" },
+        ...consistency,
       }),
     );
     const memberIds = (members.Items ?? []).map((it) => it.userId as string);
@@ -88,6 +114,9 @@ export class DynamoRepository implements Repository {
       name: meta.Item.name,
       ownerId: meta.Item.ownerId,
       musicProvider: meta.Item.musicProvider,
+      // Older leagues predate formats (no attribute) — they read as standard.
+      // No migration: the default is applied on every read.
+      format: leagueFormat(meta.Item),
       settings: meta.Item.settings,
       memberIds,
       // Older leagues created before invite codes were stored on META fall back to "".
@@ -102,6 +131,13 @@ export class DynamoRepository implements Repository {
       progression: (meta.Item.progression as League["progression"] | undefined) ?? "manual",
       startAt: meta.Item.startAt as string | undefined,
       phaseDays: meta.Item.phaseDays as number | undefined,
+      // Head-to-head season freeze (absent until round 1 opens, and on every
+      // standard league). Server-only: handlers strip both from payloads.
+      h2hParticipants: meta.Item.h2hParticipants as string[] | undefined,
+      h2hSalt: meta.Item.h2hSalt as string | undefined,
+      // Only a rematched league carries it (BUG-13); every other league reads
+      // back without the key, exactly as before.
+      ...(typeof meta.Item.rematchLeagueId === "string" ? { rematchLeagueId: meta.Item.rematchLeagueId } : {}),
     };
   }
 
@@ -160,7 +196,9 @@ export class DynamoRepository implements Repository {
     // Drop the membership row (and its GSI1 projection) ONLY. The standing row
     // is deliberately kept: a player who leaves (or is kicked) and later rejoins
     // gets their accumulated points back — the leaderboard just filters display
-    // to current members while they're gone. (Standings are removed for real
+    // to current members while they're gone. (Head-to-head: only from the
+    // lobby; a locked season can't be rejoined — HTH-14 — so a departed
+    // participant's row just stays put.) (Standings are removed for real
     // only by deleteLeague's cascade.)
     await this.doc.send(
       new DeleteCommand({ TableName: this.tableName, Key: { PK: `LEAGUE#${leagueId}`, SK: `MEMBER#${userId}` } }),
@@ -182,13 +220,114 @@ export class DynamoRepository implements Repository {
     return lg;
   }
 
-  async deleteLeague(leagueId: string): Promise<void> {
+  async addMemberUnlessSeasonLocked(leagueId: string, userId: string): Promise<League | undefined> {
+    // One transaction: a ConditionCheck on META (season not frozen — no or an
+    // empty frozen order; once frozen nobody joins, not even a participant
+    // who left or was kicked — HTH-14) plus the MEMBER# put.
+    // DynamoDB serializes it against the freeze's UpdateItem on the same META,
+    // so a join either commits before the freeze (and the opener's post-write
+    // check takes the joiner in) or fails here — never lands outside the
+    // schedule. A failed season check means "locked" (undefined); anything
+    // else (e.g. a TransactionConflict) propagates.
+    try {
+      await this.doc.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              ConditionCheck: {
+                TableName: this.tableName,
+                Key: { PK: `LEAGUE#${leagueId}`, SK: "META" },
+                ConditionExpression: "attribute_not_exists(h2hParticipants) OR size(h2hParticipants) = :zero",
+                ExpressionAttributeValues: { ":zero": 0 },
+              },
+            },
+            { Put: { TableName: this.tableName, Item: this.memberItem(leagueId, userId) } },
+          ],
+        }),
+      );
+    } catch (err) {
+      const e = err as { name?: string; CancellationReasons?: Array<{ Code?: string }> } | null;
+      if (e?.name === "TransactionCanceledException" && e.CancellationReasons?.[0]?.Code === "ConditionalCheckFailed") {
+        return undefined;
+      }
+      throw err;
+    }
+    const lg = await this.getLeague(leagueId);
+    if (!lg) throw new Error(`League not found after addMemberUnlessSeasonLocked: ${leagueId}`);
+    return lg;
+  }
+
+  async freezeH2HSeason(leagueId: string, freeze: SeasonFreeze, replacesSalt?: string): Promise<boolean> {
+    // One conditional UpdateItem on META: the order, its salt and the
+    // schedule-derived roundCount land together or not at all. The initial
+    // freeze lands only while the season isn't frozen (no, or an empty,
+    // frozen order — seasonLocked's definition), so two concurrent round-1
+    // opens can't both shuffle; a re-plan lands only over the exact salt it
+    // read. Losing either race is a normal outcome (false), not an error.
+    // attribute_exists(PK): never create a phantom META for a deleted league.
+    const condition =
+      replacesSalt === undefined
+        ? "attribute_exists(PK) AND (attribute_not_exists(h2hParticipants) OR size(h2hParticipants) = :zero)"
+        : "attribute_exists(PK) AND h2hSalt = :old";
+    const guard = replacesSalt === undefined ? { ":zero": 0 } : { ":old": replacesSalt };
+    try {
+      await this.doc.send(
+        new UpdateCommand({
+          TableName: this.tableName,
+          Key: { PK: `LEAGUE#${leagueId}`, SK: "META" },
+          UpdateExpression: "SET h2hParticipants = :p, h2hSalt = :s, roundCount = :n",
+          ConditionExpression: condition,
+          ExpressionAttributeValues: { ":p": freeze.participants, ":s": freeze.salt, ":n": freeze.roundCount, ...guard },
+        }),
+      );
+      return true;
+    } catch (err) {
+      if ((err as { name?: string } | null)?.name === "ConditionalCheckFailedException") return false;
+      throw err;
+    }
+  }
+
+  async setRematchPointer(leagueId: string, rematchId: string, replacesStale?: string): Promise<boolean> {
+    // One conditional UpdateItem on the old league's META — the same pattern
+    // as the season freeze above. Write-once: it lands only while no pointer
+    // is set, so of two concurrent rematches exactly one claims and the other
+    // discards the league it made. With `replacesStale` it may also land over
+    // exactly that pointer (its league was deleted), never over a newer one.
+    // attribute_exists(PK): never create a phantom META for a deleted league.
+    const condition =
+      replacesStale === undefined
+        ? "attribute_exists(PK) AND attribute_not_exists(rematchLeagueId)"
+        : "attribute_exists(PK) AND (attribute_not_exists(rematchLeagueId) OR rematchLeagueId = :stale)";
+    const guard = replacesStale === undefined ? {} : { ":stale": replacesStale };
+    try {
+      await this.doc.send(
+        new UpdateCommand({
+          TableName: this.tableName,
+          Key: { PK: `LEAGUE#${leagueId}`, SK: "META" },
+          UpdateExpression: "SET rematchLeagueId = :r",
+          ConditionExpression: condition,
+          ExpressionAttributeValues: { ":r": rematchId, ...guard },
+        }),
+      );
+      return true;
+    } catch (err) {
+      if ((err as { name?: string } | null)?.name === "ConditionalCheckFailedException") return false;
+      throw err;
+    }
+  }
+
+  async deleteLeague(leagueId: string, opts?: { consistent?: boolean }): Promise<void> {
+    // Strongly consistent only when asked (a rematch discarding the league it
+    // just wrote, BUG-13 — a default Query could miss those items and leave
+    // them behind); every other delete reads as before, unchanged.
+    const consistency = opts?.consistent ? { ConsistentRead: true } : {};
     // 1) Everything under PK=LEAGUE#<id>: META, MEMBER#, ROUND#, STANDING#.
     const leagueItems = await this.doc.send(
       new QueryCommand({
         TableName: this.tableName,
         KeyConditionExpression: "PK = :pk",
         ExpressionAttributeValues: { ":pk": `LEAGUE#${leagueId}` },
+        ...consistency,
       }),
     );
     const keys: Array<{ PK: string; SK: string }> = (leagueItems.Items ?? []).map((it) => ({
@@ -206,6 +345,7 @@ export class DynamoRepository implements Repository {
           TableName: this.tableName,
           KeyConditionExpression: "PK = :pk",
           ExpressionAttributeValues: { ":pk": `ROUND#${roundId}` },
+          ...consistency,
         }),
       );
       for (const it of children.Items ?? []) keys.push({ PK: it.PK as string, SK: it.SK as string });
@@ -274,14 +414,21 @@ export class DynamoRepository implements Repository {
   async createRound(round: Round): Promise<void> {
     await this.doc.send(new PutCommand({ TableName: this.tableName, Item: this.roundItem(round) }));
   }
-  async getRound(roundId: string): Promise<Round | undefined> {
+  async getRound(roundId: string, opts?: { consistent?: boolean }): Promise<Round | undefined> {
     // roundId encodes its league + index as `<leagueId>~<index4>` (see roundItem).
     const sep = roundId.lastIndexOf("~");
     if (sep < 0) return undefined;
     const leagueId = roundId.slice(0, sep);
     const idx = roundId.slice(sep + 1);
+    // Strongly consistent only when asked (the re-read of a reveal, timed
+    // advance or round edit whose conditional write lost to a reveal —
+    // HTH-07, BUG-04); every other read keeps the default, unchanged.
     const res = await this.doc.send(
-      new GetCommand({ TableName: this.tableName, Key: { PK: `LEAGUE#${leagueId}`, SK: `ROUND#${idx}` } }),
+      new GetCommand({
+        TableName: this.tableName,
+        Key: { PK: `LEAGUE#${leagueId}`, SK: `ROUND#${idx}` },
+        ...(opts?.consistent ? { ConsistentRead: true } : {}),
+      }),
     );
     return res.Item ? this.toRound(res.Item) : undefined;
   }
@@ -298,6 +445,86 @@ export class DynamoRepository implements Repository {
   async updateRound(round: Round): Promise<void> {
     await this.doc.send(new PutCommand({ TableName: this.tableName, Item: this.roundItem(round) }));
   }
+  async updateRoundUnlessSettled(round: Round): Promise<boolean> {
+    // One conditional PutItem: the whole round item lands only while the
+    // stored round isn't settled — roundSettled's definition — so a write
+    // built from a copy read before a reveal can't un-reveal the round, and
+    // of two concurrent reveals exactly one wins. The loser writes nothing.
+    // Sent while another reveal's transaction holds the round, it's refused
+    // with a transaction conflict before its condition is even checked: it's
+    // sent again once that settles (retryOnTransactionConflict), so it then
+    // lands or loses cleanly.
+    try {
+      await retryOnTransactionConflict(() =>
+        this.doc.send(new PutCommand({ TableName: this.tableName, Item: this.roundItem(round), ...UNSETTLED_ROUND })),
+      );
+      return true;
+    } catch (err) {
+      if ((err as { name?: string } | null)?.name === "ConditionalCheckFailedException") return false;
+      throw err;
+    }
+  }
+  async revealRoundOnce(
+    round: Round,
+    records: ReadonlyArray<{ userId: string; delta: StandingRecordDelta }> = [],
+  ): Promise<boolean> {
+    const banked = mergeRecords(records); // validates every increment before any write
+    return this.claimAndBank(round, banked.map(({ userId, inc }) => this.standingRecordUpdate(round.leagueId, userId, inc)));
+  }
+  async revealPointsRoundOnce(round: Round, points: ReadonlyArray<StandingPointsDelta> = []): Promise<boolean> {
+    // One validated increment per player (a submitter with several songs is
+    // summed — a transaction can't touch the same row twice), before any write.
+    const banked = mergePointDeltas(points);
+    return this.claimAndBank(round, banked.map(({ userId, delta }) => this.standingPointsUpdate(round.leagueId, userId, delta)));
+  }
+  /**
+   * The once-only reveal both formats share: claim the round (its conditional
+   * put) and apply every standing row's in-place increment (`rows`, at most
+   * one per player) together.
+   */
+  private async claimAndBank(round: Round, rows: StandingUpdate[]): Promise<boolean> {
+    if (rows.length === 0) return this.updateRoundUnlessSettled(round);
+    if (rows.length + 1 > MAX_TRANSACT_ITEMS) {
+      // Too many standing rows for one transaction (a 100+-player league):
+      // claim first, then bank row by row — at most once (a failure part-way
+      // leaves the round revealed with rows missing) but never twice.
+      if (!(await this.updateRoundUnlessSettled(round))) return false;
+      for (const row of rows) await retryOnTransactionConflict(() => this.doc.send(new UpdateCommand(row)));
+      return true;
+    }
+    // One TransactWriteItems: the conditional round write (the claim) plus
+    // every standing row's in-place increment — all land or none do.
+    // A refused claim (another reveal settled it) cancels the whole
+    // transaction with ConditionalCheckFailed on item 0: nothing is banked.
+    // Two reveals of one round racing (the last two ballots cast at once, two
+    // page loads at the deadline) can send overlapping transactions: DynamoDB
+    // cancels the later one with TransactionConflict instead, before checking
+    // its claim — so it's sent again after a short backoff, and then fails
+    // the claim once the winner has committed (the loser's clean `false`) or
+    // lands if the winner was cancelled. The same goes for a conflict on a
+    // standing row (another round's reveal banking the same players).
+    // Any other failure (throttling, a conflict that outlasts the retries)
+    // also writes nothing, and propagates.
+    try {
+      await retryOnTransactionConflict(() =>
+        this.doc.send(
+          new TransactWriteCommand({
+            TransactItems: [
+              { Put: { TableName: this.tableName, Item: this.roundItem(round), ...UNSETTLED_ROUND } },
+              ...rows.map((row) => ({ Update: row })),
+            ],
+          }),
+        ),
+      );
+      return true;
+    } catch (err) {
+      const e = err as { name?: string; CancellationReasons?: Array<{ Code?: string }> } | null;
+      if (e?.name === "TransactionCanceledException" && e.CancellationReasons?.[0]?.Code === "ConditionalCheckFailed") {
+        return false;
+      }
+      throw err;
+    }
+  }
   private roundItem(round: Round) {
     return {
       PK: `LEAGUE#${round.leagueId}`,
@@ -313,6 +540,9 @@ export class DynamoRepository implements Repository {
       previewDeadline: round.previewDeadline,
       voteDeadline: round.voteDeadline,
       playlistUrl: round.playlistUrl,
+      h2hDeparted: round.h2hDeparted, // head-to-head, pinned at the reveal (undefined → not stored)
+      h2hTally: round.h2hTally, // head-to-head, pinned at the reveal (undefined → not stored)
+      pointsTally: round.pointsTally, // standard, pinned at the reveal (undefined → not stored)
     };
   }
   private toRound(it: Record<string, unknown>): Round {
@@ -327,13 +557,23 @@ export class DynamoRepository implements Repository {
       previewDeadline: it.previewDeadline as string | undefined,
       voteDeadline: it.voteDeadline as string | undefined,
       playlistUrl: it.playlistUrl as string | undefined,
+      // Only revealed head-to-head rounds carry the h2h pins, and only
+      // standard rounds revealed since BUG-18 carry pointsTally; every other
+      // round reads back without the keys, exactly as before.
+      ...(Array.isArray(it.h2hDeparted) ? { h2hDeparted: it.h2hDeparted as string[] } : {}),
+      ...(Array.isArray(it.h2hTally) ? { h2hTally: it.h2hTally as MatchupTally[] } : {}),
+      ...(Array.isArray(it.pointsTally) ? { pointsTally: it.pointsTally as SongTally[] } : {}),
     };
   }
 
   // ---- Submissions ----
   // Keyed SUB#<userId>#<submissionId> so a player can hold several per round.
   // Rows written before multi-submission used SK = SUB#<userId> (no id); reads
-  // filter on the userId attribute rather than the key, so both shapes work.
+  // filter on the userId attribute rather than the key, so both shapes read
+  // and delete. Known gap: an allowance-1 re-submit over a legacy row keeps
+  // its id but writes the new-style key here, so it lands beside the legacy
+  // row instead of overwriting it (reads then return that pick twice) — only
+  // in a round that has been submitting since before multi-submission.
   async putSubmission(submission: Submission): Promise<void> {
     await this.doc.send(
       new PutCommand({
@@ -410,6 +650,9 @@ export class DynamoRepository implements Repository {
           voterId: ballot.voterId,
           allocations: ballot.allocations,
           downvotes: ballot.downvotes,
+          // Head-to-head winner picks (absent on standard ballots — dropped by
+          // removeUndefinedValues, so a points ballot's item is unchanged).
+          picks: ballot.picks,
           comments: ballot.comments,
           castAt: ballot.castAt,
         },
@@ -427,16 +670,21 @@ export class DynamoRepository implements Repository {
       voterId: it.voterId as string,
       allocations: (it.allocations ?? {}) as Record<string, number>,
       downvotes: it.downvotes as Record<string, number> | undefined,
+      ...(it.picks ? { picks: it.picks as Record<string, string> } : {}),
       comments: it.comments as Record<string, string> | undefined,
       castAt: it.castAt as string,
     };
   }
-  async getBallotsForRound(roundId: string): Promise<Ballot[]> {
+  async getBallotsForRound(roundId: string, opts?: { consistent?: boolean }): Promise<Ballot[]> {
+    // Strongly consistent only when asked (both reveals' tally — BUG-05: a
+    // default read can miss the ballot that was just written and completed
+    // the turnout); every other read keeps the default, unchanged.
     const res = await this.doc.send(
       new QueryCommand({
         TableName: this.tableName,
         KeyConditionExpression: "PK = :pk AND begins_with(SK, :b)",
         ExpressionAttributeValues: { ":pk": `ROUND#${roundId}`, ":b": "BALLOT#" },
+        ...(opts?.consistent ? { ConsistentRead: true } : {}),
       }),
     );
     return (res.Items ?? []).map((it) => ({
@@ -444,13 +692,14 @@ export class DynamoRepository implements Repository {
       voterId: it.voterId as string,
       allocations: (it.allocations ?? {}) as Record<string, number>,
       downvotes: it.downvotes as Record<string, number> | undefined,
+      ...(it.picks ? { picks: it.picks as Record<string, string> } : {}),
       comments: it.comments as Record<string, string> | undefined,
       castAt: it.castAt as string,
     }));
   }
 
   // ---- Standings ----
-  async getStandings(leagueId: string): Promise<Array<{ userId: string; points: number }>> {
+  async getStandings(leagueId: string): Promise<StandingTotals[]> {
     const res = await this.doc.send(
       new QueryCommand({
         TableName: this.tableName,
@@ -458,16 +707,139 @@ export class DynamoRepository implements Repository {
         ExpressionAttributeValues: { ":pk": `LEAGUE#${leagueId}`, ":s": "STANDING#" },
       }),
     );
-    return (res.Items ?? []).map((it) => ({ userId: it.userId as string, points: (it.points as number) ?? 0 }));
+    // W/L/D are plain attributes on the same item, absent on every row written
+    // before head-to-head existed — those read back as 0 (no migration).
+    return (res.Items ?? []).map((it) => ({
+      userId: it.userId as string,
+      points: (it.points as number) ?? 0,
+      wins: (it.wins as number) ?? 0,
+      losses: (it.losses as number) ?? 0,
+      draws: (it.draws as number) ?? 0,
+    }));
   }
   async addStandingPoints(leagueId: string, userId: string, delta: number): Promise<void> {
-    await this.doc.send(
-      new UpdateCommand({
-        TableName: this.tableName,
-        Key: { PK: `LEAGUE#${leagueId}`, SK: `STANDING#${userId}` },
-        UpdateExpression: "SET points = if_not_exists(points, :zero) + :d, userId = :u, entity = :e",
-        ExpressionAttributeValues: { ":zero": 0, ":d": delta, ":u": userId, ":e": "standing" },
-      }),
-    );
+    await this.doc.send(new UpdateCommand(this.standingPointsUpdate(leagueId, userId, delta)));
   }
+  /** The points increment's UpdateItem — sent alone by addStandingPoints, and
+   *  as one item of the standard reveal's transaction (BUG-04): an atomic
+   *  in-place add, the row and its total created at 0 if absent, W/L/D
+   *  untouched. */
+  private standingPointsUpdate(leagueId: string, userId: string, delta: number): StandingUpdate {
+    return {
+      TableName: this.tableName,
+      Key: { PK: `LEAGUE#${leagueId}`, SK: `STANDING#${userId}` },
+      UpdateExpression: "SET points = if_not_exists(points, :zero) + :d, userId = :u, entity = :e",
+      ExpressionAttributeValues: { ":zero": 0, ":d": delta, ":u": userId, ":e": "standing" },
+    };
+  }
+  async addStandingRecord(leagueId: string, userId: string, delta: StandingRecordDelta): Promise<void> {
+    await this.doc.send(new UpdateCommand(this.standingRecordUpdate(leagueId, userId, delta)));
+  }
+  /** The W/L/D increment's UpdateItem — sent alone by addStandingRecord, and
+   *  as one item of the head-to-head reveal's transaction. Same item and same
+   *  atomic in-place increment as addStandingPoints: every counter created at
+   *  0 if absent, `points` untouched. Attribute names go through placeholders
+   *  so no counter name can ever collide with a DynamoDB reserved word.
+   *  Validates the delta (recordIncrements) before anything is sent. */
+  private standingRecordUpdate(leagueId: string, userId: string, delta: StandingRecordDelta): StandingUpdate {
+    const inc = recordIncrements(delta);
+    return {
+      TableName: this.tableName,
+      Key: { PK: `LEAGUE#${leagueId}`, SK: `STANDING#${userId}` },
+      UpdateExpression:
+        "SET #w = if_not_exists(#w, :zero) + :w, #l = if_not_exists(#l, :zero) + :l, " +
+        "#d = if_not_exists(#d, :zero) + :d, userId = :u, entity = :e",
+      ExpressionAttributeNames: { "#w": "wins", "#l": "losses", "#d": "draws" },
+      ExpressionAttributeValues: {
+        ":zero": 0, ":w": inc.wins, ":l": inc.losses, ":d": inc.draws, ":u": userId, ":e": "standing",
+      },
+    };
+  }
+}
+
+/** One standing row's in-place increment as an UpdateItem — sent alone, or
+ *  as one `Update` of a reveal's transaction. */
+interface StandingUpdate {
+  TableName: string;
+  Key: { PK: string; SK: string };
+  UpdateExpression: string;
+  ExpressionAttributeNames?: Record<string, string>;
+  ExpressionAttributeValues: Record<string, string | number>;
+}
+
+/** DynamoDB's cap on the items of one TransactWriteItems call. */
+const MAX_TRANSACT_ITEMS = 100;
+
+/** How many more times a write refused for a transaction conflict is sent,
+ *  and the first pause before it (doubled each time, ±50% jitter): about
+ *  25 / 50 / 100 ms, room for the conflicting transaction — tens of ms — to
+ *  commit or be cancelled. */
+const CONFLICT_RETRIES = 3;
+const CONFLICT_BACKOFF_MS = 25;
+
+/**
+ * Whether DynamoDB refused a write only because another transaction in flight
+ * held one of its items — which writes NOTHING, so it's safe to send again: a
+ * TransactionConflictException (a single-item write to an item an in-flight
+ * TransactWriteItems holds), or a TransactWriteItems cancelled with
+ * `TransactionConflict` as its only reason (the rest `None`). A cancellation
+ * for any other reason too — a failed condition (a refused claim),
+ * throttling, validation — isn't one.
+ */
+export function isTransactionConflict(err: unknown): boolean {
+  const e = err as { name?: string; CancellationReasons?: Array<{ Code?: string }> } | null;
+  if (e?.name === "TransactionConflictException") return true;
+  if (e?.name !== "TransactionCanceledException") return false;
+  const codes = (e.CancellationReasons ?? []).map((r) => r.Code ?? "None");
+  return codes.includes("TransactionConflict") && codes.every((c) => c === "TransactionConflict" || c === "None");
+}
+
+/**
+ * Run `write`, running it again — up to CONFLICT_RETRIES more times, after a
+ * short jittered backoff — while DynamoDB refuses it for a transaction
+ * conflict (`isTransactionConflict`). The SDK's own retries don't cover one
+ * (it's not in their throttling or transient lists). A refused write wrote
+ * nothing, so a repeat can't apply anything twice; for the settle-guarded
+ * round writes, the repeat's condition then decides cleanly what the
+ * conflict hid: refused once the other reveal has committed, landing if it
+ * didn't. Any other error, or a conflict that outlasts the retries, is
+ * thrown. `pause` is injectable for tests.
+ */
+export async function retryOnTransactionConflict<T>(
+  write: () => Promise<T>,
+  pause: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await write();
+    } catch (err) {
+      if (attempt >= CONFLICT_RETRIES || !isTransactionConflict(err)) throw err;
+      await pause(Math.round(CONFLICT_BACKOFF_MS * 2 ** attempt * (0.5 + Math.random())));
+    }
+  }
+}
+
+/** The condition every settle-guarded round write carries: the round exists
+ *  (never a phantom item for one that was deleted) and isn't settled —
+ *  roundSettled's definition. `status` is a DynamoDB reserved word, hence the
+ *  placeholder. */
+const UNSETTLED_ROUND = {
+  ConditionExpression: "attribute_exists(PK) AND #status <> :revealed AND #status <> :complete",
+  ExpressionAttributeNames: { "#status": "status" },
+  ExpressionAttributeValues: { ":revealed": "revealed", ":complete": "complete" },
+};
+
+/** A reveal's records as one validated increment per player — a transaction
+ *  can't touch the same standing row twice, so repeated players are summed
+ *  (the reveal never sends any: nobody plays twice in a round). */
+function mergeRecords(
+  records: ReadonlyArray<{ userId: string; delta: StandingRecordDelta }>,
+): Array<{ userId: string; inc: ReturnType<typeof recordIncrements> }> {
+  const byUser = new Map<string, ReturnType<typeof recordIncrements>>();
+  for (const { userId, delta } of records) {
+    const inc = recordIncrements(delta);
+    const prev = byUser.get(userId);
+    byUser.set(userId, prev ? { wins: prev.wins + inc.wins, losses: prev.losses + inc.losses, draws: prev.draws + inc.draws } : inc);
+  }
+  return [...byUser].map(([userId, inc]) => ({ userId, inc }));
 }

@@ -79,12 +79,28 @@
 .invite-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .invite-btn { font-size: 13px; padding: 8px 14px; }
 .invite-note { flex-basis: 100%; margin: 0; font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+/* Where the invite strip sits, a locked head-to-head season shows this note
+   instead (HTH-14: nobody can join or rejoin it). */
+.season-lock-note {
+  margin: 0;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.season-lock-note strong { color: var(--text); }
 
-/* stepper */
+/* round stepper — this page owns .stepper. Every page's CSS is global, so
+   other pages must not reuse the class name (the settings number stepper
+   did, and restyled this one: BUG-20). */
 .stepper {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px 6px;
+  /* 4px between steps keeps 12 rounds on one row in the desktop main column */
+  gap: 10px 4px;
   align-items: center;
   padding: 16px;
   background: var(--panel);
@@ -189,14 +205,8 @@
   padding: 10px 8px; border-radius: var(--radius-sm);
 }
 .standings li.top { background: var(--bg-2); }
-.rank { width: 18px; text-align: center; font-weight: 700; color: var(--text-dim); font-size: 14px; }
-.top-1 .rank { color: #f5c518; }
-.top-2 .rank { color: #c0c5ce; }
-.top-3 .rank { color: #cd7f32; }
-.standing-info { display: flex; flex-direction: column; min-width: 0; }
-.standing-info strong { font-size: 14px; }
-.standing-note { font-size: 11px; color: var(--text-dim); }
-.standing-pts { margin-left: auto; font-weight: 700; color: var(--magenta); font-size: 14px; }
+/* the rows themselves (.rank, .standing-info, .standing-pts, …) are styled in
+   components/StandingsTable.css */
 
 @media (max-width: 900px) {
   .ro-grid { grid-template-columns: 1fr; }
@@ -260,6 +270,16 @@
 }
 .owner-input:focus { outline: none; border-color: var(--magenta); }
 .owner-hint { font-size: 13px; color: var(--text-muted); }
+/* Inline error under the owner controls, and under the rematch button in the
+   finished-league hero. Not the global .page-error: that one is for full-page
+   states and carries 48px of vertical padding. flex-basis 100% gives the error
+   its own row in the .owner-control / .hero-footer flex wrap, flush left with
+   the hint text; the wrapper's row gap is its only top spacing. */
+.owner-error {
+  flex-basis: 100%;
+  font-size: 13px;
+  color: #ff8a8a;
+}
 
 /* the player's own pick, shown on the round hero while a round is live */
 .my-pick { margin: 14px 0 4px; }
@@ -285,6 +305,53 @@
 .my-pick-info { display: flex; flex-direction: column; min-width: 0; }
 .my-pick-info strong { font-size: 14px; }
 .my-pick-info span { font-size: 12px; color: var(--text-muted); }
+
+/* the round's anonymous songs, shown to members while they listen and vote:
+   the .my-pick-card look, two-up only where each card keeps room for a title
+   next to its Listen link (beside the standings at 1280 it's one column), and
+   never wider than the hero */
+.round-songs { margin: 14px 0 4px; }
+.round-songs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
+  gap: 8px;
+}
+.round-songs-list > .my-pick-card { max-width: none; margin: 0; min-width: 0; }
+/* on a very narrow card the Listen link drops to its own line, right-aligned */
+.round-song { flex-wrap: wrap; row-gap: 8px; }
+.round-song .my-pick-info { flex: 1 1 100px; }
+.round-song .my-pick-info strong,
+.round-song .my-pick-info span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.round-song-listen {
+  flex: none;
+  margin-left: auto;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.round-song-listen:hover { color: var(--text); border-color: var(--magenta); }
+/* "Show all N songs" / "Show fewer", under a long list */
+.round-songs-all {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+.round-songs-all:hover { color: var(--text); border-color: var(--magenta); }
 
 /* who's submitted vs. pending (submitting phase) */
 .sub-progress {
@@ -341,4 +408,16 @@
 @media (max-width: 640px) {
   .sub-progress-row { flex-direction: column; gap: 6px; }
   .sub-progress-label { width: auto; padding-top: 0; }
+}
+
+/* head-to-head before round 1 opens: no round count to step through yet */
+.stepper-note {
+  margin: 0;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
 }

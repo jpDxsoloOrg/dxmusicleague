@@ -5,7 +5,7 @@
 // context — never read from the body (docs/data-model-and-api.md §Principles).
 
 import type { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
-import { ApiError } from "../domain/errors.ts";
+import { ApiError, errorBody } from "../domain/errors.ts";
 import { DynamoRepository } from "../data/dynamo.ts";
 import { CognitoUserDirectory } from "../data/users.ts";
 import { buildRoutes, matchRoute } from "./routes.ts";
@@ -57,7 +57,7 @@ export async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayPr
     });
     return json(200, result ?? null);
   } catch (err) {
-    if (err instanceof ApiError) return json(err.statusCode, { error: err.message });
+    if (err instanceof ApiError) return json(err.statusCode, errorBody(err));
     console.error("Unhandled error:", err);
     return json(500, { error: "Something went wrong." });
   }

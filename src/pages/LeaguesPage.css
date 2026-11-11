@@ -42,6 +42,7 @@
 .browse-row:hover { border-color: var(--violet); }
 .browse-main { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
 .browse-main strong { font-size: 15px; }
+.browse-main .format-tag { vertical-align: 2px; } /* centred on the 15px name */
 .browse-round { font-size: 12.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .browse-members { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
 .browse-cta { font-size: 13px; font-weight: 600; color: var(--text-muted); white-space: nowrap; }
